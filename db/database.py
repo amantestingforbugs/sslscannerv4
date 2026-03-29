@@ -4,7 +4,7 @@ Persistent SQLite layer. Per-thread connection pool, WAL mode, batch writes.
 Extended with subfinder_jobs and subfinder_hosts tables.
 """
 
-import sqlite3, json, uuid, threading, logging, csv, io
+import sqlite3, json, uuid, threading, logging
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -62,17 +62,11 @@ def init_db():
         match_found INTEGER DEFAULT 0, same_base INTEGER DEFAULT 0,
         is_mismatch INTEGER DEFAULT 0, is_expired INTEGER DEFAULT 0,
         is_expiring INTEGER DEFAULT 0, is_ok INTEGER DEFAULT 0,
-        risk_level TEXT DEFAULT 'LOW',
-        takeover_risk INTEGER DEFAULT 0,
-        cname TEXT DEFAULT '',
-        issuer_org TEXT DEFAULT '',
         error TEXT DEFAULT '', checked_at TEXT NOT NULL
     );
     CREATE TABLE IF NOT EXISTS alerts (
         id TEXT PRIMARY KEY, project_id TEXT NOT NULL, scan_id TEXT DEFAULT '',
         hostname TEXT NOT NULL, issue_type TEXT NOT NULL, details TEXT DEFAULT '',
-        severity TEXT DEFAULT 'LOW',
-        mismatch_type TEXT DEFAULT 'different_domain',
         dedup_key TEXT NOT NULL UNIQUE, sent INTEGER DEFAULT 0,
         seen INTEGER DEFAULT 0, created_at TEXT NOT NULL
     );
@@ -99,35 +93,12 @@ def init_db():
     CREATE INDEX IF NOT EXISTS idx_alerts_dd ON alerts(dedup_key);
     CREATE INDEX IF NOT EXISTS idx_sfhosts_proj ON subfinder_hosts(project_id);
     """)
-    _migrate_schema()
     log.info("DB ready at %s", DB_PATH)
-
-
-def _column_exists(table: str, column: str) -> bool:
-    cols = x(f"PRAGMA table_info({table})").fetchall()
-    return any(c["name"] == column for c in cols)
-
-
-def _migrate_schema():
-    migrations = [
-        ("results", "risk_level", "ALTER TABLE results ADD COLUMN risk_level TEXT DEFAULT 'LOW'"),
-        ("results", "takeover_risk", "ALTER TABLE results ADD COLUMN takeover_risk INTEGER DEFAULT 0"),
-        ("results", "cname", "ALTER TABLE results ADD COLUMN cname TEXT DEFAULT ''"),
-        ("results", "issuer_org", "ALTER TABLE results ADD COLUMN issuer_org TEXT DEFAULT ''"),
-        ("alerts", "severity", "ALTER TABLE alerts ADD COLUMN severity TEXT DEFAULT 'LOW'"),
-        ("alerts", "mismatch_type", "ALTER TABLE alerts ADD COLUMN mismatch_type TEXT DEFAULT 'different_domain'"),
-    ]
-    for table, column, sql in migrations:
-        if not _column_exists(table, column):
-            x(sql)
-    commit()
 
 
 # ── Projects ──────────────────────────────────────────────────────────────────
 
 def project_create(name, description="", scan_interval=60, subfinder_interval=30):
-    scan_interval = max(10, min(30, int(scan_interval)))
-    subfinder_interval = max(10, min(30, int(subfinder_interval)))
     pid, n = uid(), now()
     x("INSERT INTO projects(id,name,description,scan_interval_minutes,subfinder_interval_minutes,created_at,updated_at)"
       " VALUES(?,?,?,?,?,?,?)", (pid, name, description, scan_interval, subfinder_interval, n, n))
@@ -219,14 +190,10 @@ def results_batch_save(sid, pid, batch):
              1 if r.get("match_found") else 0, 1 if r.get("same_base") else 0,
              1 if r.get("is_mismatch") else 0, 1 if r.get("is_expired") else 0,
              1 if r.get("is_expiring_soon") else 0, 1 if r.get("is_ok") else 0,
-             (r.get("risk_level") or "LOW").upper(),
-             1 if r.get("takeover_risk") else 0,
-             r.get("cname","") or "",
-             r.get("issuer_org","") or "",
              r.get("error","") or "", n) for r in batch]
     xm("INSERT INTO results(id,scan_id,project_id,hostname,cn,sans,issuer,expiry,"
-       "days_left,match_found,same_base,is_mismatch,is_expired,is_expiring,is_ok,risk_level,takeover_risk,cname,issuer_org,error,checked_at)"
-       " VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", rows)
+       "days_left,match_found,same_base,is_mismatch,is_expired,is_expiring,is_ok,error,checked_at)"
+       " VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", rows)
     commit()
 
 def results_get(sid, flt="all", page=1, per_page=500):
@@ -252,33 +219,20 @@ def results_get(sid, flt="all", page=1, per_page=500):
 
 # ── Alerts ────────────────────────────────────────────────────────────────────
 
-def alert_add(pid, hostname, issue, detail, scan_id="", severity="LOW", mismatch_type="different_domain"):
+def alert_add(pid, hostname, issue, detail, scan_id=""):
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-    dedup = f"{pid}:{hostname}:{issue}:{severity}:{mismatch_type}:{today}"
+    dedup = f"{pid}:{hostname}:{issue}:{today}"
     if x("SELECT id FROM alerts WHERE dedup_key=?", (dedup,)).fetchone():
         return False
-    x("INSERT INTO alerts(id,project_id,scan_id,hostname,issue_type,details,severity,mismatch_type,dedup_key,created_at)"
-      " VALUES(?,?,?,?,?,?,?,?,?,?)", (uid(), pid, scan_id, hostname, issue, detail, severity, mismatch_type, dedup, now()))
+    x("INSERT INTO alerts(id,project_id,scan_id,hostname,issue_type,details,dedup_key,created_at)"
+      " VALUES(?,?,?,?,?,?,?,?)", (uid(), pid, scan_id, hostname, issue, detail, dedup, now()))
     commit()
     return True
 
-def alerts_get(limit=200, search="", mismatch_type="", severity=""):
-    where = []
-    params = []
-    if search:
-        where.append("LOWER(a.hostname) LIKE ?")
-        params.append(f"%{search.lower()}%")
-    if mismatch_type:
-        where.append("a.mismatch_type = ?")
-        params.append(mismatch_type)
-    if severity:
-        where.append("a.severity = ?")
-        params.append(severity.upper())
-    sql_where = f"WHERE {' AND '.join(where)}" if where else ""
-    params.append(limit)
+def alerts_get(limit=200):
     return [dict(r) for r in x(
-        f"SELECT a.*,p.name project_name FROM alerts a"
-        f" JOIN projects p ON p.id=a.project_id {sql_where} ORDER BY a.created_at DESC LIMIT ?", params)]
+        "SELECT a.*,p.name project_name FROM alerts a"
+        " JOIN projects p ON p.id=a.project_id ORDER BY a.created_at DESC LIMIT ?", (limit,))]
 
 def alerts_unseen_count():
     return x("SELECT COUNT(*) FROM alerts WHERE seen=0").fetchone()[0]
@@ -384,10 +338,6 @@ def subfinder_discoveries(pid, page=1, per_page=200, search=""):
           r.is_expired,
           r.is_expiring,
           r.is_ok,
-          r.risk_level,
-          r.takeover_risk,
-          r.cname,
-          r.issuer_org,
           r.error,
           r.checked_at
         FROM subfinder_hosts h
@@ -434,47 +384,3 @@ def stats_global():
             "expiring": r["expi"] or 0, "ok": r["ok"] or 0,
             "unseen_alerts": unseen, "subfinder_hosts": sf_hosts,
             "active_scans": active_scans}
-
-
-def project_insights(pid):
-    scans = x("SELECT id, created_at, finished_at FROM scans WHERE project_id=? AND status='done' ORDER BY created_at DESC LIMIT 2", (pid,)).fetchall()
-    latest = scans[0]["id"] if scans else None
-    previous = scans[1]["id"] if len(scans) > 1 else None
-    out = {"latest_scan_id": latest, "previous_scan_id": previous, "new_issues": 0, "fixed_issues": 0}
-    if latest:
-        dist = x("""SELECT risk_level, COUNT(*) c FROM results
-                    WHERE scan_id=? AND is_mismatch=1
-                    GROUP BY risk_level""", (latest,)).fetchall()
-        out["risk_distribution"] = {row["risk_level"]: row["c"] for row in dist}
-    if latest and previous:
-        new_issues = x("""
-            SELECT COUNT(*) FROM results r
-            WHERE r.scan_id=? AND r.is_mismatch=1
-              AND NOT EXISTS (
-                SELECT 1 FROM results p
-                WHERE p.scan_id=? AND p.hostname=r.hostname AND p.is_mismatch=1
-              )
-        """, (latest, previous)).fetchone()[0]
-        fixed_issues = x("""
-            SELECT COUNT(*) FROM results p
-            WHERE p.scan_id=? AND p.is_mismatch=1
-              AND NOT EXISTS (
-                SELECT 1 FROM results r
-                WHERE r.scan_id=? AND r.hostname=p.hostname AND r.is_mismatch=1
-              )
-        """, (previous, latest)).fetchone()[0]
-        out["new_issues"] = new_issues
-        out["fixed_issues"] = fixed_issues
-    return out
-
-
-def scan_export(sid, fmt="json"):
-    rows = [dict(r) for r in x("SELECT * FROM results WHERE scan_id=? ORDER BY hostname", (sid,)).fetchall()]
-    if fmt == "json":
-        return json.dumps(rows, ensure_ascii=False, indent=2), "application/json", f"scan-{sid}.json"
-    output = io.StringIO()
-    writer = csv.DictWriter(output, fieldnames=list(rows[0].keys()) if rows else ["hostname"])
-    writer.writeheader()
-    for row in rows:
-        writer.writerow(row)
-    return output.getvalue(), "text/csv", f"scan-{sid}.csv"
