@@ -34,6 +34,10 @@ except ImportError:
     HAS_IDNA = False
 
 logger = logging.getLogger(__name__)
+TAKEOVER_CNAME_PATTERNS = (
+    "github.io", "herokudns.com", "azurewebsites.net", "cloudfront.net",
+    "readme.io", "surge.sh", "unbouncepages.com", "fastly.net"
+)
 
 # ---- Errors that are expected/noisy and should be soft-classified ----
 IGNORED_ERRORS = [
@@ -108,6 +112,46 @@ def classify_error(e: Exception) -> str:
         return msg[:120]  # truncate long SSL error strings
 
 
+def _resolve_cname(hostname: str) -> str:
+    try:
+        return socket.gethostbyname_ex(hostname)[0]
+    except Exception:
+        return ""
+
+
+def _takeover_risk(cname: str, error: str) -> bool:
+    if not cname:
+        return False
+    if not error or "DNS failure" not in error:
+        return False
+    low = cname.lower()
+    return any(p in low for p in TAKEOVER_CNAME_PATTERNS)
+
+
+def _issuer_org(issuer: str) -> str:
+    for part in issuer.split(","):
+        seg = part.strip()
+        if seg.startswith("O="):
+            return seg[2:]
+    return ""
+
+
+def _risk_level(result: Dict) -> str:
+    if result.get("error"):
+        return "LOW"
+    if result.get("takeover_risk"):
+        return "HIGH"
+    if result.get("is_expired"):
+        return "HIGH"
+    if result.get("is_mismatch") and not result.get("same_base"):
+        return "HIGH"
+    if result.get("is_mismatch"):
+        return "MEDIUM"
+    if result.get("is_expiring_soon"):
+        return "MEDIUM"
+    return "LOW"
+
+
 # ------------------- Core check (original script logic) -------------------
 
 def get_cert_info(hostname: str) -> Dict:
@@ -153,7 +197,7 @@ def get_cert_info(hostname: str) -> Dict:
                 match_found = is_hostname_match(hostname, all_names)
                 same_base = base_domain(hostname) == (base_domain(cn) if cn else "")
 
-                return {
+                result = {
                     "hostname": hostname,
                     "cn": cn,
                     "sans": sans,
@@ -169,13 +213,37 @@ def get_cert_info(hostname: str) -> Dict:
                     "is_expiring_soon": 0 <= days_left <= 30,
                     "is_ok": match_found and days_left > 30,
                 }
+                result["cname"] = _resolve_cname(hostname)
+                result["takeover_risk"] = False
+                result["issuer_org"] = _issuer_org(issuer)
+                result["risk_level"] = _risk_level(result)
+                return result
     except Exception as e:
         err = classify_error(e)
-        return {
+        cname = _resolve_cname(hostname)
+        result = {
             "hostname": hostname,
             "error": err,
             "is_ignored_error": err in IGNORED_ERRORS,
+            "cname": cname,
+            "takeover_risk": _takeover_risk(cname, err),
+            "issuer_org": "",
         }
+        result["risk_level"] = _risk_level(result)
+        return result
+
+
+def get_cert_info_with_retry(hostname: str, retries: int = 2) -> Dict:
+    last = None
+    for _ in range(retries + 1):
+        result = get_cert_info(hostname)
+        last = result
+        if not result.get("error"):
+            return result
+        if result.get("error") in {"Timeout", "Connection reset by peer", "TLS internal error"}:
+            continue
+        return result
+    return last or {"hostname": hostname, "error": "unknown"}
 
 
 # ------------------- Batch runner -------------------
@@ -193,7 +261,7 @@ def run_checker(
     total = len(hostnames)
 
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
-        futures = {executor.submit(get_cert_info, h): h for h in hostnames}
+        futures = {executor.submit(get_cert_info_with_retry, h): h for h in hostnames}
         for i, future in enumerate(as_completed(futures), 1):
             result = future.result()
             results.append(result)

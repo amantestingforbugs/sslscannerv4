@@ -149,6 +149,10 @@ def update_project(pid):
     allowed = {"name","description","scan_interval_minutes","subfinder_interval_minutes",
                "subfinder_enabled","enabled"}
     kw = {k: v for k, v in d.items() if k in allowed}
+    if "scan_interval_minutes" in kw:
+        kw["scan_interval_minutes"] = max(10, min(30, int(kw["scan_interval_minutes"])))
+    if "subfinder_interval_minutes" in kw:
+        kw["subfinder_interval_minutes"] = max(10, min(30, int(kw["subfinder_interval_minutes"])))
     db.project_update(pid, **kw)
     return ok(db.project_get(pid))
 
@@ -215,6 +219,19 @@ def get_results(sid):
     return ok(db.results_get(sid, flt, page, per_page))
 
 
+@api.get("/scans/<sid>/export")
+def export_results(sid):
+    fmt = (request.args.get("format", "json") or "json").lower()
+    if fmt not in {"json", "csv"}:
+        return err("format must be json or csv")
+    data, mimetype, filename = db.scan_export(sid, fmt=fmt)
+    return Response(
+        data,
+        mimetype=mimetype,
+        headers={"Content-Disposition": f"attachment; filename={filename}"}
+    )
+
+
 @api.get("/active-scans")
 def active_scans():
     return ok(list_active_scans())
@@ -224,7 +241,11 @@ def active_scans():
 
 @api.get("/alerts")
 def get_alerts():
-    return ok(db.alerts_get())
+    limit = min(1000, max(20, int(request.args.get("limit", 200))))
+    search = (request.args.get("search", "") or "").strip()
+    mismatch_type = (request.args.get("mismatch_type", "") or "").strip()
+    severity = (request.args.get("severity", "") or "").strip()
+    return ok(db.alerts_get(limit=limit, search=search, mismatch_type=mismatch_type, severity=severity))
 
 
 @api.post("/alerts/<aid>/read")
@@ -255,6 +276,13 @@ def clear_alerts():
 @api.get("/stats")
 def global_stats():
     return ok(db.stats_global())
+
+
+@api.get("/projects/<pid>/insights")
+def project_insights(pid):
+    if not db.project_get(pid):
+        return err("Project not found", 404)
+    return ok(db.project_insights(pid))
 
 
 @api.get("/logs")
