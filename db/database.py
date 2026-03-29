@@ -252,6 +252,11 @@ def alert_mark_sent(aid):
     x("UPDATE alerts SET sent=1 WHERE id=?", (aid,)); commit()
 
 
+def alert_mark_seen(aid):
+    x("UPDATE alerts SET seen=1 WHERE id=?", (aid,))
+    commit()
+
+
 # ── Subfinder ─────────────────────────────────────────────────────────────────
 
 def subfinder_job_create(pid, domains_input, by="scheduler"):
@@ -306,6 +311,59 @@ def subfinder_hosts_list(pid, page=1, per_page=500):
              (pid, per_page, offset)).fetchall()
     return {"hosts": [dict(r) for r in rows], "total": total, "page": page,
             "pages": max(1,(total+per_page-1)//per_page)}
+
+
+def subfinder_discoveries(pid, page=1, per_page=200, search=""):
+    search_like = f"%{search.lower()}%"
+    where = "WHERE h.project_id=?"
+    params = [pid]
+    if search:
+        where += " AND LOWER(h.hostname) LIKE ?"
+        params.append(search_like)
+    total = x(f"SELECT COUNT(*) FROM subfinder_hosts h {where}", params).fetchone()[0]
+    offset = (page - 1) * per_page
+    rows = x(
+        f"""
+        SELECT
+          h.hostname,
+          h.first_seen,
+          h.last_seen,
+          h.ssl_scanned,
+          r.cn,
+          r.issuer,
+          r.expiry,
+          r.days_left,
+          r.is_mismatch,
+          r.same_base,
+          r.is_expired,
+          r.is_expiring,
+          r.is_ok,
+          r.error,
+          r.checked_at
+        FROM subfinder_hosts h
+        LEFT JOIN results r
+          ON r.id = (
+            SELECT rr.id
+            FROM results rr
+            JOIN scans ss ON ss.id = rr.scan_id
+            WHERE rr.project_id = h.project_id
+              AND rr.hostname = h.hostname
+              AND ss.triggered_by LIKE 'subfinder:%'
+            ORDER BY rr.checked_at DESC
+            LIMIT 1
+          )
+        {where}
+        ORDER BY h.first_seen DESC
+        LIMIT ? OFFSET ?
+        """,
+        params + [per_page, offset],
+    ).fetchall()
+    return {
+        "rows": [dict(r) for r in rows],
+        "total": total,
+        "page": page,
+        "pages": max(1, (total + per_page - 1) // per_page),
+    }
 
 
 # ── Global stats ──────────────────────────────────────────────────────────────

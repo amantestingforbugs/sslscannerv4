@@ -563,6 +563,10 @@ tbody tr:last-child td{border-bottom:none}
       <span>Alerts</span>
       <span class="nav-badge" id="navAlertBadge" style="display:none">0</span>
     </button>
+    <button class="nav-item" data-page="discoveries">
+      <svg fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path d="M5 4h14v4H5z"/><path d="M5 10h14v10H5z"/><path d="M9 14h6M9 18h4"/></svg>
+      <span>New Discoveries</span>
+    </button>
 
     <div class="nav-section">Tools</div>
     <button class="nav-item" data-page="subfinder">
@@ -638,6 +642,18 @@ tbody tr:last-child td{border-bottom:none}
         </div>
         <div id="dash-mismatches">
           <div class="empty"><div class="empty-icon">✅</div><div class="empty-title">No mismatches detected</div></div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-header">
+          <span class="card-title">Live Execution Logs</span>
+          <span id="dash-log-status" style="font-size:12px;color:var(--text-secondary)">Idle</span>
+        </div>
+        <div class="card-body" style="padding:0">
+          <div id="dash-logs" style="max-height:260px;overflow:auto;padding:12px 16px;font-family:var(--mono);font-size:12px;color:var(--text-secondary)">
+            <div class="empty"><div class="empty-icon">📜</div><div class="empty-title">Waiting for logs</div></div>
+          </div>
         </div>
       </div>
     </div>
@@ -783,8 +799,46 @@ tbody tr:last-child td{border-bottom:none}
           <button class="btn btn-sm btn-danger" onclick="clearAlerts()">Clear All</button>
         </div>
       </div>
+      <div class="card" style="padding:14px 16px">
+        <div style="display:flex;gap:10px;flex-wrap:wrap">
+          <input class="form-input" id="alerts-search" placeholder="Search hostname..." style="max-width:260px" oninput="renderAlerts()">
+          <select class="form-input" id="alerts-filter" style="max-width:260px" onchange="renderAlerts()">
+            <option value="all">All mismatches</option>
+            <option value="same_domain">Same domain mismatch</option>
+            <option value="different_domain">Different domain mismatch</option>
+          </select>
+        </div>
+      </div>
       <div class="card">
         <div id="alerts-body"><div class="empty"><div class="empty-icon">🔔</div><div class="empty-title">No alerts</div><p class="empty-desc">Alerts appear automatically when issues are detected.</p></div></div>
+      </div>
+    </div>
+
+    <div class="page" id="page-discoveries">
+      <div class="page-header">
+        <div>
+          <div class="page-title">New Discoveries</div>
+          <div class="page-sub">Fresh subdomains from Subfinder and their SSL outcomes.</div>
+        </div>
+      </div>
+      <div class="form-group" style="max-width:320px;margin-bottom:14px">
+        <label class="form-label">Project</label>
+        <select class="form-input" id="nd-project-select" onchange="loadDiscoveries()"><option value="">— Choose a project —</option></select>
+      </div>
+      <div class="table-toolbar">
+        <div class="search-input">
+          <svg width="14" height="14" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
+          <input type="text" id="nd-search" placeholder="Search discovered hostname..." oninput="loadDiscoveries()">
+        </div>
+        <span id="nd-count" style="font-size:12px;color:var(--text-muted)">0 rows</span>
+      </div>
+      <div class="card">
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Hostname</th><th>First Seen</th><th>SSL Status</th><th>CN</th><th>Expiry</th></tr></thead>
+            <tbody id="nd-body"></tbody>
+          </table>
+        </div>
       </div>
     </div>
 
@@ -968,6 +1022,7 @@ let curPid = null, curSid = null, curFilter = 'all', curPage = 1, totalPages = 1
 let allResRows = [], sortCol = null, sortDir = 1;
 let scanPollTimer = null;
 let sfCurPid = null, sfCurPage = 1, sfTotalPages = 1;
+let allAlerts = [];
 
 // ════════════════════════════════════════════════════════════
 // THEME
@@ -997,7 +1052,7 @@ setInterval(tick,1000); tick();
 // ════════════════════════════════════════════════════════════
 const PAGE_TITLES = {
   dashboard:'Dashboard', projects:'Projects', detail:'Project Detail',
-  alerts:'Alerts', subfinder:'Subfinder'
+  alerts:'Alerts', subfinder:'Subfinder', discoveries:'New Discoveries'
 };
 
 function nav(name) {
@@ -1012,6 +1067,7 @@ function nav(name) {
   if (name==='projects') loadProjects();
   if (name==='alerts') loadAlerts();
   if (name==='subfinder') initSfPage();
+  if (name==='discoveries') initDiscoveriesPage();
 }
 
 document.querySelectorAll('.nav-item[data-page]').forEach(el => {
@@ -1098,6 +1154,10 @@ function connectSSE() {
     const s = JSON.parse(e.data);
     applyStat(s);
   });
+  es.addEventListener('log_update', e => {
+    const d = JSON.parse(e.data);
+    appendLogRow(d.entry);
+  });
 
   es.addEventListener('project_created', () => {
     if (document.getElementById('page-projects').classList.contains('active')) loadProjects();
@@ -1157,6 +1217,37 @@ async function loadDash() {
   } catch {}
   refreshActiveScans();
   loadDashMismatches();
+  loadLogs();
+}
+
+async function loadLogs() {
+  try {
+    const { data } = await fetch('/api/logs?limit=120').then(r => r.json());
+    renderLogs(data || []);
+  } catch {}
+}
+
+function renderLogs(rows) {
+  const el = document.getElementById('dash-logs');
+  if (!rows.length) {
+    el.innerHTML = '<div class="empty"><div class="empty-icon">📜</div><div class="empty-title">Waiting for logs</div></div>';
+    document.getElementById('dash-log-status').textContent = 'Idle';
+    return;
+  }
+  const active = [...rows].reverse().find(r => r.status === 'running');
+  const failed = [...rows].reverse().find(r => r.status === 'failed');
+  document.getElementById('dash-log-status').textContent = active ? 'Running' : failed ? 'Failed' : 'Idle';
+  el.innerHTML = rows.slice(-80).reverse().map(r => `<div style="padding:4px 0;border-bottom:1px solid var(--border-subtle)">
+    <span style="color:var(--text-muted)">[${new Date(r.timestamp).toLocaleTimeString()}]</span>
+    <span style="color:${r.level==='ERROR'?'var(--red)':r.level==='WARNING'?'var(--amber)':'var(--text-secondary)'}">${r.level}</span>
+    <span style="color:var(--purple)">(${esc(r.component)})</span>
+    <span>${esc(r.message)}</span>
+  </div>`).join('');
+}
+
+function appendLogRow(entry) {
+  if (!entry || !document.getElementById('page-dashboard').classList.contains('active')) return;
+  loadLogs();
 }
 
 async function refreshActiveScans() {
@@ -1529,23 +1620,39 @@ function viewScan(sid, scan) {
 async function loadAlerts() {
   try {
     const { data: alerts } = await fetch('/api/alerts').then(r=>r.json());
-    const el = document.getElementById('alerts-body');
-    if (!alerts?.length) {
-      el.innerHTML='<div class="empty"><div class="empty-icon">🔔</div><div class="empty-title">No alerts</div></div>';
-      return;
-    }
-    const cls=t=>t.includes('Mismatch')?'mismatch':t.includes('Expir')?'expiring':'expired';
-    el.innerHTML=alerts.map(a=>`
-      <div class="alert-item ${a.seen?'':'unread'}" onclick="markOneSeen('${a.id}',this)">
-        <div class="alert-dot" style="color:${a.seen?'var(--text-muted)':'var(--red)'}">●</div>
-        <div style="flex:1;min-width:0">
-          <div class="alert-host">${esc(a.hostname)}</div>
-          <div class="alert-desc ${cls(a.issue_type)}">${esc(a.issue_type)} — ${esc(a.details)}</div>
-          <div class="alert-meta">Project: ${esc(a.project_name)}</div>
-        </div>
-        <div class="alert-time">${new Date(a.created_at).toLocaleString()}</div>
-      </div>`).join('');
+    allAlerts = alerts || [];
+    renderAlerts();
   } catch {}
+}
+
+function renderAlerts() {
+  const el = document.getElementById('alerts-body');
+  const q = (document.getElementById('alerts-search').value || '').toLowerCase().trim();
+  const filter = document.getElementById('alerts-filter').value;
+  let filtered = allAlerts.filter(a => (a.hostname || '').toLowerCase().includes(q));
+  if (filter !== 'all') {
+    filtered = filtered.filter(a => {
+      if (!String(a.issue_type || '').includes('Mismatch')) return false;
+      const detail = String(a.details || '').toLowerCase();
+      return filter === 'same_domain' ? detail.includes('same domain') || detail.includes('base')
+        : !detail.includes('same domain') && !detail.includes('base');
+    });
+  }
+  if (!filtered.length) {
+    el.innerHTML='<div class="empty"><div class="empty-icon">🔔</div><div class="empty-title">No alerts for current filters</div></div>';
+    return;
+  }
+  const cls=t=>t.includes('Mismatch')?'mismatch':t.includes('Expir')?'expiring':'expired';
+  el.innerHTML=filtered.map(a=>`
+    <div class="alert-item ${a.seen?'':'unread'}" onclick="markOneSeen('${a.id}',this)">
+      <div class="alert-dot" style="color:${a.seen?'var(--text-muted)':'var(--red)'}">●</div>
+      <div style="flex:1;min-width:0">
+        <div class="alert-host">${esc(a.hostname)}</div>
+        <div class="alert-desc ${cls(a.issue_type)}">${esc(a.issue_type)} — ${esc(a.details)}</div>
+        <div class="alert-meta">Project: ${esc(a.project_name)}</div>
+      </div>
+      <div class="alert-time">${new Date(a.created_at).toLocaleString()}</div>
+    </div>`).join('');
 }
 
 async function markOneSeen(id, row) {
@@ -1652,7 +1759,7 @@ async function refreshSfPanel() {
 }
 
 async function runSfNow() {
-  if (!sfCurPid) return;
+  if (!sfCurPid) { toast('Please select a project before running scan','err'); return; }
   const { ok, data, error } = await fetch(`/api/projects/${sfCurPid}/subfinder/run`,{method:'POST'}).then(r=>r.json());
   if (!ok) { toast(error,'err'); return; }
   toast(data?.binary_found ? 'Subfinder started' : 'Subfinder started (binary not found — check install)','ok');
@@ -1671,6 +1778,43 @@ function changeSfPage(dir) {
   const np = sfCurPage+dir;
   if (np<1||np>sfTotalPages) return;
   sfCurPage=np; refreshSfPanel();
+}
+
+// ════════════════════════════════════════════════════════════
+// NEW DISCOVERIES
+// ════════════════════════════════════════════════════════════
+async function initDiscoveriesPage() {
+  const sel = document.getElementById('nd-project-select');
+  const { data: projs } = await fetch('/api/projects').then(r => r.json());
+  const prev = sel.value;
+  sel.innerHTML = '<option value="">— Choose a project —</option>' +
+    (projs || []).map(p => `<option value="${p.id}">${esc(p.name)}</option>`).join('');
+  if (prev) sel.value = prev;
+  if (!sel.value && projs?.length) sel.value = projs[0].id;
+  loadDiscoveries();
+}
+
+async function loadDiscoveries() {
+  const pid = document.getElementById('nd-project-select').value;
+  if (!pid) {
+    document.getElementById('nd-body').innerHTML = '<tr><td colspan="5" style="text-align:center;padding:20px;color:var(--text-muted)">Select a project to view new discoveries.</td></tr>';
+    return;
+  }
+  const q = encodeURIComponent(document.getElementById('nd-search').value || '');
+  const { data } = await fetch(`/api/projects/${pid}/discoveries?search=${q}&page=1&per_page=500`).then(r => r.json());
+  const rows = data?.rows || [];
+  document.getElementById('nd-count').textContent = `${fmt(data?.total || 0)} rows`;
+  if (!rows.length) {
+    document.getElementById('nd-body').innerHTML = '<tr><td colspan="5" style="text-align:center;padding:20px;color:var(--text-muted)">No discoveries found.</td></tr>';
+    return;
+  }
+  document.getElementById('nd-body').innerHTML = rows.map(r => `<tr class="${r.is_mismatch ? 'row-mismatch' : ''}">
+    <td style="font-family:var(--mono);font-size:12px;font-weight:500">${esc(r.hostname)}</td>
+    <td style="font-size:12px;color:var(--text-secondary)">${new Date(r.first_seen).toLocaleString()}</td>
+    <td>${sbadge(r)}</td>
+    <td style="font-size:12px;color:var(--text-secondary)">${esc(r.cn || r.error || '—')}</td>
+    <td style="font-size:12px">${r.expiry || '—'}</td>
+  </tr>`).join('');
 }
 
 // Poll subfinder status when on that page
