@@ -3,7 +3,7 @@ subfinder/runner.py
 Integrates ProjectDiscovery Subfinder with the SSL Sentinel pipeline.
 
 How it works:
-  1. Runs `subfinder -d domain1,domain2 -silent` as a subprocess
+  1. Extracts root domains from project hosts and runs subfinder per root
   2. Parses stdout for discovered subdomains
   3. Deduplicates against previously stored hosts
   4. New hosts are written to subfinder_hosts table
@@ -19,7 +19,7 @@ import subprocess
 import threading
 import time
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Set
 from core.observability import log_event
 
 log = logging.getLogger(__name__)
@@ -55,7 +55,7 @@ def _run_subfinder_for_root(root_domain: str, timeout: int = 180) -> Dict[str, o
         }
     cmd = [subfinder_bin, "-d", root_domain, "-silent", "-all", "-timeout", "30"]
     command_str = " ".join(cmd)
-    log.info("Subfinder start: %s", command_str)
+    log.info("Subfinder start (bin=%s): %s", subfinder_bin, command_str)
     log_event("subfinder", "info", "Subfinder command started", root_domain=root_domain, command=command_str, status="running")
     try:
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
@@ -112,12 +112,8 @@ def _normalize_host(host: str) -> str:
     return h
 
 
-def _extract_project_root_domain(hosts: List[str]) -> Optional[str]:
-    """
-    Extract exactly one registrable root domain from a host list.
-    Returns None when no valid root found.
-    Raises ValueError when multiple roots are present.
-    """
+def _extract_project_root_domains(hosts: List[str]) -> List[str]:
+    """Extract registrable root domains from a project host list."""
     normalized = []
     for raw in hosts:
         h = _normalize_host(raw)
@@ -129,11 +125,11 @@ def _extract_project_root_domain(hosts: List[str]) -> Optional[str]:
             normalized.append(h)
 
     if not normalized:
-        return None
+        return []
 
     try:
         import tldextract
-        roots = {
+        roots: Set[str] = {
             f"{ext.domain}.{ext.suffix}"
             for ext in (tldextract.extract(h) for h in normalized)
             if ext.domain and ext.suffix
@@ -141,11 +137,7 @@ def _extract_project_root_domain(hosts: List[str]) -> Optional[str]:
     except ImportError:
         roots = {".".join(h.split(".")[-2:]) for h in normalized if len(h.split(".")) >= 2}
 
-    if not roots:
-        return None
-    if len(roots) > 1:
-        raise ValueError(f"Multiple root domains detected: {', '.join(sorted(roots))}")
-    return next(iter(roots))
+    return sorted(roots)
 
 
 def run_subfinder_for_project(project_id: str, triggered_by: str = "scheduler") -> Optional[str]:
@@ -160,7 +152,7 @@ def run_subfinder_for_project(project_id: str, triggered_by: str = "scheduler") 
     from db.database import (
         project_get, project_hosts, subfinder_job_create, subfinder_job_finish,
         subfinder_job_error, subfinder_hosts_add_batch, subfinder_raw_result_add,
-        subfinder_raw_result_finish
+        subfinder_raw_result_finish, subfinder_new_discoveries_add_batch
     )
 
     project = project_get(project_id)
@@ -173,49 +165,64 @@ def run_subfinder_for_project(project_id: str, triggered_by: str = "scheduler") 
         log_event("subfinder", "error", "No base hosts found for project", project_id=project_id, status="failed")
         return None
 
-    try:
-        root_domain = _extract_project_root_domain(hosts)
-    except ValueError as ve:
-        log_event("subfinder", "error", str(ve), project_id=project_id, status="failed")
-        return None
-
-    if not root_domain:
-        log_event("subfinder", "error", "Unable to extract root domain", project_id=project_id, status="failed")
+    root_domains = _extract_project_root_domains(hosts)
+    if not root_domains:
+        log_event("subfinder", "error", "Unable to extract root domains", project_id=project_id, status="failed")
         return None
 
     if not subfinder_available():
         log.warning("Subfinder binary not found. Checked PATH and /usr/local/bin/subfinder")
         log_event("subfinder", "error", "Subfinder binary not found", project_id=project_id, status="failed")
 
-    log.info("Subfinder starting for '%s' — root domain: %s", project["name"], root_domain)
-    log_event("subfinder", "info", "Subfinder started", project_id=project_id, root_domain=root_domain, status="running")
+    log.info("Subfinder starting for '%s' — root domains: %s", project["name"], ", ".join(root_domains))
+    log_event(
+        "subfinder",
+        "info",
+        "Subfinder started",
+        project_id=project_id,
+        root_domains=root_domains,
+        status="running",
+    )
 
-    job_id = subfinder_job_create(project_id, root_domain, triggered_by)
+    job_id = subfinder_job_create(project_id, ",".join(root_domains), triggered_by)
 
     with _sf_lock:
         _sf_state[project_id] = {"status": "running", "job_id": job_id, "new_count": 0}
 
     try:
-        raw_id = subfinder_raw_result_add(
-            job_id=job_id,
-            project_id=project_id,
-            root_domain=root_domain,
-            command=f"subfinder -d {root_domain} -silent -all -timeout 30",
-        )
-        run = _run_subfinder_for_root(root_domain)
-        raw_records = [{k: v for k, v in run.items() if k != "found"}]
-        discovered_all: List[str] = run["found"]
-        subfinder_raw_result_finish(
-            raw_id,
-            run["status"],
-            run["exit_code"],
-            len(run["found"]),
-            run["stdout"],
-            run["stderr"],
-        )
+        raw_records = []
+        discovered_all: List[str] = []
+        for root_domain in root_domains:
+            raw_id = subfinder_raw_result_add(
+                job_id=job_id,
+                project_id=project_id,
+                root_domain=root_domain,
+                command=f"subfinder -d {root_domain} -silent -all -timeout 30",
+            )
+            run = _run_subfinder_for_root(root_domain)
+            raw_records.append({k: v for k, v in run.items() if k != "found"})
+            discovered_all.extend(run["found"])
+            subfinder_raw_result_finish(
+                raw_id,
+                run["status"],
+                run["exit_code"],
+                len(run["found"]),
+                run["stdout"],
+                run["stderr"],
+            )
+            if run["status"] != "done":
+                log.warning(
+                    "Subfinder run for root=%s finished with status=%s stderr=%s",
+                    root_domain,
+                    run["status"],
+                    (run["stderr"] or "").strip()[:500],
+                )
+            elif len(run["found"]) == 0:
+                log.warning("Subfinder returned 0 results — check sources/config (root=%s)", root_domain)
 
         discovered = sorted(set(discovered_all))
         new_count, new_hosts = subfinder_hosts_add_batch(project_id, discovered)
+        subfinder_new_discoveries_add_batch(job_id, project_id, new_hosts)
 
         raw_dir = Path("data/subfinder_raw")
         raw_dir.mkdir(parents=True, exist_ok=True)
