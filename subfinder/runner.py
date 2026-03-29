@@ -18,6 +18,7 @@ import time
 import logging
 from pathlib import Path
 from typing import List, Optional
+from core.observability import log_event
 
 log = logging.getLogger(__name__)
 
@@ -108,13 +109,16 @@ def run_subfinder_for_project(project_id: str, triggered_by: str = "scheduler") 
     hosts = project_hosts(project_id)
     if not hosts:
         log.warning("Subfinder: project '%s' has no base hosts", project["name"])
+        log_event("subfinder", "error", "No base hosts found for project", project_id=project_id, status="failed")
         return None
 
     root_domains = _extract_root_domains(hosts)
     if not root_domains:
+        log_event("subfinder", "error", "Unable to extract root domain", project_id=project_id, status="failed")
         return None
 
     log.info("Subfinder starting for '%s' — domains: %s", project["name"], root_domains)
+    log_event("subfinder", "info", "Subfinder started", project_id=project_id, domains=root_domains, status="running")
 
     domain_input = ",".join(root_domains)
     job_id = subfinder_job_create(project_id, domain_input, triggered_by)
@@ -128,6 +132,7 @@ def run_subfinder_for_project(project_id: str, triggered_by: str = "scheduler") 
 
         if not discovered:
             subfinder_job_finish(job_id, 0, 0)
+            log_event("subfinder", "info", "Subfinder finished with no discoveries", project_id=project_id, job_id=job_id, status="idle")
             with _sf_lock:
                 _sf_state[project_id] = {"status": "done", "job_id": job_id, "new_count": 0}
             return job_id
@@ -142,6 +147,7 @@ def run_subfinder_for_project(project_id: str, triggered_by: str = "scheduler") 
 
         log.info("Subfinder: %d new hosts for '%s', triggering SSL scan",
                  new_count, project["name"])
+        log_event("subfinder", "info", f"Discovered {new_count} new hosts", project_id=project_id, job_id=job_id, status="running")
 
         # SSL scan all unscanned subfinder hosts
         unscanned = subfinder_hosts_new_unsscanned(project_id)
@@ -150,12 +156,14 @@ def run_subfinder_for_project(project_id: str, triggered_by: str = "scheduler") 
 
         with _sf_lock:
             _sf_state[project_id]["status"] = "done"
+        log_event("subfinder", "info", "Subfinder workflow completed", project_id=project_id, job_id=job_id, status="idle")
 
         return job_id
 
     except Exception as e:
         log.exception("Subfinder pipeline error for '%s': %s", project["name"], e)
         subfinder_job_error(job_id, str(e))
+        log_event("subfinder", "error", f"Subfinder pipeline failed: {e}", project_id=project_id, job_id=job_id, status="failed")
         with _sf_lock:
             if project_id in _sf_state:
                 _sf_state[project_id]["status"] = "error"

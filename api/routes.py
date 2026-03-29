@@ -16,6 +16,7 @@ from flask import Blueprint, request, jsonify, Response, stream_with_context
 
 import db.database as db
 from core.ssl_checker import parse_hosts_file
+from core.observability import subscribe, get_logs
 from scheduler.runner import run_project_scan_async, get_scan_state, list_active_scans
 
 log = logging.getLogger(__name__)
@@ -39,6 +40,16 @@ def broadcast(event: str, data: dict):
                 dead.append(q)
         for q in dead:
             _sse_clients.remove(q)
+
+
+def _handle_observability_event(evt: dict):
+    event_name = evt.get("event")
+    if event_name:
+        payload = {k: v for k, v in evt.items() if k != "event"}
+        broadcast(event_name, payload)
+
+
+subscribe(_handle_observability_event)
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -216,6 +227,13 @@ def get_alerts():
     return ok(db.alerts_get())
 
 
+@api.post("/alerts/<aid>/read")
+def mark_one_seen(aid):
+    db.alert_mark_seen(aid)
+    broadcast("alert_update", {"unseen_count": db.alerts_unseen_count()})
+    return ok()
+
+
 @api.post("/alerts/seen")
 def mark_seen():
     db.alerts_mark_all_seen()
@@ -237,6 +255,12 @@ def clear_alerts():
 @api.get("/stats")
 def global_stats():
     return ok(db.stats_global())
+
+
+@api.get("/logs")
+def list_logs():
+    limit = min(1000, max(20, int(request.args.get("limit", 200))))
+    return ok(get_logs(limit))
 
 
 # ── Subfinder ─────────────────────────────────────────────────────────────────
@@ -272,6 +296,14 @@ def subfinder_hosts(pid):
     page = max(1, int(request.args.get("page", 1)))
     per_page = min(1000, max(50, int(request.args.get("per_page", 500))))
     return ok(db.subfinder_hosts_list(pid, page, per_page))
+
+
+@api.get("/projects/<pid>/discoveries")
+def project_discoveries(pid):
+    page = max(1, int(request.args.get("page", 1)))
+    per_page = min(1000, max(50, int(request.args.get("per_page", 200))))
+    search = (request.args.get("search", "") or "").strip()
+    return ok(db.subfinder_discoveries(pid, page, per_page, search))
 
 
 @api.put("/projects/<pid>/subfinder/toggle")

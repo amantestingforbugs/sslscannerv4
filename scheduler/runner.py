@@ -6,6 +6,7 @@ Exports BATCH_SIZE and PROGRESS_UPDATE_EVERY for use by subfinder module.
 import threading, time, logging
 from datetime import datetime, timezone
 from typing import Dict, Optional
+from core.observability import log_event
 
 log = logging.getLogger(__name__)
 
@@ -51,6 +52,7 @@ def run_project_scan(project_id: str, triggered_by: str = "manual") -> Optional[
 
     total = len(hosts)
     log.info("Scan start: '%s' (%d hosts) [%s]", project["name"], total, triggered_by)
+    log_event("ssl_scan", "info", "Scan started", project_id=project_id, total=total, triggered_by=triggered_by, status="running")
 
     scan = scan_create(project_id, total, triggered_by)
     sid = scan["id"]
@@ -101,6 +103,7 @@ def run_project_scan(project_id: str, triggered_by: str = "manual") -> Optional[
                 alert_add(project_id, h, issue, detail, sid)
 
         scan_finish(sid)
+        log_event("ssl_scan", "info", "Scan finished", project_id=project_id, scan_id=sid, total=total, status="idle")
 
         with _scan_lock:
             if sid in _scan_state:
@@ -118,6 +121,7 @@ def run_project_scan(project_id: str, triggered_by: str = "manual") -> Optional[
 
     except Exception as e:
         log.exception("Scan failed for '%s': %s", project["name"], e)
+        log_event("ssl_scan", "error", f"Scan failed: {e}", project_id=project_id, scan_id=sid, status="failed")
         scan_update(sid, status="error")
         with _scan_lock:
             if sid in _scan_state:
