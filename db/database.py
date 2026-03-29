@@ -103,6 +103,15 @@ def init_db():
         ssl_scanned INTEGER DEFAULT 0,
         UNIQUE(project_id, hostname)
     );
+    CREATE TABLE IF NOT EXISTS subfinder_new_discoveries (
+        id TEXT PRIMARY KEY,
+        job_id TEXT NOT NULL,
+        project_id TEXT NOT NULL,
+        hostname TEXT NOT NULL,
+        discovered_at TEXT NOT NULL,
+        UNIQUE(job_id, hostname),
+        FOREIGN KEY(job_id) REFERENCES subfinder_jobs(id) ON DELETE CASCADE
+    );
     CREATE INDEX IF NOT EXISTS idx_res_scan  ON results(scan_id);
     CREATE INDEX IF NOT EXISTS idx_res_proj  ON results(project_id);
     CREATE INDEX IF NOT EXISTS idx_res_mis   ON results(scan_id, is_mismatch);
@@ -111,6 +120,8 @@ def init_db():
     CREATE INDEX IF NOT EXISTS idx_sfhosts_proj ON subfinder_hosts(project_id);
     CREATE INDEX IF NOT EXISTS idx_sfraw_job ON subfinder_raw_results(job_id);
     CREATE INDEX IF NOT EXISTS idx_sfraw_project ON subfinder_raw_results(project_id, started_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_sfnew_job ON subfinder_new_discoveries(job_id);
+    CREATE INDEX IF NOT EXISTS idx_sfnew_project ON subfinder_new_discoveries(project_id, discovered_at DESC);
     """)
     # Lightweight migrations for existing DBs
     try:
@@ -156,7 +167,7 @@ def project_update(pid, **kw):
     commit()
 
 def project_delete(pid):
-    for t in ("results","alerts","scans","subfinder_jobs","subfinder_hosts"):
+    for t in ("results","alerts","scans","subfinder_jobs","subfinder_hosts","subfinder_new_discoveries"):
         x(f"DELETE FROM {t} WHERE project_id=?", (pid,))
     x("DELETE FROM projects WHERE id=?", (pid,))
     commit()
@@ -367,20 +378,28 @@ def subfinder_hosts_list(pid, page=1, per_page=500):
             "pages": max(1,(total+per_page-1)//per_page)}
 
 
+def subfinder_new_discoveries_add_batch(job_id, pid, hostnames):
+    deduped = sorted({(h or "").strip().lower() for h in hostnames if (h or "").strip()})
+    if not deduped:
+        return 0
+    ts = now()
+    rows = [(uid(), job_id, pid, h, ts) for h in deduped]
+    xm("INSERT OR IGNORE INTO subfinder_new_discoveries(id,job_id,project_id,hostname,discovered_at)"
+       " VALUES(?,?,?,?,?)", rows)
+    commit()
+    return len(deduped)
+
+
 def subfinder_discoveries(pid, page=1, per_page=200, search="", mode="all"):
     search_like = f"%{search.lower()}%"
-    where = "WHERE h.project_id=?"
+    if mode == "latest":
+        where = "WHERE h.project_id=? AND EXISTS (SELECT 1 FROM subfinder_new_discoveries n WHERE n.project_id=h.project_id AND n.hostname=h.hostname)"
+    else:
+        where = "WHERE h.project_id=?"
     params = [pid]
     if search:
         where += " AND LOWER(h.hostname) LIKE ?"
         params.append(search_like)
-    if mode == "latest":
-        where += (
-            " AND h.first_seen >= COALESCE(("
-            "SELECT MAX(started_at) FROM subfinder_jobs WHERE project_id=? AND status='done'"
-            "), h.first_seen)"
-        )
-        params.append(pid)
     total = x(f"SELECT COUNT(*) FROM subfinder_hosts h {where}", params).fetchone()[0]
     offset = (page - 1) * per_page
     rows = x(
