@@ -72,7 +72,7 @@ def _extract_root_domains(hosts: List[str]) -> List[str]:
         for h in hosts:
             e = tldextract.extract(h)
             if e.domain and e.suffix:
-                domains.add(f"{e.domain}.{e.suffix}".lower())
+                domains.add(f"{e.domain}.{e.suffix}")
         return list(domains)
     except ImportError:
         # Fallback: take last two parts
@@ -80,17 +80,8 @@ def _extract_root_domains(hosts: List[str]) -> List[str]:
         for h in hosts:
             parts = h.split(".")
             if len(parts) >= 2:
-                domains.add(".".join(parts[-2:]).lower())
+                domains.add(".".join(parts[-2:]))
         return list(domains)
-
-
-def _normalize_hosts(hosts: List[str]) -> List[str]:
-    out = set()
-    for h in hosts:
-        host = h.strip().lower().rstrip(".")
-        if host and "." in host:
-            out.add(host)
-    return sorted(out)
 
 
 def run_subfinder_for_project(project_id: str, triggered_by: str = "scheduler") -> Optional[str]:
@@ -137,7 +128,7 @@ def run_subfinder_for_project(project_id: str, triggered_by: str = "scheduler") 
 
     try:
         # Run subfinder
-        discovered = _normalize_hosts(_run_subfinder_process(root_domains))
+        discovered = _run_subfinder_process(root_domains)
 
         if not discovered:
             subfinder_job_finish(job_id, 0, 0)
@@ -212,20 +203,15 @@ def _ssl_scan_subfinder_hosts(project_id: str, hostnames: List[str], job_id: str
         hostname = r.get("hostname", "")
         scanned_hosts.append(hostname)
 
-        severity = (r.get("risk_level") or "LOW").upper()
-        mismatch_type = "same_domain" if r.get("same_base") else "different_domain"
         if r.get("is_mismatch") and not r.get("error"):
             alert_add(project_id, hostname, "SSL Mismatch",
-                      f"[Subfinder] CN '{r.get('cn','?')}' ≠ hostname", scan_id, severity, mismatch_type)
+                      f"[Subfinder] CN '{r.get('cn','?')}' ≠ hostname", scan_id)
         elif r.get("is_expired") and not r.get("error"):
             alert_add(project_id, hostname, "Expired",
-                      f"[Subfinder] Expired {r.get('expiry','?')}", scan_id, severity, mismatch_type)
+                      f"[Subfinder] Expired {r.get('expiry','?')}", scan_id)
         elif r.get("is_expiring_soon") and not r.get("error"):
             alert_add(project_id, hostname, "Expiring Soon",
-                      f"[Subfinder] Expires {r.get('expiry','?')} ({r.get('days_left')}d)", scan_id, severity, mismatch_type)
-        elif r.get("takeover_risk"):
-            alert_add(project_id, hostname, "Potential Takeover",
-                      f"[Subfinder] CNAME target {r.get('cname','?')} appears unclaimed", scan_id, "HIGH", "different_domain")
+                      f"[Subfinder] Expires {r.get('expiry','?')} ({r.get('days_left')}d)", scan_id)
 
         with lock:
             result_batch.append(r)
@@ -311,7 +297,7 @@ class SubfinderScheduler:
             if not p.get("enabled") or not p.get("subfinder_enabled"):
                 continue
             pid = p["id"]
-            interval_s = max(10, min(30, int(p.get("subfinder_interval_minutes", 30)))) * 60
+            interval_s = p.get("subfinder_interval_minutes", 30) * 60
             if now_ts - self._last_run.get(pid, 0) >= interval_s:
                 self._last_run[pid] = now_ts
                 run_subfinder_async(pid, triggered_by="scheduler")
