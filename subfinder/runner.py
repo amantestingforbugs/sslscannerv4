@@ -19,6 +19,7 @@ import shutil
 import subprocess
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Dict, List, Optional, Set
 from core.observability import log_event
@@ -193,41 +194,48 @@ def run_subfinder_for_project(project_id: str, triggered_by: str = "scheduler") 
     try:
         raw_records = []
         discovered_all: List[str] = []
-        for root_domain in root_domains:
-            raw_id = subfinder_raw_result_add(
+        raw_ids = {
+            root_domain: subfinder_raw_result_add(
                 job_id=job_id,
                 project_id=project_id,
                 root_domain=root_domain,
                 command=f"subfinder -d {root_domain} -silent -all -timeout 30",
             )
-            run = _run_subfinder_for_root(root_domain)
-            raw_records.append(
-                {
-                    "root_domain": run["root_domain"],
-                    "command": run["command"],
-                    "status": run["status"],
-                    "exit_code": run["exit_code"],
-                    "found_count": len(run["found"]),
-                }
-            )
-            discovered_all.extend(run["found"])
-            subfinder_raw_result_finish(
-                raw_id,
-                run["status"],
-                run["exit_code"],
-                len(run["found"]),
-                run["stdout"],
-                run["stderr"],
-            )
-            if run["status"] != "done":
-                log.warning(
-                    "Subfinder run for root=%s finished with status=%s stderr=%s",
-                    root_domain,
-                    run["status"],
-                    (run["stderr"] or "").strip()[:500],
+            for root_domain in root_domains
+        }
+        workers = max(1, min(8, len(root_domains)))
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            futures = {pool.submit(_run_subfinder_for_root, root_domain): root_domain for root_domain in root_domains}
+            for future in as_completed(futures):
+                root_domain = futures[future]
+                run = future.result()
+                raw_records.append(
+                    {
+                        "root_domain": run["root_domain"],
+                        "command": run["command"],
+                        "status": run["status"],
+                        "exit_code": run["exit_code"],
+                        "found_count": len(run["found"]),
+                    }
                 )
-            elif len(run["found"]) == 0:
-                log.warning("Subfinder returned 0 results — check sources/config (root=%s)", root_domain)
+                discovered_all.extend(run["found"])
+                subfinder_raw_result_finish(
+                    raw_ids[root_domain],
+                    run["status"],
+                    run["exit_code"],
+                    len(run["found"]),
+                    run["stdout"],
+                    run["stderr"],
+                )
+                if run["status"] != "done":
+                    log.warning(
+                        "Subfinder run for root=%s finished with status=%s stderr=%s",
+                        root_domain,
+                        run["status"],
+                        (run["stderr"] or "").strip()[:500],
+                    )
+                elif len(run["found"]) == 0:
+                    log.warning("Subfinder returned 0 results — check sources/config (root=%s)", root_domain)
 
         discovered = sorted(set(discovered_all))
         new_count, new_hosts = subfinder_hosts_add_batch(project_id, discovered)
