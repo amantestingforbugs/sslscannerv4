@@ -5,6 +5,7 @@ Extended with subfinder_jobs and subfinder_hosts tables.
 """
 
 import sqlite3, json, uuid, threading, logging, zlib
+from itertools import islice
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -48,6 +49,15 @@ def _decompress_text(blob):
         return zlib.decompress(blob).decode("utf-8", errors="replace")
     except Exception:
         return ""
+
+
+def _chunked(items, size=500):
+    it = iter(items)
+    while True:
+        chunk = list(islice(it, size))
+        if not chunk:
+            break
+        yield chunk
 
 
 def init_db():
@@ -437,12 +447,17 @@ def subfinder_hosts_add_batch(pid, hostnames):
     deduped = sorted({(h or "").strip().lower() for h in hostnames if (h or "").strip()})
     if not deduped:
         return 0, []
-    existing = {
-        r["hostname"] for r in x(
-            f"SELECT hostname FROM subfinder_hosts WHERE project_id=? AND hostname IN ({','.join(['?']*len(deduped))})",
-            [pid, *deduped]
+
+    existing = set()
+    # SQLite has a hard cap on bound SQL variables per statement.
+    for chunk in _chunked(deduped, 500):
+        placeholders = ",".join(["?"] * len(chunk))
+        rows = x(
+            f"SELECT hostname FROM subfinder_hosts WHERE project_id=? AND hostname IN ({placeholders})",
+            [pid, *chunk],
         ).fetchall()
-    }
+        existing.update(r["hostname"] for r in rows)
+
     new_hosts = [h for h in deduped if h not in existing]
     rows = [(uid(), pid, h, "subfinder", n, n) for h in deduped]
     xm("INSERT OR IGNORE INTO subfinder_hosts(id,project_id,hostname,source,first_seen,last_seen)"
