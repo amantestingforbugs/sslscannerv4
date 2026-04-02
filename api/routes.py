@@ -34,6 +34,7 @@ _openssl_lock = threading.Lock()
 _quick_scan_threads: dict[str, threading.Thread] = {}
 _quick_scan_state: dict[str, dict] = {}
 _quick_scan_lock = threading.Lock()
+QUICK_SCAN_ROWS_BUFFER = 500
 
 
 def broadcast(event: str, data: dict):
@@ -138,6 +139,7 @@ def _start_quick_scan(hosts: list[str]) -> str:
             "errors": 0,
             "hosts": hosts,
             "rows": [],
+            "rows_total": 0,
             "started_at": db.now(),
             "finished_at": None,
         }
@@ -174,6 +176,9 @@ def _quick_scan_worker(sid: str):
             if not state:
                 return
             state["rows"].append(row)
+            state["rows_total"] = int(state.get("rows_total") or 0) + 1
+            if len(state["rows"]) > QUICK_SCAN_ROWS_BUFFER:
+                state["rows"] = state["rows"][-QUICK_SCAN_ROWS_BUFFER:]
             state["done"] = done
             state["ok"] += 1 if row.get("is_ok") else 0
             state["mismatches"] += 1 if row.get("is_mismatch") else 0
@@ -471,8 +476,6 @@ def quick_scan_status(sid):
         state = dict(_quick_scan_state.get(sid) or {})
     if not state:
         return err("Quick scan not found", 404)
-    rows = state.get("rows", [])
-    state["rows_total"] = len(rows)
     # Keep status payload tiny so polling remains fast even for large scans.
     state.pop("rows", None)
     state.pop("hosts", None)
