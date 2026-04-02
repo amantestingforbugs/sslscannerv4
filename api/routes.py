@@ -525,6 +525,33 @@ def clear_alerts():
     return ok()
 
 
+@api.get("/alert-settings")
+def get_alert_settings():
+    return ok(db.alert_settings_get())
+
+
+@api.put("/alert-settings")
+def update_alert_settings():
+    d = request.json or {}
+    cleaned = {
+        "telegram_enabled": d.get("telegram_enabled"),
+        "telegram_bot_token": (d.get("telegram_bot_token") or "").strip(),
+        "telegram_chat_id": (d.get("telegram_chat_id") or "").strip(),
+        "slack_enabled": d.get("slack_enabled"),
+        "slack_webhook_url": (d.get("slack_webhook_url") or "").strip(),
+        "discord_enabled": d.get("discord_enabled"),
+        "discord_webhook_url": (d.get("discord_webhook_url") or "").strip(),
+        "rule_mismatch": d.get("rule_mismatch"),
+        "rule_expired": d.get("rule_expired"),
+        "rule_expiring": d.get("rule_expiring"),
+        "rule_error": d.get("rule_error"),
+        "mismatch_scope_filter": (d.get("mismatch_scope_filter") or "all").strip(),
+        "minimum_days_left": d.get("minimum_days_left", 30),
+    }
+    out = db.alert_settings_update(**cleaned)
+    return ok(out)
+
+
 # ── Stats ─────────────────────────────────────────────────────────────────────
 
 @api.get("/stats")
