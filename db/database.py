@@ -402,14 +402,23 @@ def alerts_get(search="", mismatch_scope="all", page=1, per_page=200):
         clauses.append("a.mismatch_scope=?")
         params.append(mismatch_scope)
     where = " AND ".join(clauses)
+    dedup_sql = (
+        "SELECT * FROM ("
+        " SELECT a.*, ROW_NUMBER() OVER ("
+        "   PARTITION BY a.project_id, a.hostname, a.issue_type"
+        "   ORDER BY a.created_at DESC, a.id DESC"
+        " ) AS rn"
+        " FROM alerts a"
+        ") WHERE rn=1"
+    )
     total = x(
-        "SELECT COUNT(*) FROM alerts a"
+        f"SELECT COUNT(*) FROM ({dedup_sql}) a"
         f" JOIN projects p ON p.id=a.project_id WHERE {where}",
         params,
     ).fetchone()[0]
     offset = (page - 1) * per_page
     rows = [dict(r) for r in x(
-        "SELECT a.*,p.name project_name FROM alerts a"
+        f"SELECT a.*,p.name project_name FROM ({dedup_sql}) a"
         f" JOIN projects p ON p.id=a.project_id WHERE {where}"
         " ORDER BY a.created_at DESC LIMIT ? OFFSET ?",
         params + [per_page, offset],

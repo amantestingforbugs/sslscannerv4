@@ -1691,12 +1691,36 @@ function updateQuickProgress(s) {
   meta.textContent = `Status: ${s.status || 'idle'}${s.finished_at ? ` · Finished: ${new Date(s.finished_at).toLocaleString()}` : ''}`;
 }
 
+function dedupeQuickHostsInput(raw) {
+  const seen = new Set();
+  const unique = [];
+  const chunks = String(raw || '').split(/\s+/).map(v => v.trim()).filter(Boolean);
+  for (const chunk of chunks) {
+    let h = chunk.toLowerCase()
+      .replace(/^[a-z]+:\/\//, '')
+      .replace(/\/.*$/, '')
+      .replace(/:\d+$/, '')
+      .replace(/^\.+|\.+$/g, '');
+    if (!h || seen.has(h)) continue;
+    seen.add(h);
+    unique.push(h);
+  }
+  return unique;
+}
+
 async function startQuickScan() {
-  const hosts = document.getElementById('quick-hosts').value.trim();
+  const hostInput = document.getElementById('quick-hosts');
+  const hosts = hostInput.value.trim();
   if (!hosts) {
     toast('Paste at least one subdomain/hostname', 'err');
     return;
   }
+  const dedupedHosts = dedupeQuickHostsInput(hosts);
+  if (!dedupedHosts.length) {
+    toast('Paste at least one valid subdomain/hostname', 'err');
+    return;
+  }
+  hostInput.value = dedupedHosts.join('\n');
   const btn = document.getElementById('quick-scan-btn');
   btn.disabled = true;
   quickRows = [];
@@ -1712,7 +1736,7 @@ async function startQuickScan() {
     const { ok, data, error } = await fetch('/api/quick-scan', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ hosts })
+      body: JSON.stringify({ hosts: dedupedHosts.join('\n') })
     }).then(r => r.json());
     if (!ok) {
       btn.disabled = false;
