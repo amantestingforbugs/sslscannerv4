@@ -96,6 +96,23 @@ def init_db():
         dedup_key TEXT NOT NULL UNIQUE, sent INTEGER DEFAULT 0,
         seen INTEGER DEFAULT 0, created_at TEXT NOT NULL
     );
+    CREATE TABLE IF NOT EXISTS alert_settings (
+        id INTEGER PRIMARY KEY CHECK (id = 1),
+        telegram_enabled INTEGER DEFAULT 0,
+        telegram_bot_token TEXT DEFAULT '',
+        telegram_chat_id TEXT DEFAULT '',
+        slack_enabled INTEGER DEFAULT 0,
+        slack_webhook_url TEXT DEFAULT '',
+        discord_enabled INTEGER DEFAULT 0,
+        discord_webhook_url TEXT DEFAULT '',
+        rule_mismatch INTEGER DEFAULT 1,
+        rule_expired INTEGER DEFAULT 1,
+        rule_expiring INTEGER DEFAULT 1,
+        rule_error INTEGER DEFAULT 0,
+        mismatch_scope_filter TEXT DEFAULT 'all',
+        minimum_days_left INTEGER DEFAULT 30,
+        updated_at TEXT NOT NULL
+    );
     CREATE TABLE IF NOT EXISTS subfinder_jobs (
         id TEXT PRIMARY KEY, project_id TEXT NOT NULL,
         status TEXT DEFAULT 'running',
@@ -180,6 +197,16 @@ def init_db():
     except sqlite3.OperationalError:
         pass
     try:
+        x("ALTER TABLE alert_settings ADD COLUMN rule_error INTEGER DEFAULT 0")
+        commit()
+    except sqlite3.OperationalError:
+        pass
+    try:
+        x("ALTER TABLE alert_settings ADD COLUMN minimum_days_left INTEGER DEFAULT 30")
+        commit()
+    except sqlite3.OperationalError:
+        pass
+    try:
         x("ALTER TABLE subfinder_raw_results ADD COLUMN stdout_z BLOB")
         commit()
     except sqlite3.OperationalError:
@@ -236,6 +263,17 @@ def init_db():
         x("CREATE UNIQUE INDEX IF NOT EXISTS idx_sfnew_project_host_unique ON subfinder_new_discoveries(project_id, hostname)")
     except sqlite3.IntegrityError:
         pass
+    x(
+        """
+        INSERT OR IGNORE INTO alert_settings(
+            id, telegram_enabled, telegram_bot_token, telegram_chat_id,
+            slack_enabled, slack_webhook_url, discord_enabled, discord_webhook_url,
+            rule_mismatch, rule_expired, rule_expiring, rule_error,
+            mismatch_scope_filter, minimum_days_left, updated_at
+        ) VALUES(1,0,'','',0,'',0,'',1,1,1,0,'all',30,?)
+        """,
+        (now(),),
+    )
     commit()
     log.info("DB ready at %s", DB_PATH)
 
@@ -452,6 +490,68 @@ def alert_mark_sent(aid):
 def alert_mark_seen(aid):
     x("UPDATE alerts SET seen=1 WHERE id=?", (aid,))
     commit()
+
+
+def alert_settings_get():
+    row = x("SELECT * FROM alert_settings WHERE id=1").fetchone()
+    if not row:
+        return {
+            "telegram_enabled": 0,
+            "telegram_bot_token": "",
+            "telegram_chat_id": "",
+            "slack_enabled": 0,
+            "slack_webhook_url": "",
+            "discord_enabled": 0,
+            "discord_webhook_url": "",
+            "rule_mismatch": 1,
+            "rule_expired": 1,
+            "rule_expiring": 1,
+            "rule_error": 0,
+            "mismatch_scope_filter": "all",
+            "minimum_days_left": 30,
+            "updated_at": now(),
+        }
+    return dict(row)
+
+
+def alert_settings_update(**kw):
+    allowed = {
+        "telegram_enabled",
+        "telegram_bot_token",
+        "telegram_chat_id",
+        "slack_enabled",
+        "slack_webhook_url",
+        "discord_enabled",
+        "discord_webhook_url",
+        "rule_mismatch",
+        "rule_expired",
+        "rule_expiring",
+        "rule_error",
+        "mismatch_scope_filter",
+        "minimum_days_left",
+    }
+    data = {k: v for k, v in kw.items() if k in allowed}
+    for key in (
+        "telegram_enabled",
+        "slack_enabled",
+        "discord_enabled",
+        "rule_mismatch",
+        "rule_expired",
+        "rule_expiring",
+        "rule_error",
+    ):
+        if key in data:
+            data[key] = 1 if bool(data[key]) else 0
+    if "mismatch_scope_filter" in data and data["mismatch_scope_filter"] not in {"all", "same_domain", "different_domain"}:
+        data["mismatch_scope_filter"] = "all"
+    if "minimum_days_left" in data:
+        data["minimum_days_left"] = max(1, min(365, int(data["minimum_days_left"] or 30)))
+    data["updated_at"] = now()
+    sets = ",".join(f"{k}=?" for k in data.keys())
+    params = list(data.values()) + [1]
+    x(f"UPDATE alert_settings SET {sets} WHERE id=?", params)
+    commit()
+    return alert_settings_get()
 
 
 # ── Subfinder ─────────────────────────────────────────────────────────────────

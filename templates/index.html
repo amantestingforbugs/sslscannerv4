@@ -720,17 +720,67 @@ tbody tr:last-child td{border-bottom:none}
       <div class="page-header">
         <div>
           <div class="page-title">Settings</div>
-          <div class="page-sub">UI preferences</div>
+          <div class="page-sub">UI + alert routing rules</div>
         </div>
       </div>
       <div class="card">
         <div class="card-body">
-          <div class="form-group" style="max-width:360px">
+          <div class="form-group" style="max-width:360px;margin-bottom:18px">
             <label class="form-label">Theme Mode</label>
             <select class="form-input" id="settingsTheme" onchange="setTheme(this.value)">
               <option value="light">Light</option>
               <option value="dark">Dark</option>
             </select>
+          </div>
+          <hr style="border:0;border-top:1px solid var(--border);margin:16px 0 18px">
+          <div style="font-weight:700;margin-bottom:8px">Alert Channels</div>
+          <div class="form-group">
+            <label style="display:flex;align-items:center;gap:8px"><input type="checkbox" id="set-telegram-enabled"> Telegram</label>
+          </div>
+          <div class="form-row">
+            <div class="form-group">
+              <label class="form-label">Telegram Bot Token</label>
+              <input class="form-input" id="set-telegram-token" placeholder="123456:ABC...">
+            </div>
+            <div class="form-group">
+              <label class="form-label">Telegram Chat ID</label>
+              <input class="form-input" id="set-telegram-chat" placeholder="-1001234567890">
+            </div>
+          </div>
+          <div class="form-group">
+            <label style="display:flex;align-items:center;gap:8px"><input type="checkbox" id="set-slack-enabled"> Slack</label>
+            <input class="form-input" id="set-slack-webhook" placeholder="https://hooks.slack.com/services/...">
+          </div>
+          <div class="form-group">
+            <label style="display:flex;align-items:center;gap:8px"><input type="checkbox" id="set-discord-enabled"> Discord</label>
+            <input class="form-input" id="set-discord-webhook" placeholder="https://discord.com/api/webhooks/...">
+          </div>
+          <hr style="border:0;border-top:1px solid var(--border);margin:16px 0 18px">
+          <div style="font-weight:700;margin-bottom:8px">Alert Trigger Rules</div>
+          <div class="form-row">
+            <label style="display:flex;align-items:center;gap:8px"><input type="checkbox" id="set-rule-mismatch"> SSL mismatch (hostname != certificate name)</label>
+            <label style="display:flex;align-items:center;gap:8px"><input type="checkbox" id="set-rule-expired"> Expired certs</label>
+          </div>
+          <div class="form-row">
+            <label style="display:flex;align-items:center;gap:8px"><input type="checkbox" id="set-rule-expiring"> Expiring soon certs</label>
+            <label style="display:flex;align-items:center;gap:8px"><input type="checkbox" id="set-rule-error"> Scan/TLS errors</label>
+          </div>
+          <div class="form-row" style="margin-top:10px">
+            <div class="form-group">
+              <label class="form-label">Mismatch Scope</label>
+              <select class="form-input" id="set-mismatch-scope">
+                <option value="all">All mismatches</option>
+                <option value="same_domain">Only same base-domain mismatch</option>
+                <option value="different_domain">Only cross-domain mismatch</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label class="form-label">Expiring soon threshold (days)</label>
+              <input class="form-input" id="set-min-days" type="number" min="1" max="365" value="30">
+            </div>
+          </div>
+          <div style="display:flex;justify-content:flex-end;margin-top:8px">
+            <button class="btn btn-primary" onclick="saveAlertSettings()">Save Alert Settings</button>
           </div>
         </div>
       </div>
@@ -1253,6 +1303,7 @@ let quickFilter = 'all';
 let quickSortCol = 'hostname';
 let quickSortDir = 1;
 let quickRenderTimer = null;
+let alertSettingsCache = null;
 
 async function apiJSON(url, opts) {
   const resp = await fetch(url, { cache: 'no-store', ...(opts || {}) });
@@ -1282,6 +1333,60 @@ document.getElementById('themeToggle').addEventListener('click', () => {
   setTheme(document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark');
 });
 setTheme(localStorage.getItem(THEME_KEY) || 'dark');
+
+// ════════════════════════════════════════════════════════════
+// ALERT SETTINGS
+// ════════════════════════════════════════════════════════════
+async function loadAlertSettings() {
+  try {
+    const { data } = await apiJSON('/api/alert-settings');
+    alertSettingsCache = data || {};
+    const s = alertSettingsCache;
+    document.getElementById('set-telegram-enabled').checked = !!s.telegram_enabled;
+    document.getElementById('set-telegram-token').value = s.telegram_bot_token || '';
+    document.getElementById('set-telegram-chat').value = s.telegram_chat_id || '';
+    document.getElementById('set-slack-enabled').checked = !!s.slack_enabled;
+    document.getElementById('set-slack-webhook').value = s.slack_webhook_url || '';
+    document.getElementById('set-discord-enabled').checked = !!s.discord_enabled;
+    document.getElementById('set-discord-webhook').value = s.discord_webhook_url || '';
+    document.getElementById('set-rule-mismatch').checked = !!s.rule_mismatch;
+    document.getElementById('set-rule-expired').checked = !!s.rule_expired;
+    document.getElementById('set-rule-expiring').checked = !!s.rule_expiring;
+    document.getElementById('set-rule-error').checked = !!s.rule_error;
+    document.getElementById('set-mismatch-scope').value = s.mismatch_scope_filter || 'all';
+    document.getElementById('set-min-days').value = Number(s.minimum_days_left || 30);
+  } catch {
+    toast('Failed to load alert settings', 'err');
+  }
+}
+
+async function saveAlertSettings() {
+  const payload = {
+    telegram_enabled: document.getElementById('set-telegram-enabled').checked,
+    telegram_bot_token: document.getElementById('set-telegram-token').value.trim(),
+    telegram_chat_id: document.getElementById('set-telegram-chat').value.trim(),
+    slack_enabled: document.getElementById('set-slack-enabled').checked,
+    slack_webhook_url: document.getElementById('set-slack-webhook').value.trim(),
+    discord_enabled: document.getElementById('set-discord-enabled').checked,
+    discord_webhook_url: document.getElementById('set-discord-webhook').value.trim(),
+    rule_mismatch: document.getElementById('set-rule-mismatch').checked,
+    rule_expired: document.getElementById('set-rule-expired').checked,
+    rule_expiring: document.getElementById('set-rule-expiring').checked,
+    rule_error: document.getElementById('set-rule-error').checked,
+    mismatch_scope_filter: document.getElementById('set-mismatch-scope').value,
+    minimum_days_left: Number(document.getElementById('set-min-days').value || 30),
+  };
+  const { ok, error } = await fetch('/api/alert-settings', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  }).then(r => r.json());
+  if (!ok) {
+    toast(error || 'Failed to save settings', 'err');
+    return;
+  }
+  toast('Alert settings saved', 'ok');
+}
 
 // ════════════════════════════════════════════════════════════
 // CLOCK
@@ -1317,6 +1422,7 @@ function nav(name) {
   if (name==='subfinder-raw') initSfRawPage();
   if (name==='openssl') initOpenSSLPage();
   if (name==='logs') loadLogsPage();
+  if (name==='settings') loadAlertSettings();
 }
 
 document.querySelectorAll('.nav-item[data-page]').forEach(el => {

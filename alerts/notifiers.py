@@ -1,84 +1,145 @@
 """
-alerts/telegram.py — Modular alert system.
-Currently supports Telegram. Extend by adding new notifier classes.
+Alert transport and filtering for SSL Sentinel.
+Supports Telegram, Slack, and Discord webhooks.
 """
 
+import json
 import logging
-import os
-from typing import List, Dict
+import urllib.error
+import urllib.parse
+import urllib.request
+from typing import Dict, List
 
 logger = logging.getLogger(__name__)
 
 
+def _issue_enabled(issue_type: str, settings: Dict) -> bool:
+    mapping = {
+        "SSL Mismatch": bool(settings.get("rule_mismatch")),
+        "Expired": bool(settings.get("rule_expired")),
+        "Expiring Soon": bool(settings.get("rule_expiring")),
+    }
+    return mapping.get(issue_type, bool(settings.get("rule_error")))
+
+
+def _scope_allowed(alert_row: Dict, settings: Dict) -> bool:
+    wanted = (settings.get("mismatch_scope_filter") or "all").strip()
+    if wanted == "all":
+        return True
+    if alert_row.get("issue_type") != "SSL Mismatch":
+        return True
+    return (alert_row.get("mismatch_scope") or "") == wanted
+
+
+def filter_alerts(alerts: List[Dict], settings: Dict) -> List[Dict]:
+    return [a for a in alerts if _issue_enabled(a.get("issue_type", ""), settings) and _scope_allowed(a, settings)]
+
+
+def _plain_digest(project_name: str, alerts: List[Dict], max_rows: int = 10) -> str:
+    lines = [f"🔐 SSL Sentinel Alert — {project_name}", ""]
+    for a in alerts[:max_rows]:
+        icon = {"SSL Mismatch": "❌", "Expired": "💀", "Expiring Soon": "⚠️"}.get(a.get("issue_type"), "🔔")
+        lines.append(f"{icon} {a.get('hostname')} — {a.get('issue_type')}: {a.get('details')}")
+    if len(alerts) > max_rows:
+        lines.append(f"...and {len(alerts) - max_rows} more. Check dashboard.")
+    return "\n".join(lines)
+
+
 class TelegramNotifier:
-    """
-    Sends alerts via Telegram Bot API.
-    Requires: TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID environment variables.
-    """
+    def __init__(self, settings: Dict):
+        self.enabled = bool(settings.get("telegram_enabled"))
+        self.token = settings.get("telegram_bot_token", "")
+        self.chat_id = settings.get("telegram_chat_id", "")
+        self.ready = bool(self.enabled and self.token and self.chat_id)
 
-    def __init__(self):
-        self.token = os.getenv("TELEGRAM_BOT_TOKEN", "")
-        self.chat_id = os.getenv("TELEGRAM_CHAT_ID", "")
-        self.enabled = bool(self.token and self.chat_id)
-        if not self.enabled:
-            logger.info("Telegram alerts disabled (TELEGRAM_BOT_TOKEN or TELEGRAM_CHAT_ID not set)")
-
-    def send(self, message: str) -> bool:
-        if not self.enabled:
+    def send_mismatch_digest(self, project_name: str, alerts: List[Dict]) -> bool:
+        if not alerts:
+            return True
+        if not self.ready:
             return False
+        lines = [f"<b>🔐 SSL Sentinel Alert — {project_name}</b>", ""]
+        for a in alerts[:10]:
+            icon = {"SSL Mismatch": "❌", "Expired": "💀", "Expiring Soon": "⚠️"}.get(a.get("issue_type"), "🔔")
+            lines.append(f"{icon} <code>{a.get('hostname','')}</code>")
+            lines.append(f"   {a.get('issue_type','Issue')}: {a.get('details','')}")
+            lines.append("")
+        if len(alerts) > 10:
+            lines.append(f"...and {len(alerts) - 10} more. Check dashboard.")
+        text = "\n".join(lines)
         try:
-            import urllib.request
-            url = f"https://api.telegram.org/bot{self.token}/sendMessage"
-            data = f"chat_id={self.chat_id}&text={urllib.parse.quote(message)}&parse_mode=HTML"
-            import urllib.parse
-            req = urllib.request.Request(url, data=data.encode(), method="POST")
+            payload = urllib.parse.urlencode({
+                "chat_id": self.chat_id,
+                "text": text,
+                "parse_mode": "HTML",
+            }).encode()
+            req = urllib.request.Request(
+                f"https://api.telegram.org/bot{self.token}/sendMessage",
+                data=payload,
+                method="POST",
+            )
             with urllib.request.urlopen(req, timeout=10) as resp:
                 return resp.status == 200
         except Exception as e:
             logger.error("Telegram send failed: %s", e)
             return False
 
+
+class WebhookNotifier:
+    def __init__(self, name: str, enabled: bool, webhook_url: str):
+        self.name = name
+        self.enabled = bool(enabled)
+        self.webhook_url = webhook_url or ""
+        self.ready = bool(self.enabled and self.webhook_url)
+
     def send_mismatch_digest(self, project_name: str, alerts: List[Dict]) -> bool:
         if not alerts:
             return True
-        lines = [f"<b>🔐 SSL Sentinel Alert — {project_name}</b>", ""]
-        for a in alerts[:10]:  # max 10 per message
-            icon = {"SSL Mismatch": "❌", "Expired": "💀", "Expiring Soon": "⚠️"}.get(a["issue_type"], "🔔")
-            lines.append(f"{icon} <code>{a['hostname']}</code>")
-            lines.append(f"   {a['issue_type']}: {a['details']}")
-            lines.append("")
-        if len(alerts) > 10:
-            lines.append(f"...and {len(alerts)-10} more. Check dashboard.")
-        return self.send("\n".join(lines))
+        if not self.ready:
+            return False
+        text = _plain_digest(project_name, alerts)
+        payload = {"text": text}
+        if self.name == "discord":
+            payload = {"content": text}
+        try:
+            req = urllib.request.Request(
+                self.webhook_url,
+                data=json.dumps(payload).encode("utf-8"),
+                headers={"Content-Type": "application/json"},
+                method="POST",
+            )
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                return 200 <= resp.status < 300
+        except urllib.error.HTTPError as e:
+            logger.error("%s webhook failed: %s", self.name, e)
+            return False
+        except Exception as e:
+            logger.error("%s webhook send failed: %s", self.name, e)
+            return False
 
 
 class ConsoleNotifier:
-    """Fallback notifier — logs to console. Always enabled."""
-
-    def send(self, message: str) -> bool:
-        logger.warning("ALERT: %s", message)
-        return True
-
     def send_mismatch_digest(self, project_name: str, alerts: List[Dict]) -> bool:
         for a in alerts:
-            logger.warning("[%s] %s — %s: %s", project_name, a["hostname"], a["issue_type"], a["details"])
+            logger.warning("[%s] %s — %s: %s", project_name, a.get("hostname"), a.get("issue_type"), a.get("details"))
         return True
 
 
 class AlertManager:
-    """
-    Dispatches alerts to all configured notifiers.
-    Add new notifiers here to extend (email, Slack, PagerDuty, etc.)
-    """
-
-    def __init__(self):
-        self.notifiers = [ConsoleNotifier(), TelegramNotifier()]
+    def __init__(self, settings: Dict):
+        self.settings = settings or {}
+        self.notifiers = [
+            TelegramNotifier(self.settings),
+            WebhookNotifier("slack", self.settings.get("slack_enabled"), self.settings.get("slack_webhook_url", "")),
+            WebhookNotifier("discord", self.settings.get("discord_enabled"), self.settings.get("discord_webhook_url", "")),
+            ConsoleNotifier(),
+        ]
 
     def dispatch(self, project_name: str, alerts: List[Dict]) -> None:
-        if not alerts:
+        scoped = filter_alerts(alerts, self.settings)
+        if not scoped:
             return
         for notifier in self.notifiers:
             try:
-                notifier.send_mismatch_digest(project_name, alerts)
+                notifier.send_mismatch_digest(project_name, scoped)
             except Exception as e:
                 logger.error("Notifier %s failed: %s", type(notifier).__name__, e)

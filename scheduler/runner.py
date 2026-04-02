@@ -39,7 +39,7 @@ def run_project_scan(project_id: str, triggered_by: str = "manual") -> Optional[
     from db.database import (
         project_get, project_hosts, scan_create, results_batch_save,
         scan_finish, scan_update, scan_progress,
-        alert_add, alerts_unsent, alert_mark_sent, alerts_unseen_count
+        alert_add, alerts_unsent, alert_mark_sent, alerts_unseen_count, alert_settings_get
     )
     from core.ssl_checker import run_checker
     from alerts.notifiers import AlertManager
@@ -52,6 +52,8 @@ def run_project_scan(project_id: str, triggered_by: str = "manual") -> Optional[
         return None
 
     total = len(hosts)
+    alert_settings = alert_settings_get()
+    expiring_threshold = max(1, min(365, int(alert_settings.get("minimum_days_left") or 30)))
     log.info("Scan start: '%s' (%d hosts) [%s]", project["name"], total, triggered_by)
     log_event("ssl_scan", "info", "Scan started", project_id=project_id, total=total, triggered_by=triggered_by, status="running")
 
@@ -71,13 +73,26 @@ def run_project_scan(project_id: str, triggered_by: str = "manual") -> Optional[
     def on_result(done, total_inner, r):
         hostname = r.get("hostname", "")
         alert = None
+        days_left = r.get("days_left")
+        is_expiring_by_setting = isinstance(days_left, int) and 0 <= days_left <= expiring_threshold
+        if is_expiring_by_setting:
+            r["is_expiring_soon"] = True
+        elif r.get("is_expiring_soon") and isinstance(days_left, int) and days_left > expiring_threshold:
+            r["is_expiring_soon"] = False
+        if r.get("is_ok") and is_expiring_by_setting:
+            r["is_ok"] = False
+        elif r.get("is_ok") and isinstance(days_left, int) and days_left <= expiring_threshold:
+            r["is_ok"] = False
+
         if r.get("is_mismatch") and not r.get("error"):
             mismatch_scope = "same_domain" if r.get("same_base") else "different_domain"
             alert = (hostname, "SSL Mismatch", f"CN '{r.get('cn','?')}' ≠ hostname", mismatch_scope)
         elif r.get("is_expired") and not r.get("error"):
             alert = (hostname, "Expired", f"Expired {r.get('expiry','?')}", "")
-        elif r.get("is_expiring_soon") and not r.get("error"):
+        elif is_expiring_by_setting and not r.get("error"):
             alert = (hostname, "Expiring Soon", f"Expires {r.get('expiry','?')} ({r.get('days_left')}d)", "")
+        elif r.get("error"):
+            alert = (hostname, "Scan Error", r.get("error") or "Unknown TLS error", "")
         with lock:
             if alert:
                 alert_batch.append(alert)
@@ -122,7 +137,7 @@ def run_project_scan(project_id: str, triggered_by: str = "manual") -> Optional[
         # Send Telegram
         unsent = [a for a in alerts_unsent() if a["project_id"] == project_id]
         if unsent:
-            AlertManager().dispatch(project["name"], unsent)
+            AlertManager(alert_settings_get()).dispatch(project["name"], unsent)
             for a in unsent:
                 alert_mark_sent(a["id"])
 
