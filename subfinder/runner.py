@@ -29,6 +29,7 @@ log = logging.getLogger(__name__)
 SUBFINDER_BIN = shutil.which("subfinder") or "/usr/local/bin/subfinder"
 _sf_lock = threading.Lock()
 _sf_state = {}  # project_id -> {status, job_id, new_count}
+_subfinder_all_flag_supported: Optional[bool] = None
 
 
 def _resolve_subfinder_bin() -> Optional[str]:
@@ -43,19 +44,49 @@ def subfinder_available() -> bool:
     return bool(_resolve_subfinder_bin())
 
 
+def _subfinder_supports_all_flag(subfinder_bin: str) -> bool:
+    """
+    Detect whether the installed subfinder binary supports '-all'.
+    Some environments ship older builds where this flag is unavailable.
+    """
+    global _subfinder_all_flag_supported
+    if _subfinder_all_flag_supported is not None:
+        return _subfinder_all_flag_supported
+    try:
+        help_result = subprocess.run(
+            [subfinder_bin, "-h"],
+            capture_output=True,
+            text=True,
+            timeout=20,
+        )
+        help_text = f"{help_result.stdout}\n{help_result.stderr}".lower()
+        _subfinder_all_flag_supported = "-all" in help_text
+    except Exception:
+        # Be permissive on detection failure: prefer baseline command without -all.
+        _subfinder_all_flag_supported = False
+    return _subfinder_all_flag_supported
+
+
+def _build_subfinder_cmd(subfinder_bin: str, root_domain: str) -> List[str]:
+    cmd = [subfinder_bin, "-d", root_domain, "-silent", "-timeout", "30"]
+    if _subfinder_supports_all_flag(subfinder_bin):
+        cmd.append("-all")
+    return cmd
+
+
 def _run_subfinder_for_root(root_domain: str, timeout: int = 180) -> Dict[str, object]:
     subfinder_bin = _resolve_subfinder_bin()
     if not subfinder_bin:
         return {
             "root_domain": root_domain,
-            "command": "subfinder -d <domain> -silent -all -timeout 30",
+            "command": "subfinder -d <domain> -silent -timeout 30",
             "status": "error",
             "exit_code": None,
             "stdout": "",
             "stderr": "subfinder binary not found in PATH or /usr/local/bin/subfinder",
             "found": [],
         }
-    cmd = [subfinder_bin, "-d", root_domain, "-silent", "-all", "-timeout", "30"]
+    cmd = _build_subfinder_cmd(subfinder_bin, root_domain)
     command_str = " ".join(cmd)
     log.info("Subfinder start (bin=%s): %s", subfinder_bin, command_str)
     log_event("subfinder", "info", "Subfinder command started", root_domain=root_domain, command=command_str, status="running")
@@ -199,7 +230,7 @@ def run_subfinder_for_project(project_id: str, triggered_by: str = "scheduler") 
                 job_id=job_id,
                 project_id=project_id,
                 root_domain=root_domain,
-                command=f"subfinder -d {root_domain} -silent -all -timeout 30",
+                command=" ".join(_build_subfinder_cmd("subfinder", root_domain)),
             )
             for root_domain in root_domains
         }
