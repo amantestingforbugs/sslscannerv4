@@ -22,6 +22,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Dict, List, Optional, Set
+from urllib.parse import urlparse
 from core.observability import log_event
 
 log = logging.getLogger(__name__)
@@ -93,7 +94,16 @@ def _run_subfinder_for_root(root_domain: str, timeout: int = 180) -> Dict[str, o
     try:
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
         raw_lines = [ln.strip().lower() for ln in result.stdout.splitlines() if ln.strip()]
-        found = sorted({ln for ln in raw_lines if "." in ln})
+        found = sorted(
+            {
+                candidate
+                for ln in raw_lines
+                for candidate in [_normalize_host(ln)]
+                if candidate
+                and _HOST_RE.match(candidate)
+                and _is_host_within_root(candidate, root_domain)
+            }
+        )
         status = "done" if result.returncode == 0 else "error"
         log.info(
             "Subfinder finished root=%s exit_code=%s discovered=%d",
@@ -136,41 +146,84 @@ def _run_subfinder_for_root(root_domain: str, timeout: int = 180) -> Dict[str, o
 
 
 _HOST_RE = re.compile(r"^(?:\*\.)?(?=.{1,253}$)(?!-)[a-z0-9-]+(?:\.[a-z0-9-]+)+$", re.IGNORECASE)
+_COMMON_COMPOUND_SUFFIXES = {
+    "co.uk", "org.uk", "gov.uk", "ac.uk",
+    "com.au", "net.au", "org.au",
+    "co.jp", "ne.jp", "or.jp",
+    "com.br", "com.mx", "com.tr",
+}
 
 
 def _normalize_host(host: str) -> str:
     h = (host or "").strip().lower().rstrip(".")
-    if h.startswith("http://") or h.startswith("https://"):
-        h = h.split("://", 1)[1].split("/", 1)[0]
+    if not h:
+        return ""
+    if "://" in h:
+        try:
+            parsed = urlparse(h)
+            if parsed.hostname:
+                h = parsed.hostname
+            else:
+                h = h.split("://", 1)[1].split("/", 1)[0]
+        except Exception:
+            h = h.split("://", 1)[1].split("/", 1)[0]
+    if h.startswith("*."):
+        h = h[2:]
+    if h.startswith("[") and "]" in h:
+        h = h[1:h.index("]")]
+    elif ":" in h:
+        h = h.split(":", 1)[0]
     return h
+
+
+def _registrable_domain(host: str) -> Optional[str]:
+    try:
+        import tldextract
+        ext = tldextract.extract(host)
+        if ext.domain and ext.suffix:
+            return f"{ext.domain}.{ext.suffix}"
+    except Exception:
+        pass
+
+    parts = host.split(".")
+    if len(parts) < 2:
+        return None
+    tail2 = ".".join(parts[-2:])
+    tail3 = ".".join(parts[-3:]) if len(parts) >= 3 else ""
+    if tail2 in _COMMON_COMPOUND_SUFFIXES and len(parts) >= 3:
+        return tail3
+    return tail2
 
 
 def _extract_project_root_domains(hosts: List[str]) -> List[str]:
     """Extract registrable root domains from a project host list."""
-    normalized = []
+    normalized: List[str] = []
     for raw in hosts:
-        h = _normalize_host(raw)
-        if not h or "." not in h:
+        raw_line = (raw or "").strip()
+        if not raw_line:
             continue
-        if ":" in h:
-            h = h.split(":", 1)[0]
-        if _HOST_RE.match(h):
+        for token in re.split(r"[\s,;]+", raw_line):
+            h = _normalize_host(token)
+            if not h or "." not in h or not _HOST_RE.match(h):
+                continue
             normalized.append(h)
 
     if not normalized:
         return []
 
-    try:
-        import tldextract
-        roots: Set[str] = {
-            f"{ext.domain}.{ext.suffix}"
-            for ext in (tldextract.extract(h) for h in normalized)
-            if ext.domain and ext.suffix
-        }
-    except ImportError:
-        roots = {".".join(h.split(".")[-2:]) for h in normalized if len(h.split(".")) >= 2}
+    roots: Set[str] = set()
+    for h in normalized:
+        root = _registrable_domain(h)
+        if root:
+            roots.add(root)
 
     return sorted(roots)
+
+
+def _is_host_within_root(host: str, root_domain: str) -> bool:
+    if host == root_domain:
+        return True
+    return host.endswith(f".{root_domain}")
 
 
 def run_subfinder_for_project(project_id: str, triggered_by: str = "scheduler") -> Optional[str]:
