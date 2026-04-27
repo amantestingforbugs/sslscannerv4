@@ -859,3 +859,122 @@ def stats_global():
             "expiring": r["expi"] or 0, "ok": r["ok"] or 0,
             "unseen_alerts": unseen, "subfinder_hosts": sf_hosts,
             "active_scans": active_scans}
+
+
+def stats_intelligence(scan_window=14):
+    """
+    Build an "intelligence" summary for the dashboard:
+      - weighted global risk score (0-100)
+      - risk trend over recent completed scans
+      - top risky projects from latest completed scan per project
+      - actionable recommendations
+    """
+    window = max(6, min(60, int(scan_window or 14)))
+    trend_rows = x(
+        """
+        SELECT s.id, s.project_id, p.name AS project_name, s.finished_at,
+               s.total, s.mismatches, s.expired, s.expiring, s.errors, s.ok
+        FROM scans s
+        JOIN projects p ON p.id = s.project_id
+        WHERE s.status='done' AND s.finished_at IS NOT NULL
+        ORDER BY s.finished_at DESC
+        LIMIT ?
+        """,
+        (window,),
+    ).fetchall()
+    trend_points = []
+    for row in reversed(list(trend_rows)):
+        total = int(row["total"] or 0)
+        issue_count = int(row["mismatches"] or 0) + int(row["expired"] or 0) + int(row["expiring"] or 0) + int(row["errors"] or 0)
+        issue_ratio = (issue_count / total) if total > 0 else 0.0
+        trend_points.append({
+            "scan_id": row["id"],
+            "project_id": row["project_id"],
+            "project_name": row["project_name"],
+            "finished_at": row["finished_at"],
+            "total": total,
+            "issues": issue_count,
+            "issue_ratio": round(issue_ratio, 4),
+            "risk_score": min(100, round(issue_ratio * 100)),
+        })
+
+    latest_rows = x(
+        """
+        WITH latest AS (
+          SELECT project_id, MAX(finished_at) AS finished_at
+          FROM scans
+          WHERE status='done' AND finished_at IS NOT NULL
+          GROUP BY project_id
+        )
+        SELECT p.id, p.name, s.finished_at, s.total, s.mismatches, s.expired, s.expiring, s.errors, s.ok
+        FROM latest l
+        JOIN scans s ON s.project_id=l.project_id AND s.finished_at=l.finished_at
+        JOIN projects p ON p.id=l.project_id
+        ORDER BY p.name ASC
+        """
+    ).fetchall()
+
+    top_projects = []
+    weighted_score_total = 0.0
+    weighted_hosts_total = 0
+    for row in latest_rows:
+        total = int(row["total"] or 0)
+        if total <= 0:
+            continue
+        mismatches = int(row["mismatches"] or 0)
+        expired = int(row["expired"] or 0)
+        expiring = int(row["expiring"] or 0)
+        errors = int(row["errors"] or 0)
+        weighted_issues = (mismatches * 3.0) + (expired * 4.0) + (expiring * 2.0) + (errors * 3.0)
+        risk_score = min(100, round((weighted_issues / total) * 25))
+        top_projects.append({
+            "project_id": row["id"],
+            "project_name": row["name"],
+            "finished_at": row["finished_at"],
+            "total": total,
+            "mismatches": mismatches,
+            "expired": expired,
+            "expiring": expiring,
+            "errors": errors,
+            "ok": int(row["ok"] or 0),
+            "risk_score": risk_score,
+        })
+        weighted_score_total += risk_score * total
+        weighted_hosts_total += total
+
+    top_projects.sort(key=lambda r: (-r["risk_score"], -r["expired"], -r["mismatches"], r["project_name"]))
+    top_projects = top_projects[:5]
+
+    overall_score = round(weighted_score_total / weighted_hosts_total) if weighted_hosts_total else 0
+    trend_direction = "stable"
+    if len(trend_points) >= 2:
+        delta = trend_points[-1]["risk_score"] - trend_points[0]["risk_score"]
+        if delta >= 6:
+            trend_direction = "up"
+        elif delta <= -6:
+            trend_direction = "down"
+
+    recommendations = []
+    if overall_score >= 70:
+        recommendations.append("Critical risk: prioritize cert rotation and hostname mismatch triage immediately.")
+    elif overall_score >= 40:
+        recommendations.append("Elevated risk: focus this sprint on expired certificates and high-error endpoints.")
+    else:
+        recommendations.append("Baseline healthy: maintain current cadence and review outliers weekly.")
+    if any(p["expired"] > 0 for p in top_projects):
+        recommendations.append("Expired certificates detected: automate renewals with ACME and enforce pre-expiry alerts.")
+    if any(p["mismatches"] > 0 for p in top_projects):
+        recommendations.append("Hostname mismatches present: verify SAN coverage and wildcard policies across edge services.")
+    if any(p["errors"] > 0 for p in top_projects):
+        recommendations.append("Connection errors are recurring: validate DNS/TLS reachability and alert on repeated failures.")
+
+    return {
+        "risk_score": overall_score,
+        "risk_label": "critical" if overall_score >= 70 else "elevated" if overall_score >= 40 else "healthy",
+        "trend_direction": trend_direction,
+        "trend_points": trend_points,
+        "top_risky_projects": top_projects,
+        "recommendations": recommendations[:3],
+        "scan_window": window,
+        "generated_at": now(),
+    }

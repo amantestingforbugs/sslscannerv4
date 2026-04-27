@@ -611,6 +611,12 @@ def global_stats():
     return ok(db.stats_global())
 
 
+@api.get("/stats/intelligence")
+def intelligence_stats():
+    window = max(6, min(60, int(request.args.get("window", 14))))
+    return ok(db.stats_intelligence(scan_window=window))
+
+
 @api.get("/logs")
 def list_logs():
     limit = min(1000, max(20, int(request.args.get("limit", 200))))
