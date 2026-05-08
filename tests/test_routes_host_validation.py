@@ -28,3 +28,11 @@ def test_hostname_resolving_to_public_ip_is_allowed(monkeypatch):
 
     monkeypatch.setattr(socket, "getaddrinfo", fake_getaddrinfo)
     assert _is_private_or_local_host("example.com") is False
+
+
+def test_invalid_idna_hostname_is_blocked(monkeypatch):
+    def fake_getaddrinfo(*args, **kwargs):
+        raise UnicodeEncodeError("idna", "foo..bar", 0, 1, "bad label")
+
+    monkeypatch.setattr(socket, "getaddrinfo", fake_getaddrinfo)
+    assert _is_private_or_local_host("foo..bar") is True
