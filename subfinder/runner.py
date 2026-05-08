@@ -347,9 +347,10 @@ def run_subfinder_for_project(project_id: str, triggered_by: str = "scheduler") 
                  new_count, project["name"])
         log_event("subfinder", "info", f"Discovered {new_count} new hosts", project_id=project_id, job_id=job_id, status="running")
 
-        # SSL scan only NEW hosts from this run
-        if new_hosts:
-            _ssl_scan_subfinder_hosts(project_id, new_hosts, job_id)
+        # SSL scan all discovered hosts from this run so recurring certificate
+        # issues are checked and surfaced on every subfinder cycle.
+        if discovered:
+            _ssl_scan_subfinder_hosts(project_id, discovered, job_id)
 
         with _sf_lock:
             _sf_state[project_id]["status"] = "done"
@@ -371,10 +372,13 @@ def _ssl_scan_subfinder_hosts(project_id: str, hostnames: List[str], job_id: str
     """Run SSL checks on newly discovered subfinder hosts and save results."""
     from db.database import (
         scan_create, scan_finish, results_batch_save,
-        subfinder_hosts_mark_scanned, alert_add, scan_progress
+        subfinder_hosts_mark_scanned, alert_add, scan_progress,
+        alerts_unseen_count, alerts_unsent, alert_mark_sent, alert_settings_get, project_get
     )
     from core.ssl_checker import run_checker
     from scheduler.runner import BATCH_SIZE, PROGRESS_UPDATE_EVERY, _scan_lock, _scan_state
+    from core.observability import publish
+    from alerts.notifiers import AlertManager
 
     if not hostnames:
         return
@@ -432,6 +436,16 @@ def _ssl_scan_subfinder_hosts(project_id: str, hostnames: List[str], job_id: str
 
     scan_finish(scan_id)
     subfinder_hosts_mark_scanned(project_id, scanned_hosts)
+    publish("alert_update", {"unseen_count": alerts_unseen_count()})
+
+    unsent = [a for a in alerts_unsent() if a["project_id"] == project_id]
+    if unsent:
+        project = project_get(project_id) or {}
+        settings = alert_settings_get()
+        delivered = AlertManager(settings).dispatch(project.get("name", "Unknown Project"), unsent)
+        if delivered:
+            for a in unsent:
+                alert_mark_sent(a["id"])
 
     with _scan_lock:
         if scan_id in _scan_state:
