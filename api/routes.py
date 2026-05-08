@@ -14,6 +14,8 @@ import time
 import logging
 import subprocess
 from urllib.parse import urlparse
+import ipaddress
+import re
 from flask import Blueprint, request, jsonify, Response, stream_with_context
 
 import db.database as db
@@ -42,6 +44,44 @@ _quick_scan_threads: dict[str, threading.Thread] = {}
 _quick_scan_state: dict[str, dict] = {}
 _quick_scan_lock = threading.Lock()
 QUICK_SCAN_ROWS_BUFFER = 500
+
+_HOSTNAME_RE = re.compile(r"^(?=.{1,253}$)(?!-)[a-z0-9-]+(?:\.[a-z0-9-]+)+$", re.IGNORECASE)
+
+
+def _safe_int(value, default: int, min_value: int | None = None, max_value: int | None = None) -> int:
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        parsed = default
+    if min_value is not None:
+        parsed = max(min_value, parsed)
+    if max_value is not None:
+        parsed = min(max_value, parsed)
+    return parsed
+
+
+def _is_private_or_local_host(host: str) -> bool:
+    h = (host or "").strip().lower()
+    if h in {"localhost", "127.0.0.1", "::1"}:
+        return True
+    try:
+        ip = ipaddress.ip_address(h)
+        return ip.is_private or ip.is_loopback or ip.is_link_local
+    except ValueError:
+        return False
+
+
+def _validate_webhook_url(raw: str) -> str:
+    value = (raw or "").strip()
+    if not value:
+        return ""
+    parsed = urlparse(value)
+    if parsed.scheme != "https" or not parsed.netloc:
+        raise ValueError("Webhook URLs must be valid https URLs")
+    host = (parsed.hostname or "").strip().lower()
+    if not host or _is_private_or_local_host(host):
+        raise ValueError("Webhook URL host is not allowed")
+    return value
 
 
 def broadcast(event: str, data: dict):
@@ -92,7 +132,12 @@ def _normalize_hostname(raw: str) -> str:
             v = ""
     if ":" in v:
         v = v.split(":", 1)[0]
-    return v.strip(".")
+    v = v.strip(".")
+    if not v or _is_private_or_local_host(v):
+        return ""
+    if not _HOSTNAME_RE.match(v):
+        return ""
+    return v
 
 
 def _run_openssl_subject(hostname: str, timeout: int = 20) -> dict:
@@ -464,8 +509,8 @@ def get_scan(sid):
 @api.get("/scans/<sid>/results")
 def get_results(sid):
     flt = request.args.get("filter", "all")
-    page = max(1, int(request.args.get("page", 1)))
-    per_page = min(1000, max(50, int(request.args.get("per_page", 500))))
+    page = _safe_int(request.args.get("page", 1), 1, min_value=1)
+    per_page = _safe_int(request.args.get("per_page", 500), 500, min_value=50, max_value=1000)
     return ok(db.results_get(sid, flt, page, per_page))
 
 
@@ -542,8 +587,8 @@ def quick_scan_status(sid):
 def get_alerts():
     search = (request.args.get("search", "") or "").strip()
     mismatch = (request.args.get("mismatch_scope", "all") or "all").strip()
-    page = max(1, int(request.args.get("page", 1)))
-    per_page = min(1000, max(50, int(request.args.get("per_page", 200))))
+    page = _safe_int(request.args.get("page", 1), 1, min_value=1)
+    per_page = _safe_int(request.args.get("per_page", 200), 200, min_value=50, max_value=1000)
     return ok(db.alerts_get(search=search, mismatch_scope=mismatch, page=page, per_page=per_page))
 
 
@@ -579,20 +624,26 @@ def get_alert_settings():
 def update_alert_settings():
     d = request.json or {}
     previous = db.alert_settings_get()
+    try:
+        slack_webhook_url = _validate_webhook_url((d.get("slack_webhook_url") or "").strip())
+        discord_webhook_url = _validate_webhook_url((d.get("discord_webhook_url") or "").strip())
+    except ValueError as e:
+        return err(str(e), 400)
+
     cleaned = {
         "telegram_enabled": d.get("telegram_enabled"),
         "telegram_bot_token": (d.get("telegram_bot_token") or "").strip(),
         "telegram_chat_id": (d.get("telegram_chat_id") or "").strip(),
         "slack_enabled": d.get("slack_enabled"),
-        "slack_webhook_url": (d.get("slack_webhook_url") or "").strip(),
+        "slack_webhook_url": slack_webhook_url,
         "discord_enabled": d.get("discord_enabled"),
-        "discord_webhook_url": (d.get("discord_webhook_url") or "").strip(),
+        "discord_webhook_url": discord_webhook_url,
         "rule_mismatch": d.get("rule_mismatch"),
         "rule_expired": d.get("rule_expired"),
         "rule_expiring": d.get("rule_expiring"),
         "rule_error": d.get("rule_error"),
         "mismatch_scope_filter": (d.get("mismatch_scope_filter") or "all").strip(),
-        "minimum_days_left": d.get("minimum_days_left", 30),
+        "minimum_days_left": _safe_int(d.get("minimum_days_left", 30), 30, min_value=1, max_value=365),
     }
     out = db.alert_settings_update(**cleaned)
     discord_turned_on = bool(out.get("discord_enabled")) and not bool(previous.get("discord_enabled"))
@@ -613,7 +664,7 @@ def global_stats():
 
 @api.get("/logs")
 def list_logs():
-    limit = min(1000, max(20, int(request.args.get("limit", 200))))
+    limit = _safe_int(request.args.get("limit", 200), 200, min_value=20, max_value=1000)
     return ok(get_logs(limit))
 
 
@@ -649,22 +700,22 @@ def subfinder_status(pid):
 
 @api.get("/projects/<pid>/subfinder/hosts")
 def subfinder_hosts(pid):
-    page = max(1, int(request.args.get("page", 1)))
-    per_page = min(1000, max(50, int(request.args.get("per_page", 500))))
+    page = _safe_int(request.args.get("page", 1), 1, min_value=1)
+    per_page = _safe_int(request.args.get("per_page", 500), 500, min_value=50, max_value=1000)
     return ok(db.subfinder_hosts_list(pid, page, per_page))
 
 
 @api.get("/projects/<pid>/subfinder/raw-results")
 def subfinder_raw_results(pid):
-    limit = min(100, max(1, int(request.args.get("limit", 20))))
-    preview_chars = min(12000, max(500, int(request.args.get("preview_chars", 4000))))
+    limit = _safe_int(request.args.get("limit", 20), 20, min_value=1, max_value=100)
+    preview_chars = _safe_int(request.args.get("preview_chars", 4000), 4000, min_value=500, max_value=12000)
     return ok(db.subfinder_raw_results_list(pid, limit=limit, preview_chars=preview_chars))
 
 
 @api.get("/projects/<pid>/discoveries")
 def project_discoveries(pid):
-    page = max(1, int(request.args.get("page", 1)))
-    per_page = min(1000, max(50, int(request.args.get("per_page", 200))))
+    page = _safe_int(request.args.get("page", 1), 1, min_value=1)
+    per_page = _safe_int(request.args.get("per_page", 200), 200, min_value=50, max_value=1000)
     search = (request.args.get("search", "") or "").strip()
     mode = (request.args.get("mode", "all") or "all").strip().lower()
     return ok(db.subfinder_discoveries(pid, page, per_page, search, mode=mode))
@@ -716,7 +767,7 @@ def openssl_subjects_list(pid):
     p = db.project_get(pid)
     if not p:
         return err("Project not found", 404)
-    limit = min(5000, max(50, int(request.args.get("limit", 2000))))
+    limit = _safe_int(request.args.get("limit", 2000), 2000, min_value=50, max_value=5000)
     search = (request.args.get("search", "") or "").strip()
     rows = db.openssl_results_list(pid, search=search, limit=limit)
     with _openssl_lock:
