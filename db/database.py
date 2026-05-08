@@ -156,6 +156,20 @@ def init_db():
         UNIQUE(job_id, hostname),
         FOREIGN KEY(job_id) REFERENCES subfinder_jobs(id) ON DELETE CASCADE
     );
+    CREATE TABLE IF NOT EXISTS subfinder_httpx_results (
+        id TEXT PRIMARY KEY,
+        project_id TEXT NOT NULL,
+        hostname TEXT NOT NULL,
+        status_code INTEGER,
+        page_title TEXT DEFAULT '',
+        redirect_location TEXT DEFAULT '',
+        final_url TEXT DEFAULT '',
+        scheme TEXT DEFAULT '',
+        is_active INTEGER DEFAULT 0,
+        source_job_id TEXT DEFAULT '',
+        last_checked TEXT NOT NULL,
+        UNIQUE(project_id, hostname)
+    );
     CREATE TABLE IF NOT EXISTS openssl_results (
         id TEXT PRIMARY KEY,
         project_id TEXT NOT NULL,
@@ -183,6 +197,7 @@ def init_db():
     CREATE INDEX IF NOT EXISTS idx_scans_triggered_by ON scans(triggered_by);
     CREATE INDEX IF NOT EXISTS idx_sfjobs_proj_started ON subfinder_jobs(project_id, started_at DESC);
     CREATE INDEX IF NOT EXISTS idx_sfnew_proj_job_host ON subfinder_new_discoveries(project_id, job_id, hostname);
+    CREATE INDEX IF NOT EXISTS idx_sfhttpx_proj_checked ON subfinder_httpx_results(project_id, last_checked DESC);
     CREATE INDEX IF NOT EXISTS idx_openssl_proj_checked ON openssl_results(project_id, last_checked DESC);
     """)
     # Lightweight migrations for existing DBs
@@ -709,12 +724,22 @@ def subfinder_discoveries(pid, page=1, per_page=200, search="", mode="all"):
           r.is_expiring,
           r.is_ok,
           r.error,
-          r.checked_at
+          r.checked_at,
+          hx.status_code AS http_status_code,
+          hx.page_title AS http_page_title,
+          hx.redirect_location AS http_redirect_location,
+          hx.final_url AS http_final_url,
+          hx.scheme AS http_scheme,
+          hx.is_active AS http_is_active,
+          hx.last_checked AS http_checked_at
         FROM filtered_hosts fh
         LEFT JOIN latest_result lr
           ON lr.project_id = fh.project_id
          AND lr.hostname = fh.hostname
         LEFT JOIN results r ON r.id = lr.result_id
+        LEFT JOIN subfinder_httpx_results hx
+          ON hx.project_id = fh.project_id
+         AND hx.hostname = fh.hostname
         ORDER BY fh.first_seen DESC
         """,
         params + [per_page, offset],
@@ -725,6 +750,51 @@ def subfinder_discoveries(pid, page=1, per_page=200, search="", mode="all"):
         "page": page,
         "pages": max(1, (total + per_page - 1) // per_page),
     }
+
+
+def subfinder_httpx_results_upsert_batch(project_id, job_id, rows):
+    clean_rows = []
+    ts = now()
+    for row in rows or []:
+        hostname = (row.get("hostname") or "").strip().lower()
+        if not hostname:
+            continue
+        clean_rows.append(
+            (
+                uid(),
+                project_id,
+                hostname,
+                row.get("status_code"),
+                (row.get("page_title") or "").strip(),
+                (row.get("redirect_location") or "").strip(),
+                (row.get("final_url") or "").strip(),
+                (row.get("scheme") or "").strip(),
+                1 if row.get("is_active") else 0,
+                job_id or "",
+                ts,
+            )
+        )
+    if not clean_rows:
+        return 0
+    xm(
+        """
+        INSERT INTO subfinder_httpx_results(
+            id,project_id,hostname,status_code,page_title,redirect_location,final_url,scheme,is_active,source_job_id,last_checked
+        ) VALUES(?,?,?,?,?,?,?,?,?,?,?)
+        ON CONFLICT(project_id, hostname) DO UPDATE SET
+            status_code=excluded.status_code,
+            page_title=excluded.page_title,
+            redirect_location=excluded.redirect_location,
+            final_url=excluded.final_url,
+            scheme=excluded.scheme,
+            is_active=excluded.is_active,
+            source_job_id=excluded.source_job_id,
+            last_checked=excluded.last_checked
+        """,
+        clean_rows,
+    )
+    commit()
+    return len(clean_rows)
 
 
 def subfinder_raw_result_add(job_id, project_id, root_domain, command, started_at=None):
