@@ -234,15 +234,18 @@ def _is_host_within_root(host: str, root_domain: str) -> bool:
 
 
 def _host_resolves(host: str, timeout: float = 1.5) -> bool:
-    original_timeout = socket.getdefaulttimeout()
-    socket.setdefaulttimeout(timeout)
-    try:
+    """Resolve a host without mutating process-wide socket defaults."""
+
+    def _resolve() -> bool:
         socket.getaddrinfo(host, None)
         return True
-    except Exception:
-        return False
-    finally:
-        socket.setdefaulttimeout(original_timeout)
+
+    with ThreadPoolExecutor(max_workers=1) as resolver:
+        future = resolver.submit(_resolve)
+        try:
+            return future.result(timeout=timeout)
+        except Exception:
+            return False
 
 
 def _generate_bruteforce_candidates(root_domain: str, seed_hosts: List[str]) -> Set[str]:
