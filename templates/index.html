@@ -1058,7 +1058,7 @@ tbody tr:last-child td{border-bottom:none}
       <div class="card">
         <div class="table-wrap">
           <table>
-            <thead><tr><th>Hostname</th><th>First Seen</th><th>SSL Status</th><th>CN</th><th>Expiry</th></tr></thead>
+            <thead><tr><th>Hostname</th><th>First Seen</th><th>SSL Status</th><th>HTTP</th><th>Redirect</th><th>Page Title</th><th>CN</th><th>Expiry</th></tr></thead>
             <tbody id="nd-body"></tbody>
           </table>
         </div>
@@ -1086,7 +1086,7 @@ tbody tr:last-child td{border-bottom:none}
       <div class="card">
         <div class="table-wrap">
           <table>
-            <thead><tr><th>Hostname</th><th>First Seen</th><th>SSL Status</th><th>CN</th><th>Expiry</th></tr></thead>
+            <thead><tr><th>Hostname</th><th>First Seen</th><th>SSL Status</th><th>HTTP</th><th>Redirect</th><th>Page Title</th><th>CN</th><th>Expiry</th></tr></thead>
             <tbody id="nd-latest-body"></tbody>
           </table>
         </div>
@@ -2730,7 +2730,7 @@ async function loadDiscoveries() {
   try {
     const pid = document.getElementById('nd-project-select').value;
     if (!pid) {
-      document.getElementById('nd-body').innerHTML = '<tr><td colspan="5" style="text-align:center;padding:20px;color:var(--text-muted)">Select a project to view new discoveries.</td></tr>';
+      document.getElementById('nd-body').innerHTML = '<tr><td colspan="8" style="text-align:center;padding:20px;color:var(--text-muted)">Select a project to view new discoveries.</td></tr>';
       return;
     }
     const q = encodeURIComponent(document.getElementById('nd-search').value || '');
@@ -2747,7 +2747,7 @@ async function loadLatestDiscoveries() {
   try {
     const pid = document.getElementById('nd-latest-project-select').value;
     if (!pid) {
-      document.getElementById('nd-latest-body').innerHTML = '<tr><td colspan="5" style="text-align:center;padding:20px;color:var(--text-muted)">Select a project to view latest batch.</td></tr>';
+      document.getElementById('nd-latest-body').innerHTML = '<tr><td colspan="8" style="text-align:center;padding:20px;color:var(--text-muted)">Select a project to view latest batch.</td></tr>';
       return;
     }
     const q = encodeURIComponent(document.getElementById('nd-latest-search').value || '');
@@ -2762,13 +2762,17 @@ function renderDiscoveriesRows(data, countId, bodyId) {
   const rows = data?.rows || [];
   document.getElementById(countId).textContent = `${fmt(data?.total || 0)} rows`;
   if (!rows.length) {
-    document.getElementById(bodyId).innerHTML = '<tr><td colspan="5" style="text-align:center;padding:20px;color:var(--text-muted)">No discoveries found.</td></tr>';
+    document.getElementById(bodyId).innerHTML = '<tr><td colspan="8" style="text-align:center;padding:20px;color:var(--text-muted)">No discoveries found.</td></tr>';
+
     return;
   }
   document.getElementById(bodyId).innerHTML = rows.map(r => `<tr class="${r.is_mismatch ? 'row-mismatch' : ''}">
     <td style="font-family:var(--mono);font-size:12px;font-weight:500">${esc(r.hostname)}</td>
     <td style="font-size:12px;color:var(--text-secondary)">${new Date(r.first_seen).toLocaleString()}</td>
     <td>${sbadge(r)}</td>
+    <td style="font-size:12px;font-weight:600">${r.status_code ?? '—'}</td>
+    <td style="font-size:12px;color:var(--text-secondary);max-width:260px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(r.redirect_location || r.resolved_url || '')}">${esc(r.redirect_location || r.resolved_url || '—')}</td>
+    <td style="font-size:12px;color:var(--text-secondary);max-width:300px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(r.page_title || r.http_error || '')}">${esc(r.page_title || r.http_error || '—')}</td>
     <td style="font-size:12px;color:var(--text-secondary)">${esc(r.cn || r.error || '—')}</td>
     <td style="font-size:12px">${r.expiry || '—'}</td>
   </tr>`).join('');

@@ -13,7 +13,11 @@ import threading
 import time
 import logging
 import subprocess
+import re
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from html import unescape
 from urllib.parse import urlparse
+from urllib.request import Request, urlopen
 from flask import Blueprint, request, jsonify, Response, stream_with_context
 
 import db.database as db
@@ -94,6 +98,77 @@ def _normalize_hostname(raw: str) -> str:
         v = v.split(":", 1)[0]
     return v.strip(".")
 
+
+
+
+def _extract_html_title(body: bytes) -> str:
+    if not body:
+        return ""
+    try:
+        text = body.decode("utf-8", errors="replace")
+    except Exception:
+        return ""
+    m = re.search(r"<title[^>]*>(.*?)</title>", text, re.IGNORECASE | re.DOTALL)
+    if not m:
+        return ""
+    title = re.sub(r"\s+", " ", m.group(1) or "").strip()
+    return unescape(title)[:300]
+
+
+def _probe_host_http_meta(hostname: str, timeout: int = 8) -> dict:
+    host = _normalize_hostname(hostname)
+    if not host:
+        return {"status_code": None, "redirect_location": "", "page_title": "", "resolved_url": "", "http_error": "invalid hostname"}
+
+    last_error = ""
+    for scheme in ("https", "http"):
+        url = f"{scheme}://{host}"
+        req = Request(url, headers={"User-Agent": "SSL-Sentinel/1.0"})
+        try:
+            with urlopen(req, timeout=timeout) as resp:
+                status_code = getattr(resp, "status", None)
+                redirect_location = resp.getheader("Location") or ""
+                resolved_url = getattr(resp, "url", url)
+                content_type = (resp.getheader("Content-Type") or "").lower()
+                chunk = resp.read(65536) if "text/html" in content_type or not content_type else b""
+                return {
+                    "status_code": status_code,
+                    "redirect_location": redirect_location,
+                    "page_title": _extract_html_title(chunk),
+                    "resolved_url": resolved_url,
+                    "http_error": "",
+                }
+        except Exception as e:
+            last_error = str(e)
+            continue
+
+    return {"status_code": None, "redirect_location": "", "page_title": "", "resolved_url": "", "http_error": last_error or "request failed"}
+
+
+def _enrich_discoveries_with_http(rows: list[dict]) -> list[dict]:
+    if not rows:
+        return rows
+    unique_hosts = sorted({_normalize_hostname(r.get("hostname", "")) for r in rows if r.get("hostname")})
+    meta_by_host = {}
+    workers = max(4, min(20, len(unique_hosts)))
+    with ThreadPoolExecutor(max_workers=workers) as ex:
+        futures = {ex.submit(_probe_host_http_meta, h): h for h in unique_hosts}
+        for fut in as_completed(futures):
+            h = futures[fut]
+            try:
+                meta_by_host[h] = fut.result()
+            except Exception as e:
+                meta_by_host[h] = {"status_code": None, "redirect_location": "", "page_title": "", "resolved_url": "", "http_error": str(e)}
+
+    for r in rows:
+        key = _normalize_hostname(r.get("hostname", ""))
+        meta = meta_by_host.get(key, {})
+        r["status_code"] = meta.get("status_code")
+        r["redirect_location"] = meta.get("redirect_location", "")
+        r["page_title"] = meta.get("page_title", "")
+        r["resolved_url"] = meta.get("resolved_url", "")
+        r["http_error"] = meta.get("http_error", "")
+    return rows
 
 def _run_openssl_subject(hostname: str, timeout: int = 20) -> dict:
     cmd = ["openssl", "s_client", "-connect", f"{hostname}:443"]
@@ -667,7 +742,11 @@ def project_discoveries(pid):
     per_page = min(1000, max(50, int(request.args.get("per_page", 200))))
     search = (request.args.get("search", "") or "").strip()
     mode = (request.args.get("mode", "all") or "all").strip().lower()
-    return ok(db.subfinder_discoveries(pid, page, per_page, search, mode=mode))
+    include_http_meta = (request.args.get("include_http_meta", "1") or "1").strip().lower() not in ("0", "false", "no")
+    data = db.subfinder_discoveries(pid, page, per_page, search, mode=mode)
+    if include_http_meta:
+        data["rows"] = _enrich_discoveries_with_http(data.get("rows") or [])
+    return ok(data)
 
 
 @api.put("/projects/<pid>/subfinder/toggle")
