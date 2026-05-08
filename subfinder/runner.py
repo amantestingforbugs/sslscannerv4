@@ -226,6 +226,51 @@ def _is_host_within_root(host: str, root_domain: str) -> bool:
     return host.endswith(f".{root_domain}")
 
 
+def _resolve_active_hosts_with_httpx(hostnames: List[str], timeout: int = 90) -> List[Dict[str, object]]:
+    httpx_bin = shutil.which("httpx") or "/usr/local/bin/httpx"
+    if not httpx_bin or not Path(httpx_bin).exists():
+        log.warning("httpx binary not found; skipping active host enrichment")
+        return []
+    hosts = [h.strip().lower() for h in hostnames if (h or "").strip()]
+    if not hosts:
+        return []
+    try:
+        run = subprocess.run(
+            [httpx_bin, "-silent", "-json", "-status-code", "-title", "-location", "-follow-host-redirects"],
+            input="\n".join(hosts),
+            text=True,
+            capture_output=True,
+            timeout=timeout,
+        )
+        resolved = []
+        for line in (run.stdout or "").splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                row = json.loads(line)
+            except Exception:
+                continue
+            host = _normalize_host(row.get("host") or row.get("input") or "")
+            if not host:
+                continue
+            resolved.append(
+                {
+                    "hostname": host,
+                    "status_code": row.get("status_code"),
+                    "page_title": row.get("title") or "",
+                    "redirect_location": row.get("location") or "",
+                    "final_url": row.get("url") or "",
+                    "scheme": row.get("scheme") or "",
+                    "is_active": True,
+                }
+            )
+        return resolved
+    except Exception as e:
+        log.warning("httpx enrichment failed: %s", e)
+        return []
+
+
 def run_subfinder_for_project(project_id: str, triggered_by: str = "scheduler") -> Optional[str]:
     """
     Full subfinder pipeline for a project:
@@ -238,7 +283,8 @@ def run_subfinder_for_project(project_id: str, triggered_by: str = "scheduler") 
     from db.database import (
         project_get, project_hosts, subfinder_job_create, subfinder_job_finish,
         subfinder_job_error, subfinder_hosts_add_batch, subfinder_raw_result_add,
-        subfinder_raw_result_finish, subfinder_new_discoveries_add_batch
+        subfinder_raw_result_finish, subfinder_new_discoveries_add_batch,
+        subfinder_httpx_results_upsert_batch,
     )
 
     project = project_get(project_id)
@@ -324,6 +370,8 @@ def run_subfinder_for_project(project_id: str, triggered_by: str = "scheduler") 
         discovered = sorted(set(discovered_all))
         new_count, new_hosts = subfinder_hosts_add_batch(project_id, discovered)
         subfinder_new_discoveries_add_batch(job_id, project_id, new_hosts)
+        httpx_rows = _resolve_active_hosts_with_httpx(new_hosts)
+        subfinder_httpx_results_upsert_batch(project_id, job_id, httpx_rows)
 
         raw_dir = Path("data/subfinder_raw")
         raw_dir.mkdir(parents=True, exist_ok=True)
