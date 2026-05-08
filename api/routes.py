@@ -17,6 +17,7 @@ import re
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from html import unescape
 from urllib.parse import urlparse
+from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 from flask import Blueprint, request, jsonify, Response, stream_with_context
 
@@ -138,6 +139,22 @@ def _probe_host_http_meta(hostname: str, timeout: int = 8) -> dict:
                     "resolved_url": resolved_url,
                     "http_error": "",
                 }
+        except HTTPError as e:
+            status_code = getattr(e, "code", None)
+            redirect_location = e.headers.get("Location") if getattr(e, "headers", None) else ""
+            resolved_url = getattr(e, "url", url)
+            content_type = (e.headers.get("Content-Type") or "").lower() if getattr(e, "headers", None) else ""
+            try:
+                chunk = e.read(65536) if "text/html" in content_type or not content_type else b""
+            except Exception:
+                chunk = b""
+            return {
+                "status_code": status_code,
+                "redirect_location": redirect_location or "",
+                "page_title": _extract_html_title(chunk),
+                "resolved_url": resolved_url,
+                "http_error": "",
+            }
         except Exception as e:
             last_error = str(e)
             continue
