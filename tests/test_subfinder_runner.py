@@ -3,7 +3,14 @@ import sys
 
 sys.path.append(str(Path(__file__).resolve().parents[1]))
 
-from subfinder.runner import _extract_project_root_domains, _normalize_host, _is_host_within_root
+from subfinder import runner
+from subfinder.runner import (
+    _extract_project_root_domains,
+    _normalize_host,
+    _is_host_within_root,
+    _generate_bruteforce_candidates,
+    _bruteforce_dns_hosts,
+)
 
 
 def test_normalize_host_handles_urls_wildcards_and_ports():
@@ -28,3 +35,23 @@ def test_is_host_within_root_requires_domain_boundary():
     assert _is_host_within_root("a.example.com", "example.com") is True
     assert _is_host_within_root("example.com", "example.com") is True
     assert _is_host_within_root("badexample.com", "example.com") is False
+
+
+def test_generate_bruteforce_candidates_includes_nested_label_patterns():
+    candidates = _generate_bruteforce_candidates(
+        "example.com",
+        ["api.example.com", "portal.example.com", "outside.net"],
+    )
+    assert "www.example.com" in candidates
+    assert "admin.api.example.com" in candidates
+    assert "dev.portal.example.com" in candidates
+    assert all(c.endswith(".example.com") for c in candidates)
+
+
+def test_bruteforce_dns_hosts_filters_to_resolvable_entries(monkeypatch):
+    def fake_resolver(host: str, timeout: float = 1.5):
+        return host in {"www.example.com", "admin.api.example.com"}
+
+    monkeypatch.setattr(runner, "_host_resolves", fake_resolver)
+    found = _bruteforce_dns_hosts("example.com", ["api.example.com"], max_candidates=500)
+    assert found == ["admin.api.example.com", "www.example.com"]
