@@ -78,6 +78,8 @@ def _is_private_or_local_host(host: str) -> bool:
         addr_info = socket.getaddrinfo(h, None, type=socket.SOCK_STREAM)
     except socket.gaierror:
         return False
+    except UnicodeError:
+        return True
     except OSError:
         return True
 
