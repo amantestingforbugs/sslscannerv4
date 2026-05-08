@@ -9,6 +9,7 @@ Fixes:
 
 import json
 import queue
+import socket
 import threading
 import time
 import logging
@@ -64,11 +65,36 @@ def _is_private_or_local_host(host: str) -> bool:
     h = (host or "").strip().lower()
     if h in {"localhost", "127.0.0.1", "::1"}:
         return True
+
+    # First, evaluate literal IPs directly.
     try:
         ip = ipaddress.ip_address(h)
         return ip.is_private or ip.is_loopback or ip.is_link_local
     except ValueError:
+        pass
+
+    # Then resolve DNS names and treat any private/local resolution as blocked.
+    try:
+        addr_info = socket.getaddrinfo(h, None, type=socket.SOCK_STREAM)
+    except socket.gaierror:
         return False
+    except OSError:
+        return True
+
+    for entry in addr_info:
+        sockaddr = entry[4]
+        if not sockaddr:
+            continue
+        candidate = (sockaddr[0] or "").strip()
+        if not candidate:
+            continue
+        try:
+            ip = ipaddress.ip_address(candidate)
+        except ValueError:
+            continue
+        if ip.is_private or ip.is_loopback or ip.is_link_local:
+            return True
+    return False
 
 
 def _validate_webhook_url(raw: str) -> str:
