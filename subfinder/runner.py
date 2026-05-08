@@ -15,6 +15,7 @@ import gzip
 import json
 import logging
 import re
+import socket
 import shutil
 import subprocess
 import threading
@@ -152,6 +153,12 @@ _COMMON_COMPOUND_SUFFIXES = {
     "co.jp", "ne.jp", "or.jp",
     "com.br", "com.mx", "com.tr",
 }
+_BRUTE_LABELS = (
+    "www", "api", "app", "admin", "dev", "test", "staging", "stage",
+    "qa", "uat", "prod", "portal", "vpn", "mail", "smtp", "imap",
+    "cdn", "img", "assets", "files", "docs", "status", "auth", "login",
+    "gateway", "edge", "m", "beta", "shop", "blog", "mobile", "monitoring",
+)
 
 
 def _normalize_host(host: str) -> str:
@@ -224,6 +231,52 @@ def _is_host_within_root(host: str, root_domain: str) -> bool:
     if host == root_domain:
         return True
     return host.endswith(f".{root_domain}")
+
+
+def _host_resolves(host: str, timeout: float = 1.5) -> bool:
+    original_timeout = socket.getdefaulttimeout()
+    socket.setdefaulttimeout(timeout)
+    try:
+        socket.getaddrinfo(host, None)
+        return True
+    except Exception:
+        return False
+    finally:
+        socket.setdefaulttimeout(original_timeout)
+
+
+def _generate_bruteforce_candidates(root_domain: str, seed_hosts: List[str]) -> Set[str]:
+    candidates: Set[str] = {f"{label}.{root_domain}" for label in _BRUTE_LABELS}
+    relevant = [h for h in seed_hosts if _is_host_within_root(h, root_domain)]
+    for host in relevant:
+        left = host[:-len(root_domain)].rstrip(".")
+        if not left:
+            continue
+        labels = [part for part in left.split(".") if part]
+        if not labels:
+            continue
+        last_label = labels[-1]
+        for label in _BRUTE_LABELS:
+            candidates.add(f"{label}.{last_label}.{root_domain}")
+    return {c for c in candidates if _HOST_RE.match(c)}
+
+
+def _bruteforce_dns_hosts(root_domain: str, seed_hosts: List[str], max_candidates: int = 400) -> List[str]:
+    candidates = sorted(_generate_bruteforce_candidates(root_domain, seed_hosts))
+    if max_candidates > 0:
+        candidates = candidates[:max_candidates]
+    resolved: List[str] = []
+    workers = max(8, min(64, len(candidates) or 1))
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        futures = {pool.submit(_host_resolves, host): host for host in candidates}
+        for future in as_completed(futures):
+            host = futures[future]
+            try:
+                if future.result():
+                    resolved.append(host)
+            except Exception:
+                continue
+    return sorted(set(resolved))
 
 
 def _resolve_active_hosts_with_httpx(hostnames: List[str], timeout: int = 90) -> List[Dict[str, object]]:
@@ -368,6 +421,12 @@ def run_subfinder_for_project(project_id: str, triggered_by: str = "scheduler") 
                     log.warning("Subfinder returned 0 results — check sources/config (root=%s)", root_domain)
 
         discovered = sorted(set(discovered_all))
+        brute_discovered: Set[str] = set()
+        for root_domain in root_domains:
+            brute_discovered.update(_bruteforce_dns_hosts(root_domain, discovered + root_domains))
+        if brute_discovered:
+            log.info("Subfinder brute-force DNS discovered %d additional hosts", len(brute_discovered))
+            discovered = sorted(set(discovered) | brute_discovered)
         new_count, new_hosts = subfinder_hosts_add_batch(project_id, discovered)
         subfinder_new_discoveries_add_batch(job_id, project_id, new_hosts)
         httpx_rows = _resolve_active_hosts_with_httpx(new_hosts)
