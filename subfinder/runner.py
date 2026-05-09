@@ -14,6 +14,7 @@ How it works:
 import gzip
 import json
 import logging
+import os
 import re
 import socket
 import ssl
@@ -155,12 +156,23 @@ _COMMON_COMPOUND_SUFFIXES = {
     "co.jp", "ne.jp", "or.jp",
     "com.br", "com.mx", "com.tr",
 }
-_BRUTE_LABELS = (
+_DEFAULT_BRUTE_LABELS = (
     "www", "api", "app", "admin", "dev", "test", "staging", "stage",
     "qa", "uat", "prod", "portal", "vpn", "mail", "smtp", "imap",
     "cdn", "img", "assets", "files", "docs", "status", "auth", "login",
     "gateway", "edge", "m", "beta", "shop", "blog", "mobile", "monitoring",
 )
+
+
+def _dns_bruteforce_enabled() -> bool:
+    return os.getenv("DNS_BRUTEFORCE_ENABLED", "1").strip().lower() not in {"0", "false", "no", "off"}
+
+
+def _brute_labels() -> List[str]:
+    raw = os.getenv("DNS_BRUTEFORCE_LABELS", "")
+    custom = [x.strip().lower() for x in raw.split(",") if x.strip()]
+    labels = custom or list(_DEFAULT_BRUTE_LABELS)
+    return [label for label in labels if re.fullmatch(r"[a-z0-9-]{1,63}", label)]
 
 
 def _normalize_host(host: str) -> str:
@@ -251,17 +263,18 @@ def _host_resolves(host: str, timeout: float = 1.5) -> bool:
 
 
 def _generate_bruteforce_candidates(root_domain: str, seed_hosts: List[str]) -> Set[str]:
-    candidates: Set[str] = {f"{label}.{root_domain}" for label in _BRUTE_LABELS}
+    labels = _brute_labels()
+    candidates: Set[str] = {f"{label}.{root_domain}" for label in labels}
     relevant = [h for h in seed_hosts if _is_host_within_root(h, root_domain)]
     for host in relevant:
         left = host[:-len(root_domain)].rstrip(".")
         if not left:
             continue
-        labels = [part for part in left.split(".") if part]
-        if not labels:
+        host_labels = [part for part in left.split(".") if part]
+        if not host_labels:
             continue
-        last_label = labels[-1]
-        for label in _BRUTE_LABELS:
+        last_label = host_labels[-1]
+        for label in labels:
             candidates.add(f"{label}.{last_label}.{root_domain}")
     return {c for c in candidates if _HOST_RE.match(c)}
 
@@ -524,11 +537,14 @@ def run_subfinder_for_project(project_id: str, triggered_by: str = "scheduler") 
             discovered.extend(_query_crtsh_for_root(root_domain))
         discovered = sorted(set(discovered))
         brute_discovered: Set[str] = set()
-        for root_domain in root_domains:
-            brute_discovered.update(_bruteforce_dns_hosts(root_domain, discovered + root_domains))
-        if brute_discovered:
-            log.info("Subfinder brute-force DNS discovered %d additional hosts", len(brute_discovered))
-            discovered = sorted(set(discovered) | brute_discovered)
+        if _dns_bruteforce_enabled():
+            for root_domain in root_domains:
+                brute_discovered.update(_bruteforce_dns_hosts(root_domain, discovered + root_domains))
+            if brute_discovered:
+                log.info("Subfinder brute-force DNS discovered %d additional hosts", len(brute_discovered))
+                discovered = sorted(set(discovered) | brute_discovered)
+        else:
+            log.info("DNS brute-force discovery disabled via DNS_BRUTEFORCE_ENABLED")
         new_count, new_hosts = subfinder_hosts_add_batch(project_id, discovered)
         subfinder_new_discoveries_add_batch(job_id, project_id, new_hosts)
         httpx_rows = _resolve_active_hosts_with_httpx(new_hosts)
