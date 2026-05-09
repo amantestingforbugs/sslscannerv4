@@ -929,6 +929,11 @@ def domain_enum_results_by_scan(scan_id):
     return [dict(r) for r in rows]
 
 
+def domain_enum_scan_delete(scan_id):
+    x("DELETE FROM domain_enum_scans WHERE id=?", (scan_id,))
+    commit()
+
+
 # ── OpenSSL live results ─────────────────────────────────────────────────────
 
 def openssl_results_upsert_batch(pid, rows, source="manual"):

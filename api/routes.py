@@ -8,6 +8,8 @@ Fixes:
 """
 
 import json
+import csv
+import io
 import queue
 import threading
 import time
@@ -739,6 +741,62 @@ def domain_enumeration_scan_detail(scan_id):
     if not scan:
         return err("Not found", 404)
     return ok({"scan": scan, "results": db.domain_enum_results_by_scan(scan_id)})
+
+
+@api.delete("/subfinder/enumeration/scans/<scan_id>")
+def domain_enumeration_scan_delete(scan_id):
+    scan = db.domain_enum_scan_get(scan_id)
+    if not scan:
+        return err("Not found", 404)
+    db.domain_enum_scan_delete(scan_id)
+    return ok({"deleted": True, "scan_id": scan_id})
+
+
+@api.get("/subfinder/enumeration/scans/<scan_id>/export")
+def domain_enumeration_scan_export(scan_id):
+    from subfinder.runner import _httpx_enrich_hosts
+
+    scan = db.domain_enum_scan_get(scan_id)
+    if not scan:
+        return err("Not found", 404)
+    export_format = (request.args.get("format") or "txt").strip().lower()
+    rows = db.domain_enum_results_by_scan(scan_id)
+    hosts = [r.get("hostname", "") for r in rows if r.get("hostname")]
+    if export_format == "txt":
+        payload = "\n".join(sorted(set(hosts))) + ("\n" if hosts else "")
+        return Response(
+            payload,
+            mimetype="text/plain; charset=utf-8",
+            headers={"Content-Disposition": f"attachment; filename={scan.get('domain','scan')}-{scan_id[:8]}.txt"},
+        )
+    if export_format != "csv":
+        return err("format must be either txt or csv")
+
+    enrich = _httpx_enrich_hosts(hosts)
+    enrich_map = {r.get("hostname"): r for r in enrich if r.get("hostname")}
+
+    out = io.StringIO()
+    writer = csv.writer(out)
+    writer.writerow(["domain", "subdomain", "source", "discovered_at", "status_code", "scheme", "final_url", "page_title", "is_active", "technologies"])
+    for row in rows:
+        hx = enrich_map.get(row.get("hostname"), {})
+        writer.writerow([
+            scan.get("domain", ""),
+            row.get("hostname", ""),
+            row.get("source", ""),
+            row.get("discovered_at", ""),
+            hx.get("status_code", ""),
+            hx.get("scheme", ""),
+            hx.get("final_url", ""),
+            hx.get("page_title", ""),
+            "yes" if hx.get("is_active") else "no",
+            "",
+        ])
+    return Response(
+        out.getvalue(),
+        mimetype="text/csv; charset=utf-8",
+        headers={"Content-Disposition": f"attachment; filename={scan.get('domain','scan')}-{scan_id[:8]}.csv"},
+    )
 
 
 @api.get("/projects/<pid>/discoveries")

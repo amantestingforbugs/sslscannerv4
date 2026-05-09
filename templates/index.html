@@ -1135,7 +1135,7 @@ tbody tr:last-child td{border-bottom:none}
       <div class="card">
         <div class="table-wrap">
           <table>
-            <thead><tr><th>Domain</th><th>Timestamp</th><th>Total Found</th><th>Status</th><th>Open Results</th></tr></thead>
+            <thead><tr><th>Domain</th><th>Timestamp</th><th>Total Found</th><th>Status</th><th>Actions</th></tr></thead>
             <tbody id="sf-raw-page-body"></tbody>
           </table>
         </div>
@@ -2768,9 +2768,27 @@ async function loadSfRawPage() {
       <td style="font-size:12px;color:var(--text-secondary)">${new Date(rr.started_at).toLocaleString()}</td>
       <td style="font-weight:600">${fmt(rr.total_found||0)}</td>
       <td><span class="badge ${rr.status==='done'?'badge-done':rr.status==='running'?'badge-running':'badge-error'}">${esc(rr.status||'unknown')}</span></td>
-      <td><button class="btn btn-sm" onclick="openEnumScan('${rr.id}')">Open</button></td>
+      <td style="display:flex;gap:6px;flex-wrap:wrap">
+        <button class="btn btn-sm" onclick="openEnumScan('${rr.id}')">Open</button>
+        <button class="btn btn-sm" onclick="exportEnumScan('${rr.id}','txt')">TXT</button>
+        <button class="btn btn-sm" onclick="exportEnumScan('${rr.id}','csv')">CSV</button>
+        <button class="btn btn-sm" style="border-color:#ef4444;color:#ef4444" onclick="deleteEnumScan('${rr.id}')">Delete</button>
+      </td>
     </tr>`;
   }).join('') : '<tr><td colspan="5" style="text-align:center;padding:18px;color:var(--text-muted)">No enumeration scans yet.</td></tr>';
+}
+
+async function exportEnumScan(scanId, format) {
+  window.open(`/api/subfinder/enumeration/scans/${scanId}/export?format=${encodeURIComponent(format)}`, '_blank');
+}
+
+async function deleteEnumScan(scanId) {
+  if (!confirm('Delete this scan and all its results?')) return;
+  const { ok, error } = await apiJSON(`/api/subfinder/enumeration/scans/${scanId}`, { method:'DELETE' });
+  if (!ok) return toast(error || 'Delete failed', 'err');
+  toast('Enumeration scan deleted', 'ok');
+  document.getElementById('sf-enum-results-body').innerHTML = '<tr><td colspan="3" style="text-align:center;padding:16px;color:var(--text-muted)">Select a scan to view results.</td></tr>';
+  await loadSfRawPage();
 }
 
 async function runDomainEnumeration() {
