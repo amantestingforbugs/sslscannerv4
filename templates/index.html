@@ -1254,7 +1254,20 @@ tbody tr:last-child td{border-bottom:none}
           <label class="form-label">Domain</label>
           <input class="form-input" id="enum-domain-input" placeholder="example.com">
         </div>
+        <div class="form-group" style="max-width:180px">
+          <label class="form-label">Depth Mode</label>
+          <select class="form-input" id="enum-depth-mode">
+            <option value="standard">Standard</option>
+            <option value="aggressive">Aggressive</option>
+          </select>
+        </div>
         <button class="btn btn-primary" style="height:36px" onclick="runDomainEnumeration()">▶ Enumerate</button>
+      </div>
+      <div class="stats-grid" style="margin-bottom:14px">
+        <div class="stat-card"><div class="stat-title">Total Subdomains</div><div class="stat-value" id="enum-stat-total">0</div></div>
+        <div class="stat-card"><div class="stat-title">Unique Sources</div><div class="stat-value" id="enum-stat-sources">0</div></div>
+        <div class="stat-card"><div class="stat-title">Active HTTP Hosts</div><div class="stat-value" id="enum-stat-active">0</div></div>
+        <div class="stat-card"><div class="stat-title">Current Scan Domain</div><div class="stat-value" id="enum-stat-domain" style="font-size:16px">—</div></div>
       </div>
       <div class="card">
         <div class="table-wrap">
@@ -1266,6 +1279,16 @@ tbody tr:last-child td{border-bottom:none}
       </div>
       <div class="card">
         <div class="card-header"><span class="card-title">Selected Scan Results</span></div>
+        <div class="table-toolbar" style="padding:0 14px 10px 14px">
+          <div class="search-input" style="max-width:340px">
+            <svg width="14" height="14" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
+            <input type="text" id="sf-enum-search" placeholder="Search hostnames..." oninput="renderEnumResults()">
+          </div>
+          <select class="form-input" id="sf-enum-source-filter" style="max-width:220px" onchange="renderEnumResults()">
+            <option value="all">All sources</option>
+          </select>
+          <span id="sf-enum-results-count" style="font-size:12px;color:var(--text-muted)">0 rows</span>
+        </div>
         <div class="table-wrap"><table><thead><tr><th>Hostname</th><th>Source</th><th>Discovered</th></tr></thead><tbody id="sf-enum-results-body"></tbody></table></div>
       </div>
     </div>
@@ -2934,6 +2957,50 @@ async function initLatestDiscoveriesPage() {
   loadLatestDiscoveries();
 }
 
+
+let enumCurrentRows = [];
+let enumCurrentScan = null;
+
+function updateEnumStats(rows, scan) {
+  const uniqueSources = new Set((rows||[]).map(r => r.source || 'mixed')).size;
+  document.getElementById('enum-stat-total').textContent = fmt((rows||[]).length);
+  document.getElementById('enum-stat-sources').textContent = fmt(uniqueSources);
+  document.getElementById('enum-stat-domain').textContent = scan?.domain || '—';
+}
+
+async function updateEnumActiveHostCount(rows) {
+  const el = document.getElementById('enum-stat-active');
+  if (!rows?.length) { el.textContent = '0'; return; }
+  el.textContent = '…';
+  try {
+    const url = `/api/subfinder/enumeration/scans/${enumCurrentScan?.id}/export?format=csv`;
+    const res = await fetch(url);
+    const csv = await res.text();
+    const lines = csv.split('\n').slice(1).filter(Boolean);
+    let active = 0;
+    for (const line of lines) {
+      if ((line.toLowerCase().includes(',true,') || line.toLowerCase().endsWith(',true'))) active += 1;
+    }
+    el.textContent = fmt(active);
+  } catch {
+    el.textContent = '—';
+  }
+}
+
+function renderEnumResults() {
+  const body = document.getElementById('sf-enum-results-body');
+  const q = (document.getElementById('sf-enum-search').value || '').trim().toLowerCase();
+  const src = document.getElementById('sf-enum-source-filter').value;
+  const rows = (enumCurrentRows || []).filter(r => {
+    const host = (r.hostname || '').toLowerCase();
+    const source = (r.source || 'mixed');
+    return (!q || host.includes(q)) && (src === 'all' || src === source);
+  });
+  document.getElementById('sf-enum-results-count').textContent = `${fmt(rows.length)} rows`;
+  body.innerHTML = rows.length ? rows.map(r => `<tr><td style="font-family:var(--mono)">${esc(r.hostname)}</td><td>${esc(r.source||'mixed')}</td><td style="font-size:12px;color:var(--text-secondary)">${new Date(r.discovered_at).toLocaleString()}</td></tr>`).join('')
+    : '<tr><td colspan="3" style="text-align:center;padding:16px;color:var(--text-muted)">No results match the current filters.</td></tr>';
+}
+
 async function initSfRawPage() {
   await loadSfRawPage();
 }
@@ -2979,7 +3046,8 @@ async function runDomainEnumeration() {
   const domain = (document.getElementById('enum-domain-input').value||'').trim();
   if (!domain) return toast('Enter a domain', 'err');
   toast('Enumeration scan started', 'ok');
-  const { ok, error } = await apiJSON('/api/subfinder/enumeration/run', { method:'POST', body: JSON.stringify({ domain }) });
+  const depthMode = document.getElementById('enum-depth-mode').value;
+  const { ok, error } = await apiJSON('/api/subfinder/enumeration/run', { method:'POST', body: JSON.stringify({ domain, depth_mode: depthMode }) });
   if (!ok) return toast(error || 'Enumeration failed', 'err');
   toast('Enumeration finished', 'ok');
   await loadSfRawPage();
@@ -2987,10 +3055,15 @@ async function runDomainEnumeration() {
 
 async function openEnumScan(scanId) {
   const { data } = await apiJSON(`/api/subfinder/enumeration/scans/${scanId}`);
-  const body = document.getElementById('sf-enum-results-body');
-  const rows = data?.results || [];
-  body.innerHTML = rows.length ? rows.map(r => `<tr><td style="font-family:var(--mono)">${esc(r.hostname)}</td><td>${esc(r.source||'mixed')}</td><td style="font-size:12px;color:var(--text-secondary)">${new Date(r.discovered_at).toLocaleString()}</td></tr>`).join('')
-    : '<tr><td colspan="3" style="text-align:center;padding:16px;color:var(--text-muted)">No results found for this scan.</td></tr>';
+  enumCurrentScan = data?.scan || null;
+  enumCurrentRows = data?.results || [];
+  const sources = [...new Set(enumCurrentRows.map(r => r.source || 'mixed'))].sort();
+  const filter = document.getElementById('sf-enum-source-filter');
+  filter.innerHTML = '<option value="all">All sources</option>' + sources.map(s => `<option value="${esc(s)}">${esc(s)}</option>`).join('');
+  document.getElementById('sf-enum-search').value = '';
+  updateEnumStats(enumCurrentRows, enumCurrentScan);
+  renderEnumResults();
+  updateEnumActiveHostCount(enumCurrentRows);
 }
 
 async function hydrateTopProjectSelect() {
