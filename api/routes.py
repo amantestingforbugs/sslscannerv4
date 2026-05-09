@@ -730,6 +730,61 @@ def toggle_subfinder(pid):
     return ok({"subfinder_enabled": new_val})
 
 
+
+
+@api.post("/projects/<pid>/nuclei/scan-new-discoveries")
+def nuclei_scan_new_discoveries(pid):
+    p = db.project_get(pid)
+    if not p:
+        return err("Project not found", 404)
+
+    hosts_data = db.subfinder_discoveries(pid, page=1, per_page=5000, search="", mode="latest")
+    hosts = sorted({(r.get("hostname") or "").strip().lower() for r in (hosts_data.get("rows") or []) if (r.get("hostname") or "").strip()})
+    if not hosts:
+        return err("No newly discovered hosts found for this project", 400)
+
+    try:
+        import tempfile
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".txt", delete=False) as tf:
+            tf.write("\n".join(hosts) + "\n")
+            targets_file = tf.name
+
+        cmd = [
+            "nuclei",
+            "-l", targets_file,
+            "-severity", "medium,high,critical",
+            "-jsonl",
+            "-silent",
+        ]
+        run = subprocess.run(cmd, text=True, capture_output=True, timeout=900)
+
+        findings = []
+        for ln in (run.stdout or "").splitlines():
+            ln = ln.strip()
+            if not ln:
+                continue
+            try:
+                findings.append(json.loads(ln))
+            except Exception:
+                continue
+
+        return ok({
+            "project_id": pid,
+            "project_name": p["name"],
+            "hosts_scanned": len(hosts),
+            "severities": ["medium", "high", "critical"],
+            "command": "nuclei -l <hosts_file> -severity medium,high,critical -jsonl -silent",
+            "findings": findings,
+            "findings_total": len(findings),
+            "stderr": (run.stderr or "")[-4000:],
+            "exit_code": run.returncode,
+        })
+    except subprocess.TimeoutExpired:
+        return err("Nuclei scan timed out after 900s", 504)
+    except FileNotFoundError:
+        return err("nuclei binary not found", 400)
+    except Exception as e:
+        return err(f"Nuclei scan failed: {e}", 500)
 @api.post("/projects/<pid>/openssl")
 def openssl_subjects(pid):
     p = db.project_get(pid)
