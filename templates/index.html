@@ -18,6 +18,7 @@
   --mono: 'JetBrains Mono', monospace;
   --sidebar-w: 230px;
   --header-h: 60px;
+  --focus-ring: 0 0 0 3px color-mix(in srgb, var(--accent) 25%, transparent);
 }
 
 [data-theme="dark"] {
@@ -187,7 +188,23 @@ button{cursor:pointer;font-family:inherit}
 .theme-toggle:hover{background:var(--bg-hover);color:var(--text-primary)}
 
 /* ── CONTENT ── */
-.content{flex:1;overflow-y:auto;padding:24px}
+.content{flex:1;overflow-y:auto;padding:24px;scroll-behavior:smooth}
+
+
+.mobile-menu-btn{
+  display:none;width:34px;height:34px;border-radius:8px;border:1px solid var(--border);
+  background:var(--bg-raised);color:var(--text-secondary);align-items:center;justify-content:center;
+}
+.mobile-menu-btn:hover{background:var(--bg-hover);color:var(--text-primary)}
+
+.sidebar-overlay{display:none}
+
+.nav-item:focus-visible,.btn:focus-visible,.theme-toggle:focus-visible,.notif-btn:focus-visible,.mobile-menu-btn:focus-visible,.form-input:focus-visible{
+  outline:none;box-shadow:var(--focus-ring);
+}
+
+.card,.stat-card,.project-card{backdrop-filter:blur(6px)}
+.main{background:radial-gradient(circle at top right,color-mix(in srgb,var(--accent) 7%,transparent),transparent 35%)}
 
 /* ════════════════════════════════════════════════════════════
    PAGES
@@ -535,15 +552,17 @@ tbody tr:last-child td{border-bottom:none}
 ════════════════════════════════════════════════════════════ */
 @media(max-width:900px){
   .stats-row{grid-template-columns:repeat(2,1fr)}
-  .sidebar{width:64px;min-width:64px}
-  .logo-text,.logo-sub,.nav-section,.nav-item span,.scheduler-pill span,.sidebar-clock{display:none}
-  .nav-item{justify-content:center;padding:10px}
-  .nav-item svg{width:20px;height:20px;opacity:1}
+  .mobile-menu-btn{display:inline-flex}
+  .sidebar{position:fixed;left:0;top:0;bottom:0;transform:translateX(-100%);transition:transform var(--transition)}
+  body.sidebar-open .sidebar{transform:translateX(0)}
+  .sidebar-overlay{position:fixed;inset:0;background:rgba(0,0,0,.45);display:none;z-index:90}
+  body.sidebar-open .sidebar-overlay{display:block}
 }
 @media(max-width:600px){
-  .stats-row{grid-template-columns:1fr 1fr}
+  .stats-row{grid-template-columns:1fr}
   .content{padding:14px}
   .modal{max-width:calc(100vw - 24px)}
+  .topbar-select{min-width:130px;max-width:150px}
 }
 
 /* ════════════════════════════════════════════════════════════
@@ -584,6 +603,7 @@ tbody tr:last-child td{border-bottom:none}
 </head>
 <body>
 <div class="app">
+<div class="sidebar-overlay" id="sidebarOverlay"></div>
 
 <!-- ════════════ SIDEBAR ════════════ -->
 <aside class="sidebar">
@@ -652,6 +672,7 @@ tbody tr:last-child td{border-bottom:none}
 <!-- ════════════ MAIN ════════════ -->
 <div class="main">
   <div class="topbar">
+    <button class="mobile-menu-btn" id="mobileMenuBtn" aria-label="Open menu">☰</button>
     <div class="topbar-title" id="topTitle">Dashboard</div>
     <div class="topbar-right">
       <select id="topProjectSelect" class="topbar-select">
@@ -1580,8 +1601,16 @@ function nav(name) {
 }
 
 document.querySelectorAll('.nav-item[data-page]').forEach(el => {
-  el.addEventListener('click', () => nav(el.dataset.page));
+  el.addEventListener('click', () => {
+    nav(el.dataset.page);
+    if (window.innerWidth <= 900) document.body.classList.remove('sidebar-open');
+  });
 });
+
+const menuBtn = document.getElementById('mobileMenuBtn');
+const sidebarOverlay = document.getElementById('sidebarOverlay');
+menuBtn?.addEventListener('click', () => document.body.classList.toggle('sidebar-open'));
+sidebarOverlay?.addEventListener('click', () => document.body.classList.remove('sidebar-open'));
 
 // ════════════════════════════════════════════════════════════
 // UTILS
