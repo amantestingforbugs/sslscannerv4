@@ -11,6 +11,8 @@ from subfinder.runner import (
     _generate_bruteforce_candidates,
     _bruteforce_dns_hosts,
     _query_crtsh_for_root,
+    _query_bufferover_for_root,
+    _query_rapiddns_for_root,
 )
 
 
@@ -72,3 +74,35 @@ def test_query_crtsh_for_root_parses_name_value_lines(monkeypatch):
     monkeypatch.setattr(runner, "urlopen", lambda *args, **kwargs: _FakeResponse())
     found = _query_crtsh_for_root("example.com")
     assert found == ["api.example.com", "dev.example.com"]
+
+
+def test_query_bufferover_for_root_parses_fdns_records(monkeypatch):
+    class _FakeResponse:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def read(self):
+            return b'{"FDNS_A":["1.1.1.1,api.example.com","2.2.2.2,*.dev.example.com"],"RDNS":[]}'
+
+    monkeypatch.setattr(runner, "urlopen", lambda *args, **kwargs: _FakeResponse())
+    found = _query_bufferover_for_root("example.com")
+    assert found == ["api.example.com", "dev.example.com"]
+
+
+def test_query_rapiddns_for_root_extracts_hostnames_from_html(monkeypatch):
+    class _FakeResponse:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def read(self):
+            return b"<td>portal.example.com</td><a>cdn.example.com</a><span>badexample.com</span>"
+
+    monkeypatch.setattr(runner, "urlopen", lambda *args, **kwargs: _FakeResponse())
+    found = _query_rapiddns_for_root("example.com")
+    assert found == ["cdn.example.com", "portal.example.com"]

@@ -434,6 +434,44 @@ def _query_crtsh_for_root(root_domain: str, timeout: int = 45) -> List[str]:
         return []
 
 
+def _query_bufferover_for_root(root_domain: str, timeout: int = 30) -> List[str]:
+    url = f"https://dns.bufferover.run/dns?q=.{root_domain}"
+    try:
+        req = Request(url, headers={"User-Agent": "ssl-sentinel/1.0"})
+        ctx = ssl.create_default_context()
+        with urlopen(req, timeout=timeout, context=ctx) as res:
+            body = res.read().decode("utf-8", errors="replace")
+        payload = json.loads(body or "{}")
+        found: Set[str] = set()
+        for key in ("FDNS_A", "RDNS"):
+            for row in payload.get(key) or []:
+                token = (row or "").split(",")[-1].strip()
+                host = _normalize_host(token)
+                if host and _HOST_RE.match(host) and _is_host_within_root(host, root_domain):
+                    found.add(host)
+        return sorted(found)
+    except Exception:
+        return []
+
+
+def _query_rapiddns_for_root(root_domain: str, timeout: int = 30) -> List[str]:
+    url = f"https://rapiddns.io/subdomain/{root_domain}?full=1"
+    try:
+        req = Request(url, headers={"User-Agent": "ssl-sentinel/1.0"})
+        ctx = ssl.create_default_context()
+        with urlopen(req, timeout=timeout, context=ctx) as res:
+            body = res.read().decode("utf-8", errors="replace")
+        found: Set[str] = set()
+        # rapiddns contains many HTML anchors and table cells with hostnames
+        for match in re.findall(r"([a-zA-Z0-9][a-zA-Z0-9.-]*\.%s)" % re.escape(root_domain), body):
+            host = _normalize_host(match)
+            if host and _HOST_RE.match(host) and _is_host_within_root(host, root_domain):
+                found.add(host)
+        return sorted(found)
+    except Exception:
+        return []
+
+
 def run_subfinder_for_project(project_id: str, triggered_by: str = "scheduler") -> Optional[str]:
     """
     Full subfinder pipeline for a project:
@@ -535,6 +573,8 @@ def run_subfinder_for_project(project_id: str, triggered_by: str = "scheduler") 
             discovered.extend(_run_assetfinder_for_root(root_domain))
             discovered.extend(_run_amass_passive_for_root(root_domain))
             discovered.extend(_query_crtsh_for_root(root_domain))
+            discovered.extend(_query_bufferover_for_root(root_domain))
+            discovered.extend(_query_rapiddns_for_root(root_domain))
         discovered = sorted(set(discovered))
         brute_discovered: Set[str] = set()
         if _dns_bruteforce_enabled():
