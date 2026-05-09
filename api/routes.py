@@ -761,7 +761,7 @@ def domain_enumeration_scan_delete(scan_id):
 
 @api.get("/subfinder/enumeration/scans/<scan_id>/export")
 def domain_enumeration_scan_export(scan_id):
-    from subfinder.runner import _httpx_enrich_hosts
+    from subfinder.runner import _resolve_active_hosts_with_httpx
 
     scan = db.domain_enum_scan_get(scan_id)
     if not scan:
@@ -779,7 +779,7 @@ def domain_enumeration_scan_export(scan_id):
     if export_format != "csv":
         return err("format must be either txt or csv")
 
-    enrich = _httpx_enrich_hosts(hosts)
+    enrich = _resolve_active_hosts_with_httpx(hosts)
     enrich_map = {r.get("hostname"): r for r in enrich if r.get("hostname")}
 
     out = io.StringIO()
