@@ -297,6 +297,40 @@ tbody tr:hover{background:var(--bg-hover)}
   padding:2px;
 }
 
+.enum-actions-cell{
+  position:relative;
+  display:flex;
+  gap:6px;
+  flex-wrap:wrap;
+  align-items:center;
+  overflow:visible;
+}
+.enum-actions-menu{
+  position:relative;
+}
+.enum-actions-menu summary{
+  list-style:none;
+  cursor:pointer;
+}
+.enum-actions-menu summary::-webkit-details-marker{
+  display:none;
+}
+.enum-actions-dropdown{
+  position:absolute;
+  right:0;
+  bottom:calc(100% + 6px);
+  z-index:250;
+  background:var(--bg-surface);
+  border:1px solid var(--border);
+  border-radius:8px;
+  padding:6px;
+  display:flex;
+  flex-direction:column;
+  gap:4px;
+  min-width:180px;
+  box-shadow:var(--shadow-sm);
+}
+
 /* ════════════════════════════════════════════════════════════
    STAT CARDS
 ════════════════════════════════════════════════════════════ */
@@ -2873,10 +2907,10 @@ async function loadSfRawPage() {
       <td style="font-size:12px;color:var(--text-secondary)">${new Date(rr.started_at).toLocaleString()}</td>
       <td style="font-weight:600">${fmt(rr.total_found||0)}</td>
       <td><span class="badge ${rr.status==='done'?'badge-done':rr.status==='running'?'badge-running':'badge-error'}">${esc(rr.status||'unknown')}</span></td>
-      <td style="position:relative;display:flex;gap:6px;flex-wrap:wrap;align-items:center;overflow:visible">
-        <details style="position:relative">
-          <summary class="btn btn-sm" style="list-style:none;cursor:pointer">⋯</summary>
-          <div style="position:absolute;right:0;top:30px;z-index:200;background:var(--bg-surface);border:1px solid var(--border);border-radius:8px;padding:6px;display:flex;flex-direction:column;gap:4px;min-width:180px;box-shadow:var(--shadow-sm)">
+      <td class="enum-actions-cell">
+        <details class="enum-actions-menu">
+          <summary class="btn btn-sm">⋯</summary>
+          <div class="enum-actions-dropdown">
             <button class="btn btn-sm" style="width:100%;justify-content:flex-start" onclick="openEnumScan('${rr.id}')">Open</button>
             <button class="btn btn-sm" style="width:100%;justify-content:flex-start" onclick="exportEnumScan('${rr.id}','txt')">Export Text</button>
             <button class="btn btn-sm" style="width:100%;justify-content:flex-start" onclick="exportEnumScan('${rr.id}','csv')">Export CSV</button>
