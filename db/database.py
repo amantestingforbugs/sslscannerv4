@@ -170,6 +170,26 @@ def init_db():
         last_checked TEXT NOT NULL,
         UNIQUE(project_id, hostname)
     );
+    CREATE TABLE IF NOT EXISTS domain_enum_scans (
+        id TEXT PRIMARY KEY,
+        domain TEXT NOT NULL,
+        status TEXT DEFAULT 'running',
+        triggered_by TEXT DEFAULT 'manual',
+        tool_summary TEXT DEFAULT '',
+        total_found INTEGER DEFAULT 0,
+        started_at TEXT NOT NULL,
+        finished_at TEXT
+    );
+    CREATE TABLE IF NOT EXISTS domain_enum_results (
+        id TEXT PRIMARY KEY,
+        scan_id TEXT NOT NULL,
+        domain TEXT NOT NULL,
+        hostname TEXT NOT NULL,
+        source TEXT DEFAULT '',
+        discovered_at TEXT NOT NULL,
+        UNIQUE(scan_id, hostname),
+        FOREIGN KEY(scan_id) REFERENCES domain_enum_scans(id) ON DELETE CASCADE
+    );
     CREATE TABLE IF NOT EXISTS openssl_results (
         id TEXT PRIMARY KEY,
         project_id TEXT NOT NULL,
@@ -199,6 +219,9 @@ def init_db():
     CREATE INDEX IF NOT EXISTS idx_sfnew_proj_job_host ON subfinder_new_discoveries(project_id, job_id, hostname);
     CREATE INDEX IF NOT EXISTS idx_sfhttpx_proj_checked ON subfinder_httpx_results(project_id, last_checked DESC);
     CREATE INDEX IF NOT EXISTS idx_openssl_proj_checked ON openssl_results(project_id, last_checked DESC);
+    CREATE INDEX IF NOT EXISTS idx_den_scans_domain_started ON domain_enum_scans(domain, started_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_den_results_scan ON domain_enum_results(scan_id);
+    CREATE INDEX IF NOT EXISTS idx_den_results_domain_host ON domain_enum_results(domain, hostname);
     """)
     # Lightweight migrations for existing DBs
     try:
@@ -855,6 +878,55 @@ def subfinder_raw_results_list(pid, limit=20, preview_chars=4000):
         d.pop("stderr_z", None)
         out.append(d)
     return out
+
+
+def domain_enum_scan_create(domain, triggered_by="manual", tool_summary=""):
+    sid = uid()
+    x(
+        "INSERT INTO domain_enum_scans(id,domain,status,triggered_by,tool_summary,started_at) VALUES(?,?,?,?,?,?)",
+        (sid, (domain or "").strip().lower(), "running", triggered_by, tool_summary, now()),
+    )
+    commit()
+    return sid
+
+
+def domain_enum_scan_finish(scan_id, status, total_found):
+    x(
+        "UPDATE domain_enum_scans SET status=?, total_found=?, finished_at=? WHERE id=?",
+        (status, int(total_found or 0), now(), scan_id),
+    )
+    commit()
+
+
+def domain_enum_results_add_batch(scan_id, domain, hostnames, source="mixed"):
+    clean = sorted({(h or "").strip().lower() for h in (hostnames or []) if (h or "").strip()})
+    if not clean:
+        return 0
+    ts = now()
+    rows = [(uid(), scan_id, domain, h, source, ts) for h in clean]
+    xm(
+        "INSERT OR IGNORE INTO domain_enum_results(id,scan_id,domain,hostname,source,discovered_at) VALUES(?,?,?,?,?,?)",
+        rows,
+    )
+    commit()
+    return len(clean)
+
+
+def domain_enum_scans_list():
+    return [dict(r) for r in x("SELECT * FROM domain_enum_scans ORDER BY started_at DESC LIMIT 300").fetchall()]
+
+
+def domain_enum_scan_get(scan_id):
+    row = x("SELECT * FROM domain_enum_scans WHERE id=?", (scan_id,)).fetchone()
+    return dict(row) if row else None
+
+
+def domain_enum_results_by_scan(scan_id):
+    rows = x(
+        "SELECT hostname, source, discovered_at FROM domain_enum_results WHERE scan_id=? ORDER BY hostname ASC",
+        (scan_id,),
+    ).fetchall()
+    return [dict(r) for r in rows]
 
 
 # ── OpenSSL live results ─────────────────────────────────────────────────────

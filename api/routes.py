@@ -712,6 +712,35 @@ def subfinder_raw_results(pid):
     return ok(db.subfinder_raw_results_list(pid, limit=limit, preview_chars=preview_chars))
 
 
+@api.post("/subfinder/enumeration/run")
+def run_domain_enumeration():
+    from subfinder.runner import run_domain_enumeration_scan
+    payload = request.get_json(silent=True) or {}
+    domain = (payload.get("domain") or "").strip().lower()
+    if not domain:
+        return err("Domain is required")
+    try:
+        data = run_domain_enumeration_scan(domain, triggered_by="manual")
+        return ok(data)
+    except ValueError as ve:
+        return err(str(ve))
+    except Exception as e:
+        return err(f"Enumeration failed: {e}", 500)
+
+
+@api.get("/subfinder/enumeration/scans")
+def list_domain_enumeration_scans():
+    return ok(db.domain_enum_scans_list())
+
+
+@api.get("/subfinder/enumeration/scans/<scan_id>")
+def domain_enumeration_scan_detail(scan_id):
+    scan = db.domain_enum_scan_get(scan_id)
+    if not scan:
+        return err("Not found", 404)
+    return ok({"scan": scan, "results": db.domain_enum_results_by_scan(scan_id)})
+
+
 @api.get("/projects/<pid>/discoveries")
 def project_discoveries(pid):
     page = _safe_int(request.args.get("page", 1), 1, min_value=1)

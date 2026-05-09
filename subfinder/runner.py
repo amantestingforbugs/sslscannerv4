@@ -699,6 +699,53 @@ def get_sf_state(project_id: str) -> dict:
         return _sf_state.get(project_id, {}).copy()
 
 
+def run_domain_enumeration_scan(domain: str, triggered_by: str = "manual") -> dict:
+    import db.database as db
+
+    root = _normalize_host(domain)
+    if not root or "." not in root:
+        raise ValueError("Invalid domain")
+
+    scan_id = db.domain_enum_scan_create(root, triggered_by=triggered_by, tool_summary="subfinder,dns_bruteforce,optional:assetfinder/amass/findomain")
+    all_found: Set[str] = set()
+    source_map: Dict[str, Set[str]] = {"subfinder": set(), "dns_bruteforce": set()}
+
+    sf = _run_subfinder_for_root(root, timeout=220)
+    for h in (sf.get("found") or []):
+        if _is_host_within_root(h, root):
+            source_map["subfinder"].add(h)
+            all_found.add(h)
+
+    brute = _bruteforce_dns_hosts(root, list(source_map["subfinder"]) or [root], max_candidates=1500)
+    for h in brute:
+        if _is_host_within_root(h, root):
+            source_map["dns_bruteforce"].add(h)
+            all_found.add(h)
+
+    for tool, cmd in (
+        ("assetfinder", ["assetfinder", "--subs-only", root]),
+        ("amass", ["amass", "enum", "-passive", "-d", root]),
+        ("findomain", ["findomain", "-t", root, "-q"]),
+    ):
+        if not shutil.which(tool):
+            continue
+        try:
+            run = subprocess.run(cmd, capture_output=True, text=True, timeout=240)
+            for ln in (run.stdout or "").splitlines():
+                h = _normalize_host(ln)
+                if h and _HOST_RE.match(h) and _is_host_within_root(h, root):
+                    all_found.add(h)
+                    source_map.setdefault(tool, set()).add(h)
+        except Exception:
+            continue
+
+    for src, hosts in source_map.items():
+        if hosts:
+            db.domain_enum_results_add_batch(scan_id, root, sorted(hosts), source=src)
+    db.domain_enum_scan_finish(scan_id, "done", total_found=len(all_found))
+    return {"scan_id": scan_id, "domain": root, "total_found": len(all_found)}
+
+
 # ── Subfinder Scheduler ───────────────────────────────────────────────────────
 
 class SubfinderScheduler:
