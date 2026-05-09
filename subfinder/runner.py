@@ -16,6 +16,7 @@ import json
 import logging
 import re
 import socket
+import ssl
 import shutil
 import subprocess
 import threading
@@ -24,6 +25,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Dict, List, Optional, Set
 from urllib.parse import urlparse
+from urllib.request import urlopen, Request
 from core.observability import log_event
 
 log = logging.getLogger(__name__)
@@ -327,6 +329,74 @@ def _resolve_active_hosts_with_httpx(hostnames: List[str], timeout: int = 90) ->
         return []
 
 
+def _run_assetfinder_for_root(root_domain: str, timeout: int = 180) -> List[str]:
+    assetfinder_bin = shutil.which("assetfinder") or "/usr/local/bin/assetfinder"
+    if not assetfinder_bin or not Path(assetfinder_bin).exists():
+        return []
+    try:
+        run = subprocess.run(
+            [assetfinder_bin, "--subs-only", root_domain],
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+        )
+        if run.returncode not in (0, 1):
+            return []
+        found = {
+            candidate
+            for ln in (run.stdout or "").splitlines()
+            for candidate in [_normalize_host(ln)]
+            if candidate and _HOST_RE.match(candidate) and _is_host_within_root(candidate, root_domain)
+        }
+        return sorted(found)
+    except Exception:
+        return []
+
+
+def _run_amass_passive_for_root(root_domain: str, timeout: int = 240) -> List[str]:
+    amass_bin = shutil.which("amass") or "/usr/local/bin/amass"
+    if not amass_bin or not Path(amass_bin).exists():
+        return []
+    try:
+        run = subprocess.run(
+            [amass_bin, "enum", "-passive", "-nocolor", "-d", root_domain, "-silent"],
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+        )
+        if run.returncode not in (0, 1):
+            return []
+        found = {
+            candidate
+            for ln in (run.stdout or "").splitlines()
+            for candidate in [_normalize_host(ln)]
+            if candidate and _HOST_RE.match(candidate) and _is_host_within_root(candidate, root_domain)
+        }
+        return sorted(found)
+    except Exception:
+        return []
+
+
+def _query_crtsh_for_root(root_domain: str, timeout: int = 45) -> List[str]:
+    url = f"https://crt.sh/?q=%25.{root_domain}&output=json"
+    try:
+        req = Request(url, headers={"User-Agent": "ssl-sentinel/1.0"})
+        ctx = ssl.create_default_context()
+        with urlopen(req, timeout=timeout, context=ctx) as res:
+            body = res.read().decode("utf-8", errors="replace")
+        rows = json.loads(body or "[]")
+        found: Set[str] = set()
+        for row in rows:
+            names = str(row.get("name_value") or "").splitlines()
+            for name in names:
+                host = _normalize_host(name)
+                if host and _HOST_RE.match(host) and _is_host_within_root(host, root_domain):
+                    found.add(host)
+        return sorted(found)
+    except Exception:
+        return []
+
+
 def run_subfinder_for_project(project_id: str, triggered_by: str = "scheduler") -> Optional[str]:
     """
     Full subfinder pipeline for a project:
@@ -424,6 +494,11 @@ def run_subfinder_for_project(project_id: str, triggered_by: str = "scheduler") 
                     log.warning("Subfinder returned 0 results — check sources/config (root=%s)", root_domain)
 
         discovered = sorted(set(discovered_all))
+        for root_domain in root_domains:
+            discovered.extend(_run_assetfinder_for_root(root_domain))
+            discovered.extend(_run_amass_passive_for_root(root_domain))
+            discovered.extend(_query_crtsh_for_root(root_domain))
+        discovered = sorted(set(discovered))
         brute_discovered: Set[str] = set()
         for root_domain in root_domains:
             brute_discovered.update(_bruteforce_dns_hosts(root_domain, discovered + root_domains))
