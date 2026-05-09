@@ -10,6 +10,7 @@ from subfinder.runner import (
     _is_host_within_root,
     _generate_bruteforce_candidates,
     _bruteforce_dns_hosts,
+    _query_crtsh_for_root,
 )
 
 
@@ -55,3 +56,19 @@ def test_bruteforce_dns_hosts_filters_to_resolvable_entries(monkeypatch):
     monkeypatch.setattr(runner, "_host_resolves", fake_resolver)
     found = _bruteforce_dns_hosts("example.com", ["api.example.com"], max_candidates=500)
     assert found == ["admin.api.example.com", "www.example.com"]
+
+
+def test_query_crtsh_for_root_parses_name_value_lines(monkeypatch):
+    class _FakeResponse:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def read(self):
+            return b'[{"name_value":"api.example.com\\n*.dev.example.com\\nnot-example.org"}]'
+
+    monkeypatch.setattr(runner, "urlopen", lambda *args, **kwargs: _FakeResponse())
+    found = _query_crtsh_for_root("example.com")
+    assert found == ["api.example.com", "dev.example.com"]
