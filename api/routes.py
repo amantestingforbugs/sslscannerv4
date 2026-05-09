@@ -716,7 +716,14 @@ def subfinder_raw_results(pid):
 def run_domain_enumeration():
     from subfinder.runner import run_domain_enumeration_scan
     payload = request.get_json(silent=True) or {}
-    domain = (payload.get("domain") or "").strip().lower()
+    domain = (
+        payload.get("domain")
+        or payload.get("root_domain")
+        or request.form.get("domain")
+        or request.values.get("domain")
+        or request.args.get("domain")
+        or ""
+    ).strip().lower()
     if not domain:
         return err("Domain is required")
     try:
