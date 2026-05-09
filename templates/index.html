@@ -623,7 +623,7 @@ tbody tr:last-child td{border-bottom:none}
     </button>
     <button class="nav-item" data-page="subfinder-raw">
       <svg fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path d="M4 4h16v16H4z"/><path d="M8 8h8M8 12h8M8 16h5"/></svg>
-      <span>Subfinder Raw Results</span>
+      <span>Subfinder Enumeration</span>
     </button>
     <button class="nav-item" data-page="openssl">
       <svg fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path d="M12 2v20"/><path d="M5 7h14"/><path d="M5 17h14"/><circle cx="12" cy="12" r="3"/></svg>
@@ -1096,21 +1096,31 @@ tbody tr:last-child td{border-bottom:none}
     <div class="page" id="page-subfinder-raw">
       <div class="page-header">
         <div>
-          <div class="page-title">Subfinder Raw Results</div>
-          <div class="page-sub">Full raw Subfinder output by root domain and run timestamp.</div>
+          <div class="page-title">Subfinder Enumeration</div>
+          <div class="page-sub">Enumerate a domain on-demand using multiple engines + DNS brute force, with deduplicated history per domain.</div>
         </div>
       </div>
-      <div class="form-group" style="max-width:320px;margin-bottom:14px">
+      <div class="form-row" style="margin-bottom:14px;max-width:900px">
+      <div class="form-group" style="max-width:320px">
         <label class="form-label">Project</label>
         <select class="form-input" id="sf-raw-project-select" onchange="loadSfRawPage()"><option value="">— Choose a project —</option></select>
+      </div>
+      <div class="form-group" style="max-width:320px">
+        <label class="form-label">Domain</label>
+        <input class="form-input" id="sf-enum-domain" placeholder="example.com" />
+      </div>
+      <button class="btn btn-primary" style="height:36px" onclick="runSfEnumeration()">Run Enumeration</button>
       </div>
       <div class="card">
         <div class="table-wrap">
           <table>
-            <thead><tr><th>Domain Scanned</th><th>Timestamp</th><th>Total Found</th><th>Status</th><th>Raw Output</th></tr></thead>
+            <thead><tr><th>Domain</th><th>Last Scan</th><th>Runs</th><th></th></tr></thead>
             <tbody id="sf-raw-page-body"></tbody>
           </table>
         </div>
+      </div>
+      <div class="card">
+        <div class="table-wrap"><table><thead><tr><th>Timestamp</th><th>Total Found</th><th>Status</th><th>Results</th></tr></thead><tbody id="sf-enum-runs-body"></tbody></table></div>
       </div>
     </div>
 
@@ -1515,7 +1525,7 @@ setInterval(tick,1000); tick();
 // ════════════════════════════════════════════════════════════
 const PAGE_TITLES = {
   dashboard:'Dashboard', projects:'Projects', detail:'Project Detail',
-  alerts:'Alerts', subfinder:'Subfinder', discoveries:'New Discoveries', 'discoveries-latest':'Latest Discovery Batch', 'subfinder-raw':'Subfinder Raw Results', openssl:'OpenSSL', logs:'Logs', settings:'Settings'
+  alerts:'Alerts', subfinder:'Subfinder', discoveries:'New Discoveries', 'discoveries-latest':'Latest Discovery Batch', 'subfinder-raw':'Subfinder Enumeration', openssl:'OpenSSL', logs:'Logs', settings:'Settings'
 };
 
 function nav(name) {
@@ -2691,20 +2701,41 @@ async function loadSfRawPage() {
   const pid = document.getElementById('sf-raw-project-select').value;
   const body = document.getElementById('sf-raw-page-body');
   if (!pid) {
-    body.innerHTML = '<tr><td colspan="5" style="text-align:center;padding:18px;color:var(--text-muted)">Select a project.</td></tr>';
+    body.innerHTML = '<tr><td colspan="4" style="text-align:center;padding:18px;color:var(--text-muted)">Select a project.</td></tr>';
     return;
   }
-  const { data: rawRuns } = await fetch(`/api/projects/${pid}/subfinder/raw-results?limit=100&preview_chars=0`).then(r=>r.json());
-  body.innerHTML = (rawRuns||[]).length ? (rawRuns||[]).map(rr => {
-    const rawList = (rr.raw_lines||[]).join('\n') || (rr.stderr_preview || rr.stderr_text || '—');
+  const { data: domains } = await fetch(`/api/projects/${pid}/subfinder/enumeration-history`).then(r=>r.json());
+  body.innerHTML = (domains||[]).length ? (domains||[]).map(rr => {
     return `<tr>
       <td style="font-family:var(--mono);font-size:12px">${esc(rr.root_domain)}</td>
-      <td style="font-size:12px;color:var(--text-secondary)">${new Date(rr.started_at).toLocaleString()}</td>
-      <td style="font-weight:600">${fmt(rr.total_found||0)}</td>
-      <td><span class="badge ${rr.status==='done'?'badge-done':rr.status==='running'?'badge-running':'badge-error'}">${esc(rr.status||'unknown')}</span></td>
-      <td style="max-width:520px"><pre style="white-space:pre-wrap;overflow:auto;max-height:220px;font-size:11px;background:var(--bg-raised);padding:8px;border:1px solid var(--border);border-radius:8px">${esc(rawList)}</pre></td>
+      <td style="font-size:12px;color:var(--text-secondary)">${new Date(rr.last_scan).toLocaleString()}</td>
+      <td style="font-weight:600">${fmt(rr.scans||0)}</td>
+      <td><button class="btn btn-sm" onclick="loadSfDomainRuns('${rr.root_domain}')">Open</button></td>
     </tr>`;
-  }).join('') : '<tr><td colspan="5" style="text-align:center;padding:18px;color:var(--text-muted)">No raw subfinder runs yet.</td></tr>';
+  }).join('') : '<tr><td colspan="4" style="text-align:center;padding:18px;color:var(--text-muted)">No domain scans yet.</td></tr>';
+}
+
+async function runSfEnumeration() {
+  const pid = document.getElementById('sf-raw-project-select').value;
+  const domain = (document.getElementById('sf-enum-domain').value || '').trim();
+  if (!pid || !domain) return toast('Choose project and domain','err');
+  const res = await apiJSON(`/api/projects/${pid}/subfinder/enumerate-domain`, {method:'POST', body:JSON.stringify({domain})});
+  if (!res.ok) return toast(res.error || 'Enumeration failed','err');
+  toast(`Enumeration complete: ${res.data.total_found} unique subdomains (${res.data.new_count} new)`,'ok');
+  await loadSfRawPage();
+  await loadSfDomainRuns(domain);
+}
+
+async function loadSfDomainRuns(domain) {
+  const pid = document.getElementById('sf-raw-project-select').value;
+  const body = document.getElementById('sf-enum-runs-body');
+  const { data: runs } = await fetch(`/api/projects/${pid}/subfinder/enumeration-history?domain=${encodeURIComponent(domain)}`).then(r=>r.json());
+  body.innerHTML = (runs||[]).length ? runs.map(rr => `<tr>
+    <td style="font-size:12px;color:var(--text-secondary)">${new Date(rr.started_at).toLocaleString()}</td>
+    <td style="font-weight:600">${fmt(rr.total_found||0)}</td>
+    <td><span class="badge ${rr.status==='done'?'badge-done':rr.status==='running'?'badge-running':'badge-error'}">${esc(rr.status||'unknown')}</span></td>
+    <td style="max-width:520px"><pre style="white-space:pre-wrap;overflow:auto;max-height:220px;font-size:11px;background:var(--bg-raised);padding:8px;border:1px solid var(--border);border-radius:8px">${esc((rr.raw_lines||[]).join('\n')||'—')}</pre></td>
+  </tr>`).join('') : '<tr><td colspan="4" style="text-align:center;padding:18px;color:var(--text-muted)">No runs for selected domain.</td></tr>';
 }
 
 async function hydrateTopProjectSelect() {

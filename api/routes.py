@@ -712,6 +712,69 @@ def subfinder_raw_results(pid):
     return ok(db.subfinder_raw_results_list(pid, limit=limit, preview_chars=preview_chars))
 
 
+@api.post("/projects/<pid>/subfinder/enumerate-domain")
+def subfinder_enumerate_domain(pid):
+    p = db.project_get(pid)
+    if not p:
+        return err("Project not found", 404)
+    from subfinder import runner as sf
+    domain = _normalize_hostname((request.json or {}).get("domain", ""))
+    if not domain:
+        return err("Enter a valid domain")
+    jid = db.subfinder_job_create(pid, domain, by="manual:domain-enum")
+    rid = db.subfinder_raw_result_add(jid, pid, domain, command="multi-source-subdomain-enumeration")
+    try:
+        subfinder_run = sf._run_subfinder_for_root(domain)
+        results = set(subfinder_run.get("hostnames", []) or [])
+        results.update(sf._run_assetfinder_for_root(domain))
+        results.update(sf._run_amass_passive_for_root(domain))
+        results.update(sf._query_crtsh_for_root(domain))
+        results.update(sf._bruteforce_dns_hosts(domain, list(results) + [domain]))
+        deduped = sorted({h.strip().lower() for h in results if sf._HOST_RE.match((h or "").strip().lower())})
+        new_count, new_hosts = db.subfinder_hosts_add_batch(pid, deduped)
+        db.subfinder_new_discoveries_add_batch(jid, pid, new_hosts)
+        db.subfinder_job_finish(jid, new_count, len(deduped), "")
+        stdout = "\n".join(deduped)
+        stderr = (subfinder_run.get("stderr") or "").strip()
+        db.subfinder_raw_result_finish(
+            rid,
+            "done",
+            subfinder_run.get("exit_code", 0),
+            len(deduped),
+            stdout,
+            stderr,
+        )
+        return ok({"job_id": jid, "domain": domain, "total_found": len(deduped), "new_count": new_count})
+    except Exception as e:
+        db.subfinder_job_error(jid, str(e))
+        db.subfinder_raw_result_finish(rid, "error", 1, 0, "", str(e))
+        return err(f"Enumeration failed: {e}", 500)
+
+
+@api.get("/projects/<pid>/subfinder/enumeration-history")
+def subfinder_enumeration_history(pid):
+    domain = _normalize_hostname(request.args.get("domain", ""))
+    if not domain:
+        rows = db.x(
+            "SELECT root_domain, MAX(started_at) as last_scan, COUNT(*) as scans "
+            "FROM subfinder_raw_results WHERE project_id=? GROUP BY root_domain ORDER BY last_scan DESC LIMIT 500",
+            (pid,),
+        ).fetchall()
+        return ok([dict(r) for r in rows])
+    runs = db.x(
+        "SELECT * FROM subfinder_raw_results WHERE project_id=? AND root_domain=? ORDER BY started_at DESC LIMIT 100",
+        (pid, domain),
+    ).fetchall()
+    out = []
+    for row in runs:
+        d = dict(row)
+        txt = d.get("stdout_text") or db._decompress_text(d.get("stdout_z"))
+        d["raw_lines"] = [ln for ln in (txt or "").splitlines() if ln.strip()][:3000]
+        d.pop("stdout_z", None); d.pop("stderr_z", None)
+        out.append(d)
+    return ok(out)
+
+
 @api.get("/projects/<pid>/discoveries")
 def project_discoveries(pid):
     page = _safe_int(request.args.get("page", 1), 1, min_value=1)
