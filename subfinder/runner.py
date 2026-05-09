@@ -292,12 +292,23 @@ def _resolve_active_hosts_with_httpx(hostnames: List[str], timeout: int = 90) ->
         return []
     try:
         run = subprocess.run(
-            [httpx_bin, "-silent", "-json", "-status-code", "-title", "-location", "-follow-host-redirects"],
+            [
+                httpx_bin,
+                "-silent",
+                "-json",
+                "-status-code",
+                "-title",
+                "-location",
+                "-follow-host-redirects",
+            ],
             input="\n".join(hosts),
             text=True,
             capture_output=True,
             timeout=timeout,
         )
+        if run.returncode != 0 and not (run.stdout or "").strip():
+            log.warning("httpx returned non-zero exit=%s stderr=%s", run.returncode, (run.stderr or "").strip())
+            return []
         resolved = []
         for line in (run.stdout or "").splitlines():
             line = line.strip()
@@ -307,16 +318,29 @@ def _resolve_active_hosts_with_httpx(hostnames: List[str], timeout: int = 90) ->
                 row = json.loads(line)
             except Exception:
                 continue
-            host = _normalize_host(row.get("host") or row.get("input") or "")
+            host = _normalize_host(
+                row.get("host")
+                or row.get("input")
+                or row.get("url")
+                or row.get("final_url")
+                or ""
+            )
             if not host:
                 continue
+            status_code = row.get("status_code")
+            if status_code is None:
+                status_code = row.get("status-code")
+            try:
+                status_code = int(status_code) if status_code is not None else None
+            except Exception:
+                status_code = None
             resolved.append(
                 {
                     "hostname": host,
-                    "status_code": row.get("status_code"),
-                    "page_title": row.get("title") or "",
-                    "redirect_location": row.get("location") or "",
-                    "final_url": row.get("url") or "",
+                    "status_code": status_code,
+                    "page_title": (row.get("title") or row.get("page_title") or "").strip(),
+                    "redirect_location": (row.get("location") or row.get("redirect_location") or "").strip(),
+                    "final_url": (row.get("final_url") or row.get("url") or "").strip(),
                     "scheme": row.get("scheme") or "",
                     "is_active": True,
                 }
