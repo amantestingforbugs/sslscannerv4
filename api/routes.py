@@ -725,7 +725,7 @@ def subfinder_enumerate_domain(pid):
     rid = db.subfinder_raw_result_add(jid, pid, domain, command="multi-source-subdomain-enumeration")
     try:
         subfinder_run = sf._run_subfinder_for_root(domain)
-        results = set(subfinder_run.get("hostnames", []) or [])
+        results = set(subfinder_run.get("found") or subfinder_run.get("hostnames") or [])
         results.update(sf._run_assetfinder_for_root(domain))
         results.update(sf._run_amass_passive_for_root(domain))
         results.update(sf._query_crtsh_for_root(domain))
