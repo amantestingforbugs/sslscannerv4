@@ -773,7 +773,7 @@ def domain_enumeration_scan_export(scan_id):
         payload = "\n".join(sorted(set(hosts))) + ("\n" if hosts else "")
         return Response(
             payload,
-            mimetype="text/plain; charset=utf-8",
+            content_type="text/plain; charset=utf-8",
             headers={"Content-Disposition": f"attachment; filename={scan.get('domain','scan')}-{scan_id[:8]}.txt"},
         )
     if export_format != "csv":
@@ -801,7 +801,7 @@ def domain_enumeration_scan_export(scan_id):
         ])
     return Response(
         out.getvalue(),
-        mimetype="text/csv; charset=utf-8",
+        content_type="text/csv; charset=utf-8",
         headers={"Content-Disposition": f"attachment; filename={scan.get('domain','scan')}-{scan_id[:8]}.csv"},
     )
 
