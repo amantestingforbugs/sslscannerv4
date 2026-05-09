@@ -27,6 +27,7 @@ from pathlib import Path
 from typing import Dict, List, Optional, Set
 from urllib.parse import urlparse
 from urllib.request import urlopen, Request
+from urllib.error import HTTPError, URLError
 from core.observability import log_event
 
 log = logging.getLogger(__name__)
@@ -472,6 +473,83 @@ def _query_rapiddns_for_root(root_domain: str, timeout: int = 30) -> List[str]:
         return []
 
 
+def _http_json_with_retries(url: str, timeout: int = 30, retries: int = 3, backoff: float = 1.4) -> object:
+    """Fetch JSON endpoint with lightweight retries/jitter for unstable OSINT APIs."""
+    last_err = None
+    for attempt in range(1, max(1, retries) + 1):
+        try:
+            req = Request(url, headers={"User-Agent": "ssl-sentinel/1.0"})
+            ctx = ssl.create_default_context()
+            with urlopen(req, timeout=timeout, context=ctx) as res:
+                body = res.read().decode("utf-8", errors="replace")
+            return json.loads(body or "{}")
+        except (HTTPError, URLError, TimeoutError, json.JSONDecodeError, ssl.SSLError) as e:
+            last_err = e
+            if attempt < retries:
+                sleep_for = (backoff ** attempt) + (attempt * 0.13)
+                time.sleep(min(4.0, sleep_for))
+        except Exception as e:
+            last_err = e
+            break
+    raise RuntimeError(f"request failed for {url}: {last_err}")
+
+
+def _query_hackertarget_for_root(root_domain: str, timeout: int = 35) -> List[str]:
+    """Pull hostsearch data from HackerTarget public API."""
+    url = f"https://api.hackertarget.com/hostsearch/?q={root_domain}"
+    try:
+        req = Request(url, headers={"User-Agent": "ssl-sentinel/1.0"})
+        ctx = ssl.create_default_context()
+        with urlopen(req, timeout=timeout, context=ctx) as res:
+            body = res.read().decode("utf-8", errors="replace")
+        found: Set[str] = set()
+        for ln in body.splitlines():
+            token = (ln or "").split(",", 1)[0].strip()
+            host = _normalize_host(token)
+            if host and _HOST_RE.match(host) and _is_host_within_root(host, root_domain):
+                found.add(host)
+        return sorted(found)
+    except Exception:
+        return []
+
+
+def _query_certspotter_for_root(root_domain: str, timeout: int = 40) -> List[str]:
+    """Pull certificate transparency names from Cert Spotter API."""
+    url = f"https://api.certspotter.com/v1/issuances?domain={root_domain}&include_subdomains=true&expand=dns_names"
+    try:
+        rows = _http_json_with_retries(url, timeout=timeout, retries=3)
+        found: Set[str] = set()
+        for row in rows or []:
+            for name in row.get("dns_names") or []:
+                host = _normalize_host(str(name))
+                if host and _HOST_RE.match(host) and _is_host_within_root(host, root_domain):
+                    found.add(host)
+        return sorted(found)
+    except Exception:
+        return []
+
+
+def _query_wayback_for_root(root_domain: str, timeout: int = 45) -> List[str]:
+    """Harvest hostnames from Internet Archive CDX URLs index."""
+    url = (
+        "https://web.archive.org/cdx/search/cdx"
+        f"?url=*.{root_domain}/*&output=json&fl=original&collapse=urlkey"
+    )
+    try:
+        rows = _http_json_with_retries(url, timeout=timeout, retries=2)
+        found: Set[str] = set()
+        for row in rows[1:] if isinstance(rows, list) else []:
+            if not row:
+                continue
+            raw = str(row[0])
+            host = _normalize_host(raw)
+            if host and _HOST_RE.match(host) and _is_host_within_root(host, root_domain):
+                found.add(host)
+        return sorted(found)
+    except Exception:
+        return []
+
+
 def run_subfinder_for_project(project_id: str, triggered_by: str = "scheduler") -> Optional[str]:
     """
     Full subfinder pipeline for a project:
@@ -749,7 +827,7 @@ def run_domain_enumeration_scan(domain: str, triggered_by: str = "manual") -> di
     scan_id = db.domain_enum_scan_create(
         root,
         triggered_by=triggered_by,
-        tool_summary="subfinder(all-sources),dns_bruteforce,assetfinder,amass,findomain,crtsh,bufferover,rapiddns",
+        tool_summary="subfinder(all-sources),dns_bruteforce,assetfinder,amass,findomain,crtsh,bufferover,rapiddns,certspotter,hackertarget,wayback",
     )
     all_found: Set[str] = set()
     source_map: Dict[str, Set[str]] = {}
@@ -762,6 +840,9 @@ def run_domain_enumeration_scan(domain: str, triggered_by: str = "manual") -> di
             "crtsh": pool.submit(_query_crtsh_for_root, root, 60),
             "bufferover": pool.submit(_query_bufferover_for_root, root, 45),
             "rapiddns": pool.submit(_query_rapiddns_for_root, root, 45),
+            "certspotter": pool.submit(_query_certspotter_for_root, root, 45),
+            "hackertarget": pool.submit(_query_hackertarget_for_root, root, 45),
+            "wayback": pool.submit(_query_wayback_for_root, root, 45),
         }
         if shutil.which("findomain") or Path("/usr/local/bin/findomain").exists():
             futures["findomain"] = pool.submit(lambda: subprocess.run(["findomain", "-t", root, "-q"], capture_output=True, text=True, timeout=240))

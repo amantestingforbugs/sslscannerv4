@@ -13,6 +13,9 @@ from subfinder.runner import (
     _query_crtsh_for_root,
     _query_bufferover_for_root,
     _query_rapiddns_for_root,
+    _query_certspotter_for_root,
+    _query_hackertarget_for_root,
+    _query_wayback_for_root,
 )
 
 
@@ -105,4 +108,48 @@ def test_query_rapiddns_for_root_extracts_hostnames_from_html(monkeypatch):
 
     monkeypatch.setattr(runner, "urlopen", lambda *args, **kwargs: _FakeResponse())
     found = _query_rapiddns_for_root("example.com")
+    assert found == ["cdn.example.com", "portal.example.com"]
+
+
+def test_query_certspotter_for_root_parses_dns_names(monkeypatch):
+    monkeypatch.setattr(
+        runner,
+        "_http_json_with_retries",
+        lambda *args, **kwargs: [
+            {"dns_names": ["api.example.com", "*.dev.example.com", "bad.net"]},
+            {"dns_names": ["shop.example.com"]},
+        ],
+    )
+    found = _query_certspotter_for_root("example.com")
+    assert found == ["api.example.com", "dev.example.com", "shop.example.com"]
+
+
+def test_query_hackertarget_for_root_parses_csv_rows(monkeypatch):
+    class _FakeResponse:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def read(self):
+            return b"api.example.com,1.1.1.1\n*.dev.example.com,2.2.2.2\nbad.net,8.8.8.8"
+
+    monkeypatch.setattr(runner, "urlopen", lambda *args, **kwargs: _FakeResponse())
+    found = _query_hackertarget_for_root("example.com")
+    assert found == ["api.example.com", "dev.example.com"]
+
+
+def test_query_wayback_for_root_extracts_hosts(monkeypatch):
+    monkeypatch.setattr(
+        runner,
+        "_http_json_with_retries",
+        lambda *args, **kwargs: [
+            ["original"],
+            ["https://portal.example.com/login"],
+            ["http://cdn.example.com/static/app.js"],
+            ["https://bad.net/"],
+        ],
+    )
+    found = _query_wayback_for_root("example.com")
     assert found == ["cdn.example.com", "portal.example.com"]
