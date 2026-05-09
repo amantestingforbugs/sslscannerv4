@@ -845,8 +845,48 @@ def domain_enumeration_scan_to_openssl(scan_id):
             if created:
                 alerts_created += 1
 
+    normalized_results = []
+    mismatch_count = 0
+    expired_count = 0
+    expiring_count = 0
+    error_count = 0
+    for row in results:
+        if row.get("is_mismatch"):
+            mismatch_count += 1
+        if row.get("is_expired"):
+            expired_count += 1
+        if row.get("is_expiring_soon"):
+            expiring_count += 1
+        if row.get("error"):
+            error_count += 1
+        normalized_results.append({
+            "hostname": row.get("hostname", ""),
+            "cn": row.get("cn", ""),
+            "expiry": row.get("expiry", ""),
+            "days_left": row.get("days_left"),
+            "error": row.get("error"),
+            "is_mismatch": bool(row.get("is_mismatch")),
+            "is_expired": bool(row.get("is_expired")),
+            "is_expiring": bool(row.get("is_expiring_soon")),
+            "is_ok": bool(row.get("is_ok")),
+        })
+
+    normalized_results.sort(key=lambda r: (not r["is_mismatch"], r["hostname"]))
+
     broadcast("alert_update", {"unseen_count": db.alerts_unseen_count()})
-    return ok({"project_id": pid, "scan_id": scan_id, "scanned": len(results), "alerts_created": alerts_created})
+    return ok({
+        "project_id": pid,
+        "scan_id": scan_id,
+        "scanned": len(results),
+        "alerts_created": alerts_created,
+        "summary": {
+            "mismatches": mismatch_count,
+            "expired": expired_count,
+            "expiring": expiring_count,
+            "errors": error_count,
+        },
+        "results": normalized_results,
+    })
 
 
 @api.get("/projects/<pid>/discoveries")
