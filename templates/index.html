@@ -1387,7 +1387,12 @@ let alertSettingsCache = null;
 let genericTableObserver = null;
 
 async function apiJSON(url, opts) {
-  const resp = await fetch(url, { cache: 'no-store', ...(opts || {}) });
+  const req = { cache: 'no-store', ...(opts || {}) };
+  const hasBody = typeof req.body === 'string' && req.body.length > 0;
+  if (hasBody) {
+    req.headers = { 'Content-Type': 'application/json', ...(req.headers || {}) };
+  }
+  const resp = await fetch(url, req);
   return resp.json();
 }
 
