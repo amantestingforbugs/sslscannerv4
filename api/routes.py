@@ -829,10 +829,15 @@ def domain_enumeration_scan_to_openssl(scan_id):
     results = run_checker(hosts, max_workers=max(4, min(32, len(hosts))), collect_results=True)
     db.openssl_results_upsert_batch(pid, results, source="enum_scan")
 
+    settings = db.alert_settings_get()
+    min_days = int(settings.get("minimum_days_left") or 30)
+
     alerts_created = 0
     for row in results:
         host = row.get("hostname") or ""
-        if row.get("is_mismatch"):
+
+        if settings.get("rule_mismatch") and row.get("is_mismatch"):
+            same_scope = "same_domain" if row.get("same_base") else "different_domain"
             details = f"Certificate CN/SAN does not match {host}"
             created = db.alert_add(
                 pid,
@@ -840,8 +845,26 @@ def domain_enumeration_scan_to_openssl(scan_id):
                 "SSL Mismatch",
                 details,
                 scan_id=scan_id,
-                mismatch_scope=""
+                mismatch_scope=same_scope,
             )
+            if created:
+                alerts_created += 1
+
+        if settings.get("rule_expired") and row.get("is_expired"):
+            details = f"Certificate expired on {row.get('expiry') or 'unknown date'}"
+            created = db.alert_add(pid, host, "SSL Expired", details, scan_id=scan_id)
+            if created:
+                alerts_created += 1
+
+        if settings.get("rule_expiring") and isinstance(row.get("days_left"), int) and 0 <= row.get("days_left") <= min_days:
+            details = f"Certificate expires in {row.get('days_left')} day(s) on {row.get('expiry') or 'unknown date'}"
+            created = db.alert_add(pid, host, "SSL Expiring Soon", details, scan_id=scan_id)
+            if created:
+                alerts_created += 1
+
+        if settings.get("rule_error") and row.get("error"):
+            details = f"SSL check error: {row.get('error')}"
+            created = db.alert_add(pid, host, "SSL Error", details, scan_id=scan_id)
             if created:
                 alerts_created += 1
 
