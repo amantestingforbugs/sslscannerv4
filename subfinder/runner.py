@@ -746,38 +746,47 @@ def run_domain_enumeration_scan(domain: str, triggered_by: str = "manual") -> di
     if not root or "." not in root:
         raise ValueError("Invalid domain")
 
-    scan_id = db.domain_enum_scan_create(root, triggered_by=triggered_by, tool_summary="subfinder,dns_bruteforce,optional:assetfinder/amass/findomain")
+    scan_id = db.domain_enum_scan_create(
+        root,
+        triggered_by=triggered_by,
+        tool_summary="subfinder(all-sources),dns_bruteforce,assetfinder,amass,findomain,crtsh,bufferover,rapiddns",
+    )
     all_found: Set[str] = set()
-    source_map: Dict[str, Set[str]] = {"subfinder": set(), "dns_bruteforce": set()}
+    source_map: Dict[str, Set[str]] = {}
 
-    sf = _run_subfinder_for_root(root, timeout=220)
-    for h in (sf.get("found") or []):
-        if _is_host_within_root(h, root):
-            source_map["subfinder"].add(h)
-            all_found.add(h)
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        futures = {
+            "subfinder": pool.submit(_run_subfinder_for_root, root, 220),
+            "assetfinder": pool.submit(_run_assetfinder_for_root, root, 220),
+            "amass": pool.submit(_run_amass_passive_for_root, root, 280),
+            "crtsh": pool.submit(_query_crtsh_for_root, root, 60),
+            "bufferover": pool.submit(_query_bufferover_for_root, root, 45),
+            "rapiddns": pool.submit(_query_rapiddns_for_root, root, 45),
+        }
+        if shutil.which("findomain") or Path("/usr/local/bin/findomain").exists():
+            futures["findomain"] = pool.submit(lambda: subprocess.run(["findomain", "-t", root, "-q"], capture_output=True, text=True, timeout=240))
 
-    brute = _bruteforce_dns_hosts(root, list(source_map["subfinder"]) or [root], max_candidates=1500)
+        for src, fut in futures.items():
+            try:
+                result = fut.result()
+                if src == "subfinder":
+                    hosts = result.get("found") or []
+                elif src == "findomain":
+                    hosts = [_normalize_host(ln) for ln in (result.stdout or "").splitlines()]
+                else:
+                    hosts = result or []
+                for h in hosts:
+                    if h and _HOST_RE.match(h) and _is_host_within_root(h, root):
+                        source_map.setdefault(src, set()).add(h)
+                        all_found.add(h)
+            except Exception:
+                continue
+
+    brute = _bruteforce_dns_hosts(root, list(all_found) or [root], max_candidates=2500)
     for h in brute:
         if _is_host_within_root(h, root):
-            source_map["dns_bruteforce"].add(h)
+            source_map.setdefault("dns_bruteforce", set()).add(h)
             all_found.add(h)
-
-    for tool, cmd in (
-        ("assetfinder", ["assetfinder", "--subs-only", root]),
-        ("amass", ["amass", "enum", "-passive", "-d", root]),
-        ("findomain", ["findomain", "-t", root, "-q"]),
-    ):
-        if not shutil.which(tool):
-            continue
-        try:
-            run = subprocess.run(cmd, capture_output=True, text=True, timeout=240)
-            for ln in (run.stdout or "").splitlines():
-                h = _normalize_host(ln)
-                if h and _HOST_RE.match(h) and _is_host_within_root(h, root):
-                    all_found.add(h)
-                    source_map.setdefault(tool, set()).add(h)
-        except Exception:
-            continue
 
     for src, hosts in source_map.items():
         if hosts:
