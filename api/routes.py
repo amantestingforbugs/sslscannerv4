@@ -806,6 +806,51 @@ def domain_enumeration_scan_export(scan_id):
     )
 
 
+@api.post("/subfinder/enumeration/scans/<scan_id>/openssl")
+def domain_enumeration_scan_to_openssl(scan_id):
+    scan = db.domain_enum_scan_get(scan_id)
+    if not scan:
+        return err("Not found", 404)
+    payload = request.get_json(silent=True) or {}
+    pid = (
+        payload.get("project_id")
+        or request.form.get("project_id")
+        or request.values.get("project_id")
+        or request.args.get("project_id")
+        or ""
+    ).strip()
+    if not pid:
+        return err("project_id is required")
+    project = db.project_get(pid)
+    if not project:
+        return err("Project not found", 404)
+
+    rows = db.domain_enum_results_by_scan(scan_id)
+    hosts = sorted({(r.get("hostname") or "").strip().lower() for r in rows if r.get("hostname")})
+    if not hosts:
+        return ok({"project_id": pid, "scan_id": scan_id, "scanned": 0, "alerts_created": 0, "message": "No hosts to scan"})
+
+    results = []
+    alerts_created = 0
+    for host in hosts:
+        row = _run_openssl_subject(host)
+        results.append(row)
+        if row.get("status") != "ok" or not row.get("subject"):
+            created = db.alert_add(
+                pid,
+                host,
+                "OpenSSL Subject Check",
+                row.get("error") or "Could not fetch certificate subject",
+                scan_id=scan_id,
+                mismatch_scope=""
+            )
+            if created:
+                alerts_created += 1
+    db.openssl_results_upsert_batch(pid, results, source="enum_scan")
+    broadcast("alert_update", {"unseen_count": db.alerts_unseen_count()})
+    return ok({"project_id": pid, "scan_id": scan_id, "scanned": len(results), "alerts_created": alerts_created})
+
+
 @api.get("/projects/<pid>/discoveries")
 def project_discoveries(pid):
     page = _safe_int(request.args.get("page", 1), 1, min_value=1)
