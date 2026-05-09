@@ -169,6 +169,15 @@ button{cursor:pointer;font-family:inherit}
 
 .topbar-title{font-size:16px;font-weight:700;color:var(--text-primary)}
 .topbar-right{margin-left:auto;display:flex;align-items:center;gap:10px}
+.command-btn{border:1px solid var(--border);background:var(--bg-raised);color:var(--text-secondary);padding:6px 10px;border-radius:10px;font-size:12px;display:inline-flex;align-items:center;gap:7px}
+.command-btn kbd{font-family:var(--mono);font-size:10px;padding:1px 5px;border-radius:6px;background:var(--bg-surface);border:1px solid var(--border);color:var(--text-muted)}
+.command-palette{position:fixed;inset:0;display:none;align-items:flex-start;justify-content:center;padding-top:10vh;background:rgba(1,7,20,.48);backdrop-filter:blur(6px);z-index:2500}
+.command-palette.open{display:flex}
+.command-shell{width:min(640px,92vw);background:var(--bg-surface);border:1px solid var(--border);border-radius:16px;box-shadow:var(--shadow);overflow:hidden}
+.command-input{width:100%;border:none;border-bottom:1px solid var(--border);background:transparent;padding:14px 16px;font-size:14px;color:var(--text-primary);outline:none}
+.command-list{max-height:360px;overflow:auto;padding:8px}
+.command-item{display:flex;justify-content:space-between;align-items:center;padding:9px 12px;border-radius:10px;color:var(--text-secondary)}
+.command-item:hover,.command-item.active{background:var(--bg-hover);color:var(--text-primary)}
 
 .alert-pill{
   display:flex;align-items:center;gap:6px;
@@ -772,6 +781,7 @@ tbody tr:last-child td{border-bottom:none}
       <select id="topProjectSelect" class="topbar-select">
         <option value="">All Projects</option>
       </select>
+      <button class="command-btn" id="commandBtn" title="Quick actions"><span>Quick Actions</span><kbd>Ctrl/⌘K</kbd></button>
       <button class="notif-btn" title="Alerts" onclick="nav('alerts')">🔔</button>
       <div class="alert-pill hidden" id="alertPill" onclick="nav('alerts')">
         🔔 <span id="pillCount">0</span> new alerts
@@ -1488,6 +1498,13 @@ tbody tr:last-child td{border-bottom:none}
 
 <div class="toasts" id="toasts"></div>
 
+<div class="command-palette" id="commandPalette">
+  <div class="command-shell">
+    <input id="commandInput" class="command-input" placeholder="Search pages and actions...">
+    <div class="command-list" id="commandList"></div>
+  </div>
+</div>
+
 <script>
 'use strict';
 // ════════════════════════════════════════════════════════════
@@ -1688,6 +1705,14 @@ const PAGE_TITLES = {
   dashboard:'Dashboard', projects:'Projects', detail:'Project Detail',
   alerts:'Alerts', subfinder:'Subfinder', discoveries:'New Discoveries', 'discoveries-latest':'Latest Discovery Batch', 'subfinder-raw':'Subfinder Enumeration', nuclei:'Nuclei CVEs', openssl:'OpenSSL', logs:'Logs', settings:'Settings'
 };
+const QUICK_ACTIONS = [
+  { label: 'Open Dashboard', page: 'dashboard' },
+  { label: 'Open Projects', page: 'projects' },
+  { label: 'Open Alerts', page: 'alerts' },
+  { label: 'Open Logs', page: 'logs' },
+  { label: 'Open Settings', page: 'settings' },
+  { label: 'Toggle Theme', action: () => setTheme(document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark') }
+];
 
 function nav(name) {
   document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
@@ -1721,6 +1746,46 @@ const menuBtn = document.getElementById('mobileMenuBtn');
 const sidebarOverlay = document.getElementById('sidebarOverlay');
 menuBtn?.addEventListener('click', () => document.body.classList.toggle('sidebar-open'));
 sidebarOverlay?.addEventListener('click', () => document.body.classList.remove('sidebar-open'));
+
+const commandPalette = document.getElementById('commandPalette');
+const commandInput = document.getElementById('commandInput');
+const commandList = document.getElementById('commandList');
+function renderCommandList(term='') {
+  const q = term.trim().toLowerCase();
+  const matches = QUICK_ACTIONS.filter(a => a.label.toLowerCase().includes(q));
+  commandList.innerHTML = matches.map((item, idx) => `
+    <button class="command-item ${idx===0?'active':''}" data-idx="${idx}" style="width:100%;border:none;background:none;text-align:left">
+      <span>${esc(item.label)}</span>
+      <span style="font-size:11px;color:var(--text-muted)">${item.page ? 'Go to page' : 'Action'}</span>
+    </button>
+  `).join('') || `<div class="command-item">No matching actions.</div>`;
+  commandList.querySelectorAll('.command-item[data-idx]').forEach(btn => btn.addEventListener('click', () => runQuickAction(matches[Number(btn.dataset.idx)])));
+}
+function openCommandPalette() {
+  commandPalette.classList.add('open');
+  commandInput.value = '';
+  renderCommandList('');
+  setTimeout(() => commandInput.focus(), 0);
+}
+function closeCommandPalette() { commandPalette.classList.remove('open'); }
+function runQuickAction(item) {
+  if (!item) return;
+  if (item.page) nav(item.page);
+  if (item.action) item.action();
+  closeCommandPalette();
+}
+document.getElementById('commandBtn')?.addEventListener('click', openCommandPalette);
+commandInput?.addEventListener('input', e => renderCommandList(e.target.value));
+commandInput?.addEventListener('keydown', e => {
+  if (e.key === 'Enter') commandList.querySelector('.command-item[data-idx]')?.click();
+  if (e.key === 'Escape') closeCommandPalette();
+});
+commandPalette?.addEventListener('click', e => { if (e.target === commandPalette) closeCommandPalette(); });
+window.addEventListener('keydown', e => {
+  const k = e.key.toLowerCase();
+  if ((e.ctrlKey || e.metaKey) && k === 'k') { e.preventDefault(); openCommandPalette(); }
+  if (k === 'escape' && commandPalette?.classList.contains('open')) closeCommandPalette();
+});
 
 // ════════════════════════════════════════════════════════════
 // UTILS
