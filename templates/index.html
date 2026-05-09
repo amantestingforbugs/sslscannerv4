@@ -2742,7 +2742,7 @@ async function loadSfRawPage() {
 async function runDomainEnumeration() {
   const domain = (document.getElementById('enum-domain-input').value||'').trim();
   if (!domain) return toast('Enter a domain', 'err');
-  const { ok, error } = await apiJSON('/api/subfinder/enumeration/run', { method:'POST', body: JSON.stringify({ domain }) });
+  const { ok, error } = await apiJSON('/api/subfinder/enumeration/run', { method:'POST', headers:{ 'Content-Type':'application/json' }, body: JSON.stringify({ domain }) });
   if (!ok) return toast(error || 'Enumeration failed', 'err');
   toast('Enumeration finished', 'ok');
   await loadSfRawPage();
