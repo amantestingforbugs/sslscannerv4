@@ -550,6 +550,61 @@ def _query_wayback_for_root(root_domain: str, timeout: int = 45) -> List[str]:
         return []
 
 
+
+
+def _mutation_labels_from_hosts(root_domain: str, known_hosts: List[str], max_labels: int = 120) -> List[str]:
+    labels: Set[str] = set()
+    for host in known_hosts:
+        if not _is_host_within_root(host, root_domain):
+            continue
+        left = host[:-len(root_domain)].rstrip('.')
+        if not left:
+            continue
+        for part in left.split('.'):
+            token = (part or '').strip().lower()
+            if re.fullmatch(r"[a-z0-9-]{2,32}", token):
+                labels.add(token)
+                if '-' in token:
+                    labels.update(x for x in token.split('-') if re.fullmatch(r"[a-z0-9]{2,16}", x))
+    return sorted(labels)[:max_labels]
+
+
+def _generate_permutation_candidates(root_domain: str, known_hosts: List[str], max_candidates: int = 1200) -> Set[str]:
+    seed_labels = _mutation_labels_from_hosts(root_domain, known_hosts)
+    brute_labels = _brute_labels()
+    candidates: Set[str] = set()
+    for base in seed_labels[:60]:
+        for prefix in ("dev", "staging", "prod", "internal", "edge", "api", "old", "new"):
+            candidates.add(f"{prefix}-{base}.{root_domain}")
+        for suffix in ("dev", "stg", "prod", "v2", "v3", "int"):
+            candidates.add(f"{base}-{suffix}.{root_domain}")
+    for left in seed_labels[:35]:
+        for right in brute_labels[:18]:
+            candidates.add(f"{left}.{right}.{root_domain}")
+            candidates.add(f"{right}.{left}.{root_domain}")
+    filtered = {c for c in candidates if _HOST_RE.match(c)}
+    if max_candidates > 0 and len(filtered) > max_candidates:
+        return set(sorted(filtered)[:max_candidates])
+    return filtered
+
+
+def _permutation_dns_hosts(root_domain: str, known_hosts: List[str], max_candidates: int = 1200) -> List[str]:
+    candidates = sorted(_generate_permutation_candidates(root_domain, known_hosts, max_candidates=max_candidates))
+    if not candidates:
+        return []
+    resolved: List[str] = []
+    workers = max(8, min(96, len(candidates)))
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        futures = {pool.submit(_host_resolves, host): host for host in candidates}
+        for future in as_completed(futures):
+            host = futures[future]
+            try:
+                if future.result():
+                    resolved.append(host)
+            except Exception:
+                continue
+    return sorted(set(resolved))
+
 def run_subfinder_for_project(project_id: str, triggered_by: str = "scheduler") -> Optional[str]:
     """
     Full subfinder pipeline for a project:
@@ -593,6 +648,7 @@ def run_subfinder_for_project(project_id: str, triggered_by: str = "scheduler") 
         project_id=project_id,
         root_domains=root_domains,
         status="running",
+        feature_set=["subfinder","osint","dns_bruteforce","dns_permutation"],
     )
 
     job_id = subfinder_job_create(project_id, ",".join(root_domains), triggered_by)
@@ -603,6 +659,7 @@ def run_subfinder_for_project(project_id: str, triggered_by: str = "scheduler") 
     try:
         raw_records = []
         discovered_all: List[str] = []
+        source_counts: Dict[str, int] = {}
         raw_ids = {
             root_domain: subfinder_raw_result_add(
                 job_id=job_id,
@@ -628,6 +685,7 @@ def run_subfinder_for_project(project_id: str, triggered_by: str = "scheduler") 
                     }
                 )
                 discovered_all.extend(run["found"])
+                source_counts["subfinder"] = source_counts.get("subfinder", 0) + len(run["found"])
                 subfinder_raw_result_finish(
                     raw_ids[root_domain],
                     run["status"],
@@ -647,20 +705,35 @@ def run_subfinder_for_project(project_id: str, triggered_by: str = "scheduler") 
                     log.warning("Subfinder returned 0 results — check sources/config (root=%s)", root_domain)
 
         discovered = sorted(set(discovered_all))
-        for root_domain in root_domains:
-            discovered.extend(_run_assetfinder_for_root(root_domain))
-            discovered.extend(_run_amass_passive_for_root(root_domain))
-            discovered.extend(_query_crtsh_for_root(root_domain))
-            discovered.extend(_query_bufferover_for_root(root_domain))
-            discovered.extend(_query_rapiddns_for_root(root_domain))
+        osint_sources = {
+            "assetfinder": _run_assetfinder_for_root,
+            "amass": _run_amass_passive_for_root,
+            "crtsh": _query_crtsh_for_root,
+            "bufferover": _query_bufferover_for_root,
+            "rapiddns": _query_rapiddns_for_root,
+            "hackertarget": _query_hackertarget_for_root,
+            "certspotter": _query_certspotter_for_root,
+            "wayback": _query_wayback_for_root,
+        }
+        for source_name, source_fn in osint_sources.items():
+            for root_domain in root_domains:
+                found = source_fn(root_domain)
+                if found:
+                    discovered.extend(found)
+                    source_counts[source_name] = source_counts.get(source_name, 0) + len(found)
         discovered = sorted(set(discovered))
         brute_discovered: Set[str] = set()
+        permutation_discovered: Set[str] = set()
         if _dns_bruteforce_enabled():
             for root_domain in root_domains:
                 brute_discovered.update(_bruteforce_dns_hosts(root_domain, discovered + root_domains))
+                permutation_discovered.update(_permutation_dns_hosts(root_domain, discovered + root_domains))
             if brute_discovered:
-                log.info("Subfinder brute-force DNS discovered %d additional hosts", len(brute_discovered))
+                source_counts["dns_bruteforce"] = len(brute_discovered)
                 discovered = sorted(set(discovered) | brute_discovered)
+            if permutation_discovered:
+                source_counts["dns_permutation"] = len(permutation_discovered)
+                discovered = sorted(set(discovered) | permutation_discovered)
         else:
             log.info("DNS brute-force discovery disabled via DNS_BRUTEFORCE_ENABLED")
         new_count, new_hosts = subfinder_hosts_add_batch(project_id, discovered)
@@ -674,6 +747,7 @@ def run_subfinder_for_project(project_id: str, triggered_by: str = "scheduler") 
         with gzip.open(raw_output_path, "wt", encoding="utf-8") as fp:
             json.dump(raw_records, fp, separators=(",", ":"))
         subfinder_job_finish(job_id, new_count, len(discovered), str(raw_output_path))
+        log_event("subfinder", "info", "Enumeration source summary", project_id=project_id, job_id=job_id, sources=source_counts, total_discovered=len(discovered))
 
         if not discovered:
             log.warning("Subfinder returned 0 results — check sources/config")
