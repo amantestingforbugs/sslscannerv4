@@ -625,6 +625,10 @@ tbody tr:last-child td{border-bottom:none}
       <svg fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path d="M4 4h16v16H4z"/><path d="M8 8h8M8 12h8M8 16h5"/></svg>
       <span>Subfinder Raw Results</span>
     </button>
+    <button class="nav-item" data-page="nuclei">
+      <svg fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path d="M4 4h16v16H4z"/><path d="M8 8h8M8 12h8M8 16h6"/></svg>
+      <span>Nuclei CVEs</span>
+    </button>
     <button class="nav-item" data-page="openssl">
       <svg fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path d="M12 2v20"/><path d="M5 7h14"/><path d="M5 17h14"/><circle cx="12" cy="12" r="3"/></svg>
       <span>OpenSSL</span>
@@ -1114,6 +1118,35 @@ tbody tr:last-child td{border-bottom:none}
       </div>
     </div>
 
+
+
+    <div class="page" id="page-nuclei">
+      <div class="page-header">
+        <div>
+          <div class="page-title">Nuclei CVE Scan</div>
+          <div class="page-sub">Scan newly discovered Subfinder hosts for medium/high/critical CVEs.</div>
+        </div>
+      </div>
+      <div class="form-row" style="margin-bottom:14px;max-width:760px">
+        <div class="form-group">
+          <label class="form-label">Project</label>
+          <select class="form-input" id="nuclei-project-select"><option value="">— Choose a project —</option></select>
+        </div>
+        <button class="btn btn-primary" style="height:36px" id="nuclei-run-btn" onclick="runNucleiScan()">▶ Run Nuclei (Medium+)</button>
+      </div>
+      <div class="card">
+        <div class="card-body" style="padding-bottom:8px">
+          <div id="nuclei-meta" style="font-size:12px;color:var(--text-secondary);margin-bottom:10px">Choose a project to run nuclei.</div>
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>Host</th><th>Severity</th><th>Template</th><th>Name</th><th>Matched At</th></tr></thead>
+              <tbody id="nuclei-body"><tr><td colspan="5" style="text-align:center;padding:16px;color:var(--text-muted)">No nuclei results yet.</td></tr></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </div>
+
     <div class="page" id="page-openssl">
       <div class="page-header">
         <div>
@@ -1515,7 +1548,7 @@ setInterval(tick,1000); tick();
 // ════════════════════════════════════════════════════════════
 const PAGE_TITLES = {
   dashboard:'Dashboard', projects:'Projects', detail:'Project Detail',
-  alerts:'Alerts', subfinder:'Subfinder', discoveries:'New Discoveries', 'discoveries-latest':'Latest Discovery Batch', 'subfinder-raw':'Subfinder Raw Results', openssl:'OpenSSL', logs:'Logs', settings:'Settings'
+  alerts:'Alerts', subfinder:'Subfinder', discoveries:'New Discoveries', 'discoveries-latest':'Latest Discovery Batch', 'subfinder-raw':'Subfinder Raw Results', nuclei:'Nuclei CVEs', openssl:'OpenSSL', logs:'Logs', settings:'Settings'
 };
 
 function nav(name) {
@@ -1533,6 +1566,7 @@ function nav(name) {
   if (name==='discoveries') initDiscoveriesPage();
   if (name==='discoveries-latest') initLatestDiscoveriesPage();
   if (name==='subfinder-raw') initSfRawPage();
+  if (name==='nuclei') initNucleiPage();
   if (name==='openssl') initOpenSSLPage();
   if (name==='logs') loadLogsPage();
   if (name==='settings') loadAlertSettings();
@@ -2789,6 +2823,56 @@ setInterval(() => {
     loadLatestDiscoveries();
   }
 }, 8000);
+
+
+
+async function initNucleiPage() {
+  const projs = projectsCache.length ? projectsCache : ((await apiJSON('/api/projects')).data || []);
+  const sel = document.getElementById('nuclei-project-select');
+  const cur = sel.value;
+  sel.innerHTML = '<option value="">— Choose a project —</option>' + projs.map(p => `<option value="${p.id}">${esc(p.name)}</option>`).join('');
+  if (cur) sel.value = cur;
+  if (!sel.value && projs.length) sel.value = projs[0].id;
+}
+
+function renderNucleiRows(rows) {
+  const body = document.getElementById('nuclei-body');
+  if (!rows.length) {
+    body.innerHTML = '<tr><td colspan="5" style="text-align:center;padding:16px;color:var(--text-muted)">No findings.</td></tr>';
+    return;
+  }
+  body.innerHTML = rows.map(r => `<tr>
+    <td style="font-family:var(--mono);font-size:12px">${esc(r.host || r.matched_at || '—')}</td>
+    <td><span class="badge ${r.info?.severity==='critical'?'badge-expired':r.info?.severity==='high'?'badge-mismatch':'badge-expiring'}">${esc(r.info?.severity || 'unknown')}</span></td>
+    <td style="font-family:var(--mono);font-size:11px">${esc(r.template_id || '—')}</td>
+    <td>${esc(r.info?.name || '—')}</td>
+    <td style="font-size:11px;color:var(--text-muted)">${esc(r.matched_at || '—')}</td>
+  </tr>`).join('');
+}
+
+async function runNucleiScan() {
+  const pid = document.getElementById('nuclei-project-select').value;
+  if (!pid) return toast('Please choose a project', 'err');
+  const btn = document.getElementById('nuclei-run-btn');
+  const meta = document.getElementById('nuclei-meta');
+  btn.disabled = true;
+  meta.textContent = 'Running nuclei scan on newly discovered hosts...';
+  try {
+    const { ok, data, error } = await fetch(`/api/projects/${pid}/nuclei/scan-new-discoveries`, { method: 'POST' }).then(r => r.json());
+    if (!ok) {
+      meta.textContent = error || 'Nuclei scan failed';
+      renderNucleiRows([]);
+      return;
+    }
+    meta.textContent = `Scanned ${fmt(data?.hosts_scanned || 0)} newly discovered hosts · Findings: ${fmt(data?.findings_total || 0)} · Severity: medium/high/critical`;
+    renderNucleiRows(data?.findings || []);
+    toast('Nuclei scan complete', 'ok');
+  } catch {
+    meta.textContent = 'Nuclei scan failed';
+  } finally {
+    btn.disabled = false;
+  }
+}
 
 // ════════════════════════════════════════════════════════════
 // INIT
