@@ -2951,7 +2951,7 @@ async function loadSfRawPage() {
         <button class="btn btn-sm" onclick="openEnumScan('${rr.id}')">Open</button>
         <button class="btn btn-sm" onclick="exportEnumScan('${rr.id}','txt')">Export Text</button>
         <button class="btn btn-sm" onclick="exportEnumScan('${rr.id}','csv')">Export CSV</button>
-        <button class="btn btn-sm" onclick="sendEnumToOpenSSL('${rr.id}')">Send to OpenSSL</button>
+        <button class="btn btn-sm" onclick="runEnumSSLCheck('${rr.id}')">SSL Check</button>
         <button class="btn btn-sm" style="border-color:#ef4444;color:#ef4444" onclick="deleteEnumScan('${rr.id}')">Delete</button>
       </td>
     </tr>`;
@@ -2986,16 +2986,14 @@ async function runDomainEnumeration() {
   await loadSfRawPage();
 }
 
-async function sendEnumToOpenSSL(scanId) {
-  const pid = (document.getElementById('openssl-project-select')?.value || '').trim();
-  if (!pid) return toast('Choose a project in OpenSSL page first', 'err');
-  toast('OpenSSL scan started from enumeration results', 'ok');
+async function runEnumSSLCheck(scanId) {
+  toast('SSL check started from enumeration results', 'ok');
   const { ok, data, error } = await apiJSON(`/api/subfinder/enumeration/scans/${scanId}/openssl`, {
     method:'POST',
-    body: JSON.stringify({ project_id: pid })
+    body: JSON.stringify({})
   });
-  if (!ok) return toast(error || 'Failed to send to OpenSSL', 'err');
-  toast(`OpenSSL done: ${fmt(data?.scanned || 0)} scanned, ${fmt(data?.alerts_created || 0)} alert(s)`, 'ok');
+  if (!ok) return toast(error || 'Failed to run SSL check', 'err');
+  toast(`SSL check done: ${fmt(data?.scanned || 0)} scanned, ${fmt(data?.alerts_created || 0)} alert(s)`, 'ok');
 }
 
 async function openEnumScan(scanId) {
