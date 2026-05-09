@@ -2951,7 +2951,6 @@ async function loadSfRawPage() {
         <button class="btn btn-sm" onclick="openEnumScan('${rr.id}')">Open</button>
         <button class="btn btn-sm" onclick="exportEnumScan('${rr.id}','txt')">Export Text</button>
         <button class="btn btn-sm" onclick="exportEnumScan('${rr.id}','csv')">Export CSV</button>
-        <button class="btn btn-sm" onclick="runEnumSSLCheck('${rr.id}')">SSL Check</button>
         <button class="btn btn-sm" style="border-color:#ef4444;color:#ef4444" onclick="deleteEnumScan('${rr.id}')">Delete</button>
       </td>
     </tr>`;
@@ -2984,16 +2983,6 @@ async function runDomainEnumeration() {
   if (!ok) return toast(error || 'Enumeration failed', 'err');
   toast('Enumeration finished', 'ok');
   await loadSfRawPage();
-}
-
-async function runEnumSSLCheck(scanId) {
-  toast('SSL check started from enumeration results', 'ok');
-  const { ok, data, error } = await apiJSON(`/api/subfinder/enumeration/scans/${scanId}/openssl`, {
-    method:'POST',
-    body: JSON.stringify({})
-  });
-  if (!ok) return toast(error || 'Failed to run SSL check', 'err');
-  toast(`SSL check done: ${fmt(data?.scanned || 0)} scanned, ${fmt(data?.alerts_created || 0)} alert(s)`, 'ok');
 }
 
 async function openEnumScan(scanId) {
