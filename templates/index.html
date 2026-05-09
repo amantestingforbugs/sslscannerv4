@@ -1268,6 +1268,10 @@ tbody tr:last-child td{border-bottom:none}
         <div class="card-header"><span class="card-title">Selected Scan Results</span></div>
         <div class="table-wrap"><table><thead><tr><th>Hostname</th><th>Source</th><th>Discovered</th></tr></thead><tbody id="sf-enum-results-body"></tbody></table></div>
       </div>
+      <div class="card">
+        <div class="card-header"><span class="card-title">SSL Results (from Enumeration Scan)</span><span id="sf-enum-ssl-summary" style="font-size:12px;color:var(--text-muted)">Run SSL Check to view mismatch results.</span></div>
+        <div class="table-wrap"><table><thead><tr><th>Hostname</th><th>SSL Status</th><th>CN</th><th>Expiry</th></tr></thead><tbody id="sf-enum-ssl-body"><tr><td colspan="4" style="text-align:center;padding:16px;color:var(--text-muted)">No SSL results yet for this enumeration scan.</td></tr></tbody></table></div>
+      </div>
     </div>
 
 
@@ -2973,6 +2977,8 @@ async function deleteEnumScan(scanId) {
   if (!ok) return toast(error || 'Delete failed', 'err');
   toast('Enumeration scan deleted', 'ok');
   document.getElementById('sf-enum-results-body').innerHTML = '<tr><td colspan="3" style="text-align:center;padding:16px;color:var(--text-muted)">Select a scan to view results.</td></tr>';
+  document.getElementById('sf-enum-ssl-summary').textContent = 'Run SSL Check to view mismatch results.';
+  document.getElementById('sf-enum-ssl-body').innerHTML = '<tr><td colspan="4" style="text-align:center;padding:16px;color:var(--text-muted)">No SSL results yet for this enumeration scan.</td></tr>';
   await loadSfRawPage();
 }
 
@@ -2986,6 +2992,19 @@ async function runDomainEnumeration() {
   await loadSfRawPage();
 }
 
+function renderEnumSSLResults(data) {
+  const body = document.getElementById('sf-enum-ssl-body');
+  const summary = document.getElementById('sf-enum-ssl-summary');
+  const rows = data?.results || [];
+  const s = data?.summary || {};
+  summary.textContent = `${fmt(data?.scanned || 0)} scanned • ${fmt(s.mismatches || 0)} mismatches • ${fmt(s.expired || 0)} expired • ${fmt(s.expiring || 0)} expiring • ${fmt(s.errors || 0)} errors`;
+  if (!rows.length) {
+    body.innerHTML = '<tr><td colspan="4" style="text-align:center;padding:16px;color:var(--text-muted)">No SSL results were returned.</td></tr>';
+    return;
+  }
+  body.innerHTML = rows.map(r => `<tr class="${r.is_mismatch ? 'row-mismatch' : ''}"><td style="font-family:var(--mono)">${esc(r.hostname)}</td><td>${sbadge(r)}</td><td style="font-size:12px;color:var(--text-secondary)">${esc(r.cn || r.error || '—')}</td><td style="font-size:12px">${r.expiry || '—'}</td></tr>`).join('');
+}
+
 async function runEnumSSLCheck(scanId) {
   toast('SSL check started from enumeration results', 'ok');
   const { ok, data, error } = await apiJSON(`/api/subfinder/enumeration/scans/${scanId}/openssl`, {
@@ -2993,12 +3012,15 @@ async function runEnumSSLCheck(scanId) {
     body: JSON.stringify({})
   });
   if (!ok) return toast(error || 'Failed to run SSL check', 'err');
-  toast(`SSL check done: ${fmt(data?.scanned || 0)} scanned, ${fmt(data?.alerts_created || 0)} alert(s)`, 'ok');
+  renderEnumSSLResults(data);
+  toast(`SSL check done: ${fmt(data?.scanned || 0)} scanned, ${fmt(data?.summary?.mismatches || 0)} mismatch(es), ${fmt(data?.alerts_created || 0)} alert(s)`, 'ok');
 }
 
 async function openEnumScan(scanId) {
   const { data } = await apiJSON(`/api/subfinder/enumeration/scans/${scanId}`);
   const body = document.getElementById('sf-enum-results-body');
+  document.getElementById('sf-enum-ssl-summary').textContent = 'Run SSL Check to view mismatch results.';
+  document.getElementById('sf-enum-ssl-body').innerHTML = '<tr><td colspan="4" style="text-align:center;padding:16px;color:var(--text-muted)">No SSL results yet for this enumeration scan.</td></tr>';
   const rows = data?.results || [];
   body.innerHTML = rows.length ? rows.map(r => `<tr><td style="font-family:var(--mono)">${esc(r.hostname)}</td><td>${esc(r.source||'mixed')}</td><td style="font-size:12px;color:var(--text-secondary)">${new Date(r.discovered_at).toLocaleString()}</td></tr>`).join('')
     : '<tr><td colspan="3" style="text-align:center;padding:16px;color:var(--text-muted)">No results found for this scan.</td></tr>';
