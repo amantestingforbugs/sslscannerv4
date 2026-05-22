@@ -597,6 +597,68 @@ def _query_wayback_for_root(root_domain: str, timeout: int = 45) -> List[str]:
     except Exception:
         return []
 
+def _extract_hosts_from_text(body: str, root_domain: str) -> Set[str]:
+    found: Set[str] = set()
+    if not body:
+        return found
+    pattern = re.compile(rf"\b(?:[a-zA-Z0-9-]+\.)+{re.escape(root_domain)}\b", re.IGNORECASE)
+    for match in pattern.findall(body):
+        host = _normalize_host(match)
+        if host and _HOST_RE.match(host) and _is_host_within_root(host, root_domain):
+            found.add(host)
+    return found
+
+
+def _query_common_web_artifacts_for_root(root_domain: str, timeout: int = 25) -> List[str]:
+    """Collect subdomains from robots/sitemap/security.txt/crossdomain.xml endpoints."""
+    endpoints = (
+        f"https://{root_domain}/robots.txt",
+        f"https://{root_domain}/sitemap.xml",
+        f"https://{root_domain}/.well-known/security.txt",
+        f"https://{root_domain}/crossdomain.xml",
+        f"http://{root_domain}/robots.txt",
+    )
+    found: Set[str] = set()
+    for url in endpoints:
+        try:
+            req = Request(url, headers={"User-Agent": "ssl-sentinel/1.0"})
+            ctx = ssl.create_default_context()
+            with urlopen(req, timeout=timeout, context=ctx) as res:
+                if res.status and int(res.status) >= 400:
+                    continue
+                body = res.read().decode("utf-8", errors="replace")
+            found.update(_extract_hosts_from_text(body, root_domain))
+        except Exception:
+            continue
+    return sorted(found)
+
+
+def _query_tls_san_hosts_for_root(root_domain: str, timeout: int = 8) -> List[str]:
+    """Expand subdomains from live TLS certificates SAN list on apex and common web hosts."""
+    scan_hosts = (
+        root_domain,
+        f"www.{root_domain}",
+        f"api.{root_domain}",
+        f"app.{root_domain}",
+    )
+    ctx = ssl.create_default_context()
+    ctx.check_hostname = False
+    ctx.verify_mode = ssl.CERT_NONE
+    found: Set[str] = set()
+    for target in scan_hosts:
+        try:
+            with socket.create_connection((target, 443), timeout=timeout) as sock:
+                with ctx.wrap_socket(sock, server_hostname=target) as tls:
+                    cert = tls.getpeercert()
+            for token in cert.get("subjectAltName", []):
+                if not isinstance(token, tuple) or len(token) != 2 or token[0] != "DNS":
+                    continue
+                host = _normalize_host(str(token[1]))
+                if host and _HOST_RE.match(host) and _is_host_within_root(host, root_domain):
+                    found.add(host)
+        except Exception:
+            continue
+    return sorted(found)
 
 
 
@@ -765,6 +827,8 @@ def run_subfinder_for_project(project_id: str, triggered_by: str = "scheduler") 
             "alienvault_otx": _query_alienvault_otx_for_root,
             "threatcrowd": _query_threatcrowd_for_root,
             "urlscan": _query_urlscan_for_root,
+            "web_artifacts": _query_common_web_artifacts_for_root,
+            "tls_san": _query_tls_san_hosts_for_root,
         }
         for source_name, source_fn in osint_sources.items():
             for root_domain in root_domains:
