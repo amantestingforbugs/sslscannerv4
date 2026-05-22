@@ -867,15 +867,31 @@ def toggle_subfinder(pid):
 
 
 
-@api.post("/projects/<pid>/nuclei/scan-new-discoveries")
-def nuclei_scan_new_discoveries(pid):
+def _resolve_nuclei_hosts(pid: str, mode: str) -> list[str]:
+    if mode == "all_subdomains":
+        hosts = {(h or "").strip().lower() for h in db.project_hosts(pid)}
+        rows = db.x("SELECT hostname FROM subfinder_hosts WHERE project_id=?", (pid,)).fetchall()
+        hosts |= {(r["hostname"] or "").strip().lower() for r in rows}
+        return sorted(h for h in hosts if h)
+
+    hosts_data = db.subfinder_discoveries(pid, page=1, per_page=5000, search="", mode="latest")
+    return sorted({(r.get("hostname") or "").strip().lower() for r in (hosts_data.get("rows") or []) if (r.get("hostname") or "").strip()})
+
+
+@api.post("/projects/<pid>/nuclei/scan")
+def nuclei_scan_hosts(pid):
     p = db.project_get(pid)
     if not p:
         return err("Project not found", 404)
 
-    hosts_data = db.subfinder_discoveries(pid, page=1, per_page=5000, search="", mode="latest")
-    hosts = sorted({(r.get("hostname") or "").strip().lower() for r in (hosts_data.get("rows") or []) if (r.get("hostname") or "").strip()})
+    mode = (request.args.get("mode", "latest_discoveries") or "latest_discoveries").strip().lower()
+    if mode not in {"latest_discoveries", "all_subdomains"}:
+        return err("Invalid mode. Use latest_discoveries or all_subdomains", 400)
+
+    hosts = _resolve_nuclei_hosts(pid, mode)
     if not hosts:
+        if mode == "all_subdomains":
+            return err("No subdomains found for this project", 400)
         return err("No newly discovered hosts found for this project", 400)
 
     try:
@@ -910,6 +926,7 @@ def nuclei_scan_new_discoveries(pid):
         return ok({
             "project_id": pid,
             "project_name": p["name"],
+            "scan_mode": mode,
             "hosts_scanned": len(hosts),
             "severities": ["medium", "high", "critical"],
             "command": "nuclei -l <hosts_file> -severity medium,high,critical -jsonl -silent",
@@ -924,6 +941,11 @@ def nuclei_scan_new_discoveries(pid):
         return err("nuclei binary not found", 400)
     except Exception as e:
         return err(f"Nuclei scan failed: {e}", 500)
+
+
+@api.post("/projects/<pid>/nuclei/scan-new-discoveries")
+def nuclei_scan_new_discoveries(pid):
+    return nuclei_scan_hosts(pid)
 @api.post("/projects/<pid>/openssl")
 def openssl_subjects(pid):
     p = db.project_get(pid)
