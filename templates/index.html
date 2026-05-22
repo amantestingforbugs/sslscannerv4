@@ -228,6 +228,14 @@ button{cursor:pointer;font-family:inherit}
   100%{background-position:6% -3%,-5% 4%}
 }
 
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation: none !important;
+    transition: none !important;
+    scroll-behavior: auto !important;
+  }
+}
+
 /* ════════════════════════════════════════════════════════════
    PAGES
 ════════════════════════════════════════════════════════════ */
@@ -1608,6 +1616,9 @@ let quickSortDir = 1;
 let quickRenderTimer = null;
 let alertSettingsCache = null;
 let genericTableObserver = null;
+let pendingLogEntries = [];
+let logFlushTimer = null;
+let opensslRenderTimer = null;
 
 async function apiJSON(url, opts) {
   const req = { cache: 'no-store', ...(opts || {}) };
@@ -1931,10 +1942,7 @@ function connectSSE() {
   es.addEventListener('alert_update', e => {
     const d = JSON.parse(e.data);
     updateAlertBadge(d.unseen_count);
-    // If alerts page is open, reload it
-    if (document.getElementById('page-alerts').classList.contains('active')) {
-      loadAlerts();
-    }
+    queueAlertsRefresh();
   });
 
   es.addEventListener('scan_update', e => {
@@ -1964,8 +1972,7 @@ function connectSSE() {
     if (!d?.row || d.project_id !== opensslPid) return;
     const idx = opensslRows.findIndex(r => r.hostname === d.row.hostname);
     if (idx >= 0) opensslRows[idx] = d.row; else opensslRows.push(d.row);
-    opensslRows.sort((a, b) => (a.hostname || '').localeCompare(b.hostname || ''));
-    renderOpenSSLRows(opensslRows);
+    queueOpenSSLRender();
   });
   es.addEventListener('openssl_status', e => {
     const d = JSON.parse(e.data || '{}');
@@ -2004,6 +2011,16 @@ function connectSSE() {
   };
 }
 connectSSE();
+
+let alertsRefreshTimer = null;
+function queueAlertsRefresh() {
+  if (!document.getElementById('page-alerts').classList.contains('active')) return;
+  if (alertsRefreshTimer) return;
+  alertsRefreshTimer = setTimeout(() => {
+    alertsRefreshTimer = null;
+    loadAlerts();
+  }, 500);
+}
 
 // ════════════════════════════════════════════════════════════
 // ALERT BADGE
@@ -2119,8 +2136,15 @@ async function loadLogsPage() {
 
 function appendLogRow(entry) {
   if (!entry || !document.getElementById('page-dashboard').classList.contains('active')) return;
-  loadLogs();
-  loadSystemOverview();
+  pendingLogEntries.push(entry);
+  if (pendingLogEntries.length > 25) pendingLogEntries = pendingLogEntries.slice(-25);
+  if (logFlushTimer) return;
+  logFlushTimer = setTimeout(() => {
+    logFlushTimer = null;
+    loadLogs();
+    loadSystemOverview();
+    pendingLogEntries = [];
+  }, 1000);
 }
 
 async function refreshActiveScans() {
@@ -2439,6 +2463,15 @@ function renderOpenSSLRows(rows) {
     <td style="font-family:var(--mono);font-size:11px;max-width:700px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(r.subject || r.error || '—')}">${esc(r.subject || r.error || '—')}</td>
     <td style="font-size:11px;color:var(--text-muted)">${r.last_checked ? new Date(r.last_checked).toLocaleString() : '—'}</td>
   </tr>`).join('');
+}
+
+function queueOpenSSLRender() {
+  if (opensslRenderTimer) return;
+  opensslRenderTimer = requestAnimationFrame(() => {
+    opensslRenderTimer = null;
+    opensslRows.sort((a, b) => (a.hostname || '').localeCompare(b.hostname || ''));
+    renderOpenSSLRows(opensslRows);
+  });
 }
 
 async function initOpenSSLPage() {
