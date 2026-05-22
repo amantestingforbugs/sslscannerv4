@@ -529,6 +529,54 @@ def _query_certspotter_for_root(root_domain: str, timeout: int = 40) -> List[str
         return []
 
 
+
+
+def _query_alienvault_otx_for_root(root_domain: str, timeout: int = 40) -> List[str]:
+    """Pull passive DNS hostnames from AlienVault OTX."""
+    url = f"https://otx.alienvault.com/api/v1/indicators/domain/{root_domain}/passive_dns"
+    try:
+        payload = _http_json_with_retries(url, timeout=timeout, retries=3)
+        found: Set[str] = set()
+        for row in (payload or {}).get("passive_dns") or []:
+            host = _normalize_host(str(row.get("hostname") or row.get("host") or ""))
+            if host and _HOST_RE.match(host) and _is_host_within_root(host, root_domain):
+                found.add(host)
+        return sorted(found)
+    except Exception:
+        return []
+
+
+def _query_threatcrowd_for_root(root_domain: str, timeout: int = 35) -> List[str]:
+    """Pull historical subdomains from ThreatCrowd."""
+    url = f"https://www.threatcrowd.org/searchApi/v2/domain/report/?domain={root_domain}"
+    try:
+        payload = _http_json_with_retries(url, timeout=timeout, retries=2)
+        found: Set[str] = set()
+        for token in (payload or {}).get("subdomains") or []:
+            host = _normalize_host(str(token))
+            if host and _HOST_RE.match(host) and _is_host_within_root(host, root_domain):
+                found.add(host)
+        return sorted(found)
+    except Exception:
+        return []
+
+
+def _query_urlscan_for_root(root_domain: str, timeout: int = 45) -> List[str]:
+    """Pull related hostnames from public URLScan search index."""
+    url = f"https://urlscan.io/api/v1/search/?q=domain:{root_domain}&size=100"
+    try:
+        payload = _http_json_with_retries(url, timeout=timeout, retries=3)
+        found: Set[str] = set()
+        for row in (payload or {}).get("results") or []:
+            task = row.get("task") or {}
+            page = row.get("page") or {}
+            for token in (task.get("domain"), page.get("domain"), page.get("apexDomain")):
+                host = _normalize_host(str(token or ""))
+                if host and _HOST_RE.match(host) and _is_host_within_root(host, root_domain):
+                    found.add(host)
+        return sorted(found)
+    except Exception:
+        return []
 def _query_wayback_for_root(root_domain: str, timeout: int = 45) -> List[str]:
     """Harvest hostnames from Internet Archive CDX URLs index."""
     url = (
@@ -714,6 +762,9 @@ def run_subfinder_for_project(project_id: str, triggered_by: str = "scheduler") 
             "hackertarget": _query_hackertarget_for_root,
             "certspotter": _query_certspotter_for_root,
             "wayback": _query_wayback_for_root,
+            "alienvault_otx": _query_alienvault_otx_for_root,
+            "threatcrowd": _query_threatcrowd_for_root,
+            "urlscan": _query_urlscan_for_root,
         }
         for source_name, source_fn in osint_sources.items():
             for root_domain in root_domains:
@@ -901,7 +952,7 @@ def run_domain_enumeration_scan(domain: str, triggered_by: str = "manual") -> di
     scan_id = db.domain_enum_scan_create(
         root,
         triggered_by=triggered_by,
-        tool_summary="subfinder(all-sources),dns_bruteforce,assetfinder,amass,findomain,crtsh,bufferover,rapiddns,certspotter,hackertarget,wayback",
+        tool_summary="subfinder(all-sources),dns_bruteforce,dns_permutation,assetfinder,amass,findomain,crtsh,bufferover,rapiddns,certspotter,hackertarget,wayback,alienvault_otx,threatcrowd,urlscan",
     )
     all_found: Set[str] = set()
     source_map: Dict[str, Set[str]] = {}
@@ -917,6 +968,9 @@ def run_domain_enumeration_scan(domain: str, triggered_by: str = "manual") -> di
             "certspotter": pool.submit(_query_certspotter_for_root, root, 45),
             "hackertarget": pool.submit(_query_hackertarget_for_root, root, 45),
             "wayback": pool.submit(_query_wayback_for_root, root, 45),
+            "alienvault_otx": pool.submit(_query_alienvault_otx_for_root, root, 45),
+            "threatcrowd": pool.submit(_query_threatcrowd_for_root, root, 45),
+            "urlscan": pool.submit(_query_urlscan_for_root, root, 45),
         }
         if shutil.which("findomain") or Path("/usr/local/bin/findomain").exists():
             futures["findomain"] = pool.submit(lambda: subprocess.run(["findomain", "-t", root, "-q"], capture_output=True, text=True, timeout=240))
@@ -937,10 +991,17 @@ def run_domain_enumeration_scan(domain: str, triggered_by: str = "manual") -> di
             except Exception:
                 continue
 
-    brute = _bruteforce_dns_hosts(root, list(all_found) or [root], max_candidates=2500)
+    seed_hosts = list(all_found) or [root]
+    brute = _bruteforce_dns_hosts(root, seed_hosts, max_candidates=2500)
     for h in brute:
         if _is_host_within_root(h, root):
             source_map.setdefault("dns_bruteforce", set()).add(h)
+            all_found.add(h)
+
+    permutations = _permutation_dns_hosts(root, seed_hosts, max_candidates=2500)
+    for h in permutations:
+        if _is_host_within_root(h, root):
+            source_map.setdefault("dns_permutation", set()).add(h)
             all_found.add(h)
 
     for src, hosts in source_map.items():

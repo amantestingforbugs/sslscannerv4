@@ -16,6 +16,9 @@ from subfinder.runner import (
     _query_certspotter_for_root,
     _query_hackertarget_for_root,
     _query_wayback_for_root,
+    _query_alienvault_otx_for_root,
+    _query_threatcrowd_for_root,
+    _query_urlscan_for_root,
 )
 
 
@@ -153,3 +156,44 @@ def test_query_wayback_for_root_extracts_hosts(monkeypatch):
     )
     found = _query_wayback_for_root("example.com")
     assert found == ["cdn.example.com", "portal.example.com"]
+
+
+def test_query_alienvault_otx_for_root_parses_passive_dns(monkeypatch):
+    monkeypatch.setattr(
+        runner,
+        "_http_json_with_retries",
+        lambda *args, **kwargs: {
+            "passive_dns": [
+                {"hostname": "api.example.com"},
+                {"hostname": "*.dev.example.com"},
+                {"hostname": "bad.net"},
+            ]
+        },
+    )
+    found = _query_alienvault_otx_for_root("example.com")
+    assert found == ["api.example.com", "dev.example.com"]
+
+
+def test_query_threatcrowd_for_root_parses_subdomain_list(monkeypatch):
+    monkeypatch.setattr(
+        runner,
+        "_http_json_with_retries",
+        lambda *args, **kwargs: {"subdomains": ["portal.example.com", "*.cdn.example.com", "bad.net"]},
+    )
+    found = _query_threatcrowd_for_root("example.com")
+    assert found == ["cdn.example.com", "portal.example.com"]
+
+
+def test_query_urlscan_for_root_parses_task_and_page_domains(monkeypatch):
+    monkeypatch.setattr(
+        runner,
+        "_http_json_with_retries",
+        lambda *args, **kwargs: {
+            "results": [
+                {"task": {"domain": "api.example.com"}, "page": {"domain": "www.example.com"}},
+                {"task": {"domain": "bad.net"}, "page": {"apexDomain": "example.com"}},
+            ]
+        },
+    )
+    found = _query_urlscan_for_root("example.com")
+    assert found == ["api.example.com", "example.com", "www.example.com"]
