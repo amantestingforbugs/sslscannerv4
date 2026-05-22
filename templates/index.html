@@ -202,6 +202,7 @@ button{cursor:pointer;font-family:inherit}
 
 /* ── CONTENT ── */
 .content{flex:1;overflow-y:auto;padding:24px;scroll-behavior:smooth}
+.card,.panel-card,.table-shell,.stat-card,.project-card,.integration-card{content-visibility:auto;contain-intrinsic-size:280px}
 
 
 .mobile-menu-btn{
@@ -1797,7 +1798,7 @@ function tick() {
   const s = new Date().toUTCString().slice(0,25)+' UTC';
   document.getElementById('sideClock').textContent = s;
 }
-setInterval(tick,1000); tick();
+let clockTimer = setInterval(tick,1000); tick();
 
 // ════════════════════════════════════════════════════════════
 // NAVIGATION
@@ -2057,7 +2058,7 @@ async function pollBadge() {
     updateAlertBadge(s?.unseen_alerts || 0);
   } catch {}
 }
-setInterval(pollBadge, 30000); pollBadge();
+let pollBadgeTimer = setInterval(pollBadge, 30000); pollBadge();
 
 function humanDuration(sec){
   const s = Number(sec||0);
@@ -2202,10 +2203,10 @@ async function loadDashMismatches() {
   } catch {}
 }
 
-setInterval(() => {
+let dashboardRefreshTimer = setInterval(() => {
   if (document.getElementById('page-dashboard').classList.contains('active')) loadDash();
 }, 60000);
-setInterval(() => {
+let opensslRefreshTimer = setInterval(() => {
   if (document.getElementById('page-openssl').classList.contains('active') && opensslPid) loadOpenSSLRows();
 }, 12000);
 
@@ -3376,6 +3377,30 @@ document.getElementById('alerts-search')?.addEventListener('input', debounce(() 
 document.getElementById('nd-search')?.addEventListener('input', debounce(loadDiscoveries, 300));
 document.getElementById('nd-latest-search')?.addEventListener('input', debounce(loadLatestDiscoveries, 300));
 scheduleLiveRefresh();
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden) {
+    clearInterval(clockTimer);
+    clearInterval(pollBadgeTimer);
+    clearInterval(dashboardRefreshTimer);
+    clearInterval(opensslRefreshTimer);
+    clockTimer = null;
+    pollBadgeTimer = null;
+    dashboardRefreshTimer = null;
+    opensslRefreshTimer = null;
+    if (scanPollTimer) { clearInterval(scanPollTimer); scanPollTimer = null; }
+    return;
+  }
+  if (!clockTimer) clockTimer = setInterval(tick, 1000);
+  if (!pollBadgeTimer) pollBadgeTimer = setInterval(pollBadge, 30000);
+  if (!dashboardRefreshTimer) dashboardRefreshTimer = setInterval(() => {
+    if (document.getElementById('page-dashboard').classList.contains('active')) loadDash();
+  }, 60000);
+  if (!opensslRefreshTimer) opensslRefreshTimer = setInterval(() => {
+    if (document.getElementById('page-openssl').classList.contains('active') && opensslPid) loadOpenSSLRows();
+  }, 12000);
+  tick();
+  pollBadge();
+});
 </script>
 <script>
 function refreshKpis() {
@@ -3388,7 +3413,7 @@ function refreshKpis() {
   Object.entries(map).forEach(([id,val])=>{const el=document.getElementById(id); if(el) el.textContent=val;});
 }
 refreshKpis();
-setInterval(() => {
+let refreshKpiTimer = setInterval(() => {
   if (!document.hidden) refreshKpis();
 }, 10000);
 </script>
