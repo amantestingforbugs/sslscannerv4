@@ -415,6 +415,35 @@ def scan_latest(pid):
     return dict(r) if r else None
 
 
+def scans_prune_older_than(days: int = 7) -> dict:
+    """Delete scan/history data older than `days` to keep DB size bounded."""
+    keep_days = max(1, int(days or 7))
+    cutoff_row = x("SELECT datetime('now', ?)", (f"-{keep_days} days",)).fetchone()
+    cutoff = cutoff_row[0] if cutoff_row else None
+    if not cutoff:
+        return {"cutoff": None, "scans_deleted": 0, "results_deleted": 0, "alerts_deleted": 0}
+
+    old_scan_ids = [r["id"] for r in x("SELECT id FROM scans WHERE created_at < ?", (cutoff,)).fetchall()]
+    if not old_scan_ids:
+        return {"cutoff": cutoff, "scans_deleted": 0, "results_deleted": 0, "alerts_deleted": 0}
+
+    results_deleted = 0
+    alerts_deleted = 0
+    for chunk in _chunked(old_scan_ids, 500):
+        placeholders = ",".join(["?"] * len(chunk))
+        results_deleted += x(f"DELETE FROM results WHERE scan_id IN ({placeholders})", chunk).rowcount or 0
+        alerts_deleted += x(f"DELETE FROM alerts WHERE scan_id IN ({placeholders})", chunk).rowcount or 0
+
+    scans_deleted = x("DELETE FROM scans WHERE created_at < ?", (cutoff,)).rowcount or 0
+    commit()
+    return {
+        "cutoff": cutoff,
+        "scans_deleted": scans_deleted,
+        "results_deleted": results_deleted,
+        "alerts_deleted": alerts_deleted,
+    }
+
+
 # ── Results (batch) ───────────────────────────────────────────────────────────
 
 def results_batch_save(sid, pid, batch):

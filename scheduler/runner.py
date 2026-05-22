@@ -234,6 +234,7 @@ class ContinuousScheduler:
         self._thread = None
         self._stop = threading.Event()
         self._last_run: Dict[str, float] = {}
+        self._last_retention_run = 0.0
 
     def start(self):
         if self._thread and self._thread.is_alive():
@@ -252,8 +253,22 @@ class ContinuousScheduler:
             self._stop.wait(60)
 
     def _tick(self):
-        from db.database import project_list
+        from db.database import project_list, scans_prune_older_than
         now_ts = time.time()
+
+        # Keep DB growth bounded: run retention sweep once per day.
+        if now_ts - self._last_retention_run >= 24 * 60 * 60:
+            stats = scans_prune_older_than(days=7)
+            self._last_retention_run = now_ts
+            if stats.get("scans_deleted"):
+                log.info(
+                    "Retention cleanup complete (cutoff=%s): scans=%s results=%s alerts=%s",
+                    stats.get("cutoff"),
+                    stats.get("scans_deleted", 0),
+                    stats.get("results_deleted", 0),
+                    stats.get("alerts_deleted", 0),
+                )
+
         for p in project_list():
             if not p.get("enabled"):
                 continue
