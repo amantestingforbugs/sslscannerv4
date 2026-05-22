@@ -1334,7 +1334,10 @@ tbody tr:last-child td{border-bottom:none}
         </div>
       </div>
       <div class="card">
-        <div class="card-header"><span class="card-title">Selected Scan Results</span></div>
+        <div class="card-header" style="display:flex;align-items:center;justify-content:space-between;gap:10px">
+          <span class="card-title">Selected Scan Results</span>
+          <button class="btn btn-sm btn-primary" id="enum-create-project-btn" onclick="createProjectFromEnumScan()" disabled>Create Project & Scan</button>
+        </div>
         <div class="table-toolbar" style="padding:0 14px 10px 14px">
           <div class="search-input" style="max-width:340px">
             <svg width="14" height="14" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
@@ -3179,6 +3182,34 @@ async function openEnumScan(scanId) {
   updateEnumStats(enumCurrentRows, enumCurrentScan);
   renderEnumResults();
   updateEnumActiveHostCount(enumCurrentRows);
+  const createBtn = document.getElementById('enum-create-project-btn');
+  if (createBtn) createBtn.disabled = !enumCurrentScan || !enumCurrentRows.length;
+}
+
+async function createProjectFromEnumScan() {
+  if (!enumCurrentScan?.id) return toast('Open an enumeration scan first', 'err');
+  if (!(enumCurrentRows || []).length) return toast('Selected scan has no hosts', 'err');
+  const defaultName = `Enum ${enumCurrentScan.domain || 'Project'}`;
+  const name = prompt('Project name for this enumeration scan:', defaultName);
+  if (name == null) return;
+  const trimmed = (name || '').trim();
+  if (!trimmed) return toast('Project name is required', 'err');
+  const { ok, data, error } = await apiJSON(`/api/subfinder/enumeration/scans/${enumCurrentScan.id}/project`, {
+    method: 'POST',
+    body: JSON.stringify({ name: trimmed }),
+  });
+  if (!ok) return toast(error || 'Failed to create project', 'err');
+  toast(`Project created with ${fmt(data?.host_count || 0)} hosts`, 'ok');
+  await loadProjects();
+  if (data?.project?.id) {
+    await openProject(data.project.id);
+    const scanRes = await apiJSON(`/api/projects/${data.project.id}/scan`, { method: 'POST' });
+    if (scanRes?.ok) {
+      toast('Initial SSL scan started', 'ok');
+    } else {
+      toast(scanRes?.error || 'Project created, but failed to start scan', 'err');
+    }
+  }
 }
 
 async function hydrateTopProjectSelect() {

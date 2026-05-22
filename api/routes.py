@@ -791,6 +791,35 @@ def domain_enumeration_scan_detail(scan_id):
     return ok({"scan": scan, "results": db.domain_enum_results_by_scan(scan_id)})
 
 
+@api.post("/subfinder/enumeration/scans/<scan_id>/project")
+def domain_enumeration_scan_create_project(scan_id):
+    scan = db.domain_enum_scan_get(scan_id)
+    if not scan:
+        return err("Not found", 404)
+
+    rows = db.domain_enum_results_by_scan(scan_id)
+    hosts = sorted({(r.get("hostname") or "").strip().lower() for r in rows if (r.get("hostname") or "").strip()})
+    if not hosts:
+        return err("No hosts found in this enumeration scan", 400)
+
+    payload = request.get_json(silent=True) or {}
+    project_name = (payload.get("name") or payload.get("project_name") or f"Enum {scan.get('domain', '')}").strip()
+    if not project_name:
+        return err("Project name is required", 400)
+    if db.project_get_by_name(project_name):
+        return err("A project with that name already exists", 400)
+
+    p = db.project_create(
+        project_name,
+        payload.get("description", f"Created from enumeration scan {scan_id[:8]} for {scan.get('domain', '')}"),
+        int(payload.get("scan_interval", 60)),
+        int(payload.get("subfinder_interval", 30)),
+    )
+    db.project_save_hosts(p["id"], hosts)
+    broadcast("project_created", {"id": p["id"], "name": p["name"]})
+    return ok({"project": db.project_get(p["id"]), "host_count": len(hosts), "scan_id": scan_id})
+
+
 @api.delete("/subfinder/enumeration/scans/<scan_id>")
 def domain_enumeration_scan_delete(scan_id):
     scan = db.domain_enum_scan_get(scan_id)
