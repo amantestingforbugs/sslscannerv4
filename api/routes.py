@@ -47,6 +47,7 @@ _quick_scan_threads: dict[str, threading.Thread] = {}
 _quick_scan_state: dict[str, dict] = {}
 _quick_scan_lock = threading.Lock()
 QUICK_SCAN_ROWS_BUFFER = 500
+STARTED_AT_TS = time.time()
 
 _HOSTNAME_RE = re.compile(r"^(?=.{1,253}$)(?!-)[a-z0-9-]+(?:\.[a-z0-9-]+)+$", re.IGNORECASE)
 
@@ -674,6 +675,35 @@ def update_alert_settings():
 def global_stats():
     return ok(db.stats_global())
 
+
+
+
+@api.get("/system-overview")
+def system_overview():
+    projects_total = db.x("SELECT COUNT(*) c FROM projects").fetchone()["c"]
+    enabled_projects = db.x("SELECT COUNT(*) c FROM projects WHERE enabled=1").fetchone()["c"]
+    scans_running = db.x("SELECT COUNT(*) c FROM scans WHERE status='running'").fetchone()["c"]
+    latest_scan = db.x("SELECT started_at, status, project_id FROM scans ORDER BY created_at DESC LIMIT 1").fetchone()
+    host_inventory = db.x("SELECT COALESCE(SUM(host_count), 0) c FROM projects").fetchone()["c"]
+    discoveries = db.x("SELECT COUNT(*) c FROM subfinder_hosts").fetchone()["c"]
+    unresolved_alerts = db.x("SELECT COUNT(*) c FROM alerts WHERE seen=0").fetchone()["c"]
+    db_file = db.DB_PATH
+    uptime_seconds = max(0, int(time.time() - STARTED_AT_TS))
+    return ok({
+        "uptime_seconds": uptime_seconds,
+        "projects_total": projects_total,
+        "enabled_projects": enabled_projects,
+        "scans_running": scans_running,
+        "host_inventory": host_inventory,
+        "discoveries_total": discoveries,
+        "unresolved_alerts": unresolved_alerts,
+        "latest_scan": dict(latest_scan) if latest_scan else None,
+        "database": {
+            "path": str(db_file),
+            "exists": db_file.exists(),
+            "size_bytes": db_file.stat().st_size if db_file.exists() else 0,
+        },
+    })
 
 @api.get("/logs")
 def list_logs():

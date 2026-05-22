@@ -844,6 +844,18 @@ tbody tr:last-child td{border-bottom:none}
           <span class="hero-chip">🛰️ Monitoring: Live</span>
         </div>
       </div>
+      <div class="card" style="margin-bottom:14px">
+        <div class="card-header"><span class="card-title">System Health</span></div>
+        <div class="card-body" id="system-health" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px;font-size:12px;color:var(--text-secondary)">
+          <div>Uptime: <strong id="sys-uptime">—</strong></div>
+          <div>Running Scans: <strong id="sys-running-scans">—</strong></div>
+          <div>Enabled Projects: <strong id="sys-enabled-projects">—</strong></div>
+          <div>DB Size: <strong id="sys-db-size">—</strong></div>
+          <div>Discovered Hosts: <strong id="sys-discoveries">—</strong></div>
+          <div>Unresolved Alerts: <strong id="sys-unresolved">—</strong></div>
+        </div>
+      </div>
+
       <div class="stats-row">
         <div class="stat-card blue">
           <div class="stat-icon">🌐</div>
@@ -2020,6 +2032,33 @@ async function pollBadge() {
 }
 setInterval(pollBadge, 30000); pollBadge();
 
+function humanDuration(sec){
+  const s = Number(sec||0);
+  const d = Math.floor(s/86400), h = Math.floor((s%86400)/3600), m = Math.floor((s%3600)/60);
+  if (d>0) return `${d}d ${h}h ${m}m`;
+  if (h>0) return `${h}h ${m}m`;
+  return `${m}m`;
+}
+function humanBytes(bytes){
+  const b=Number(bytes||0); if(!b) return '0 B';
+  const u=['B','KB','MB','GB']; let i=0,v=b;
+  while(v>=1024 && i<u.length-1){v/=1024;i++;}
+  return `${v.toFixed(v>=10?0:1)} ${u[i]}`;
+}
+
+async function loadSystemOverview(){
+  try{
+    const { data } = await apiJSON('/api/system-overview');
+    if(!data) return;
+    document.getElementById('sys-uptime').textContent = humanDuration(data.uptime_seconds);
+    document.getElementById('sys-running-scans').textContent = fmt(data.scans_running);
+    document.getElementById('sys-enabled-projects').textContent = `${fmt(data.enabled_projects)}/${fmt(data.projects_total)}`;
+    document.getElementById('sys-db-size').textContent = humanBytes(data.database?.size_bytes);
+    document.getElementById('sys-discoveries').textContent = fmt(data.discoveries_total);
+    document.getElementById('sys-unresolved').textContent = fmt(data.unresolved_alerts);
+  }catch{}
+}
+
 // ════════════════════════════════════════════════════════════
 // DASHBOARD
 // ════════════════════════════════════════════════════════════
@@ -2040,6 +2079,7 @@ async function loadDash() {
   refreshActiveScans();
   loadDashMismatches();
   loadLogs();
+  loadSystemOverview();
 }
 
 async function loadLogs() {
@@ -2080,6 +2120,7 @@ async function loadLogsPage() {
 function appendLogRow(entry) {
   if (!entry || !document.getElementById('page-dashboard').classList.contains('active')) return;
   loadLogs();
+  loadSystemOverview();
 }
 
 async function refreshActiveScans() {
