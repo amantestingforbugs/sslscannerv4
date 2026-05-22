@@ -15,6 +15,7 @@ import threading
 import time
 import logging
 import subprocess
+import shutil
 from urllib.parse import urlparse
 import ipaddress
 import re
@@ -72,6 +73,16 @@ def _is_private_or_local_host(host: str) -> bool:
     except ValueError:
         return False
 
+
+def _resolve_nuclei_binary() -> str | None:
+    bin_path = shutil.which("nuclei")
+    if bin_path:
+        return bin_path
+
+    for candidate in ("/usr/local/bin/nuclei", "/usr/bin/nuclei"):
+        if shutil.which(candidate):
+            return candidate
+    return None
 
 def _validate_webhook_url(raw: str) -> str:
     value = (raw or "").strip()
@@ -843,8 +854,12 @@ def nuclei_scan_new_discoveries(pid):
             tf.write("\n".join(hosts) + "\n")
             targets_file = tf.name
 
+        nuclei_bin = _resolve_nuclei_binary()
+        if not nuclei_bin:
+            return err("nuclei binary not found in PATH, /usr/local/bin/nuclei, or /usr/bin/nuclei", 400)
+
         cmd = [
-            "nuclei",
+            nuclei_bin,
             "-l", targets_file,
             "-severity", "medium,high,critical",
             "-jsonl",
