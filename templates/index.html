@@ -216,12 +216,12 @@ button{cursor:pointer;font-family:inherit}
   outline:none;box-shadow:var(--focus-ring);
 }
 
-.card,.stat-card,.project-card,.table-shell,.panel-card{backdrop-filter:blur(6px)}
+.card,.stat-card,.project-card,.table-shell,.panel-card{backdrop-filter:none}
 .main{
   background:
     radial-gradient(circle at top right,color-mix(in srgb,var(--accent) 9%,transparent),transparent 35%),
     radial-gradient(circle at 10% 100%,color-mix(in srgb,var(--purple) 8%,transparent),transparent 32%);
-  animation:ambient-shift 12s ease-in-out infinite alternate;
+  animation:none;
 }
 @keyframes ambient-shift{
   0%{background-position:0% 0%,0% 0%}
@@ -733,7 +733,7 @@ tbody tr:last-child td{border-bottom:none}
  radial-gradient(circle at 100% 0%, color-mix(in srgb,var(--purple) 15%, transparent), transparent 36%),
  var(--bg-base)}
 .card,.panel-card,.table-shell,.stat-card,.project-card{border-color:color-mix(in srgb,var(--border) 65%, var(--accent) 35%);box-shadow:0 10px 28px rgba(2,6,23,.18)}
-.topbar{backdrop-filter:blur(14px);background:color-mix(in srgb,var(--bg-surface) 78%, transparent)}
+.topbar{backdrop-filter:none;background:color-mix(in srgb,var(--bg-surface) 92%, transparent)}
 .btn.primary{box-shadow:0 8px 20px color-mix(in srgb,var(--accent) 35%, transparent)}
 .page-header{padding:8px 0 2px;border-bottom:1px dashed var(--border);margin-bottom:18px}
 .kpi-strip{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:10px;margin-bottom:16px}
@@ -3170,18 +3170,33 @@ function renderDiscoveriesRows(data, countId, bodyId) {
   </tr>`).join('');
 }
 
-// Poll subfinder status when on that page
-setInterval(() => {
-  if (document.getElementById('page-subfinder').classList.contains('active') && sfCurPid) {
-    refreshSfPanel();
+// Poll live sections with visibility-aware scheduling to keep UI responsive.
+let liveRefreshTimer = null;
+const LIVE_REFRESH_MS = 12000;
+
+function scheduleLiveRefresh() {
+  clearTimeout(liveRefreshTimer);
+  liveRefreshTimer = setTimeout(async () => {
+    if (!document.hidden) {
+      if (document.getElementById('page-subfinder').classList.contains('active') && sfCurPid) {
+        await refreshSfPanel();
+      }
+      if (document.getElementById('page-discoveries').classList.contains('active')) {
+        await loadDiscoveries();
+      }
+      if (document.getElementById('page-discoveries-latest').classList.contains('active')) {
+        await loadLatestDiscoveries();
+      }
+    }
+    scheduleLiveRefresh();
+  }, LIVE_REFRESH_MS);
+}
+
+document.addEventListener('visibilitychange', () => {
+  if (!document.hidden) {
+    scheduleLiveRefresh();
   }
-  if (document.getElementById('page-discoveries').classList.contains('active')) {
-    loadDiscoveries();
-  }
-  if (document.getElementById('page-discoveries-latest').classList.contains('active')) {
-    loadLatestDiscoveries();
-  }
-}, 8000);
+});
 
 
 
@@ -3245,9 +3260,10 @@ document.getElementById('alerts-search')?.addEventListener('input', debounce(() 
 }, 250));
 document.getElementById('nd-search')?.addEventListener('input', debounce(loadDiscoveries, 300));
 document.getElementById('nd-latest-search')?.addEventListener('input', debounce(loadLatestDiscoveries, 300));
+scheduleLiveRefresh();
 </script>
 <script>
-setInterval(()=>{
+function refreshKpis() {
   const total=Number(document.getElementById('statTotalHosts')?.textContent||0);
   const healthy=Number(document.getElementById('statOk')?.textContent||0);
   const exp=Number(document.getElementById('statExpiring')?.textContent||0);
@@ -3255,7 +3271,11 @@ setInterval(()=>{
   const cov=total?Math.round((healthy/total)*100):0;
   const map={kpiCoverage:cov+'%',kpiHealthy:healthy,kpiExpiring:exp,kpiAlerts:alerts};
   Object.entries(map).forEach(([id,val])=>{const el=document.getElementById(id); if(el) el.textContent=val;});
-},1500);
+}
+refreshKpis();
+setInterval(() => {
+  if (!document.hidden) refreshKpis();
+}, 10000);
 </script>
 </body>
 </html>
