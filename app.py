@@ -28,6 +28,22 @@ logging.basicConfig(
 app = Flask(__name__, template_folder="templates", static_folder="static")
 app.register_blueprint(api)
 
+_BOOTSTRAPPED = False
+
+
+def bootstrap_runtime() -> None:
+    """Initialize runtime services once for both dev and WSGI servers."""
+    global _BOOTSTRAPPED
+    if _BOOTSTRAPPED:
+        return
+    init_db()
+    start_scheduler()
+    start_subfinder_scheduler()
+    _BOOTSTRAPPED = True
+
+
+bootstrap_runtime()
+
 @app.get("/")
 def index():
     return render_template("index.html")
@@ -37,9 +53,5 @@ def favicon():
     return "", 204
 
 if __name__ == "__main__":
-    init_db()
-    start_scheduler()
-    start_subfinder_scheduler()
-
     port = int(os.getenv("PORT", 5000))
     app.run(host="0.0.0.0", port=port, debug=False, threaded=True)
