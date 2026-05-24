@@ -85,6 +85,32 @@ def _resolve_nuclei_binary() -> str | None:
             return candidate
     return None
 
+
+def _ensure_nuclei_templates(nuclei_bin: str) -> tuple[bool, str]:
+    """
+    Ensure nuclei templates exist locally.
+    Returns (ok, message). Non-empty message is informational/warning text.
+    """
+    templates_dir = os.environ.get("NUCLEI_TEMPLATES_DIR", "").strip() or os.path.expanduser("~/nuclei-templates")
+    has_templates = os.path.isdir(templates_dir) and any(True for _ in os.scandir(templates_dir))
+
+    if has_templates:
+        return True, ""
+
+    try:
+        init_run = subprocess.run(
+            [nuclei_bin, "-ut"],
+            text=True,
+            capture_output=True,
+            timeout=300,
+        )
+        if init_run.returncode == 0:
+            return True, "Nuclei templates were missing and have been downloaded."
+        detail = (init_run.stderr or init_run.stdout or "").strip()
+        return False, f"Failed to download nuclei templates automatically. {detail}"
+    except Exception as ex:
+        return False, f"Failed to download nuclei templates automatically: {ex}"
+
 def _validate_webhook_url(raw: str) -> str:
     value = (raw or "").strip()
     if not value:
@@ -932,6 +958,9 @@ def nuclei_scan_hosts(pid):
         nuclei_bin = _resolve_nuclei_binary()
         if not nuclei_bin:
             return err("nuclei binary not found in PATH, /usr/local/bin/nuclei, or /usr/bin/nuclei", 400)
+        templates_ok, templates_msg = _ensure_nuclei_templates(nuclei_bin)
+        if not templates_ok:
+            return err(templates_msg, 400)
 
         cmd = [
             nuclei_bin,
@@ -963,6 +992,7 @@ def nuclei_scan_hosts(pid):
             "findings_total": len(findings),
             "stderr": (run.stderr or "")[-4000:],
             "exit_code": run.returncode,
+            "templates_status": templates_msg or "templates already present",
         })
     except subprocess.TimeoutExpired:
         return err("Nuclei scan timed out after 900s", 504)
