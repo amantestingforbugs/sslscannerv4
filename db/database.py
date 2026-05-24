@@ -499,7 +499,7 @@ def alert_add(pid, hostname, issue, detail, scan_id="", mismatch_scope=""):
     commit()
     return True
 
-def alerts_get(search="", mismatch_scope="all", page=1, per_page=200):
+def alerts_get(search="", mismatch_scope="all", project_id="", page=1, per_page=200):
     clauses = ["1=1"]
     params = []
     if search:
@@ -508,6 +508,9 @@ def alerts_get(search="", mismatch_scope="all", page=1, per_page=200):
     if mismatch_scope in ("same_domain", "different_domain"):
         clauses.append("a.mismatch_scope=?")
         params.append(mismatch_scope)
+    if project_id:
+        clauses.append("a.project_id=?")
+        params.append(project_id)
     where = " AND ".join(clauses)
     dedup_sql = (
         "SELECT * FROM ("

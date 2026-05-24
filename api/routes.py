@@ -627,9 +627,10 @@ def quick_scan_status(sid):
 def get_alerts():
     search = (request.args.get("search", "") or "").strip()
     mismatch = (request.args.get("mismatch_scope", "all") or "all").strip()
+    project_id = (request.args.get("project_id", "") or "").strip()
     page = _safe_int(request.args.get("page", 1), 1, min_value=1)
     per_page = _safe_int(request.args.get("per_page", 200), 200, min_value=50, max_value=1000)
-    return ok(db.alerts_get(search=search, mismatch_scope=mismatch, page=page, per_page=per_page))
+    return ok(db.alerts_get(search=search, mismatch_scope=mismatch, project_id=project_id, page=page, per_page=per_page))
 
 
 @api.post("/alerts/<aid>/read")

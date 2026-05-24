@@ -1233,6 +1233,9 @@ tbody tr:last-child td{border-bottom:none}
       <div class="card" style="padding:14px 16px">
         <div style="display:flex;gap:10px;flex-wrap:wrap">
           <input class="form-input" id="alerts-search" placeholder="Search hostname..." style="max-width:260px">
+          <select class="form-input" id="alerts-project-filter" style="max-width:260px" onchange="loadAlerts(1)">
+            <option value="">All projects</option>
+          </select>
           <select class="form-input" id="alerts-filter" style="max-width:260px" onchange="loadAlerts(1)">
             <option value="all">All mismatches</option>
             <option value="same_domain">Same domain mismatch</option>
@@ -2882,14 +2885,27 @@ function viewScan(sid, scan) {
 async function loadAlerts(page) {
   try {
     alertsCurPage = page || alertsCurPage || 1;
+    await ensureAlertsProjectFilter();
     const q = encodeURIComponent((document.getElementById('alerts-search').value || '').trim());
     const mismatch = encodeURIComponent(document.getElementById('alerts-filter').value || 'all');
+    const projectId = encodeURIComponent(document.getElementById('alerts-project-filter').value || '');
     const perPage = 200;
-    const { data } = await fetch(`/api/alerts?search=${q}&mismatch_scope=${mismatch}&page=${alertsCurPage}&per_page=${perPage}`).then(r=>r.json());
+    const { data } = await fetch(`/api/alerts?search=${q}&mismatch_scope=${mismatch}&project_id=${projectId}&page=${alertsCurPage}&per_page=${perPage}`).then(r=>r.json());
     allAlerts = data?.alerts || [];
     alertsTotalPages = data?.pages || 1;
     renderAlerts(data || {});
   } catch {}
+}
+
+async function ensureAlertsProjectFilter() {
+  const el = document.getElementById('alerts-project-filter');
+  if (!el) return;
+  const prev = el.value || '';
+  const projs = projectsCache.length ? projectsCache : (await apiJSON('/api/projects')).data || [];
+  projectsCache = projs || [];
+  el.innerHTML = '<option value="">All projects</option>' +
+    (projs || []).map(p => `<option value="${p.id}">${esc(p.name)}</option>`).join('');
+  if (prev && (projs || []).some(p => p.id === prev)) el.value = prev;
 }
 
 function renderAlerts(d) {
