@@ -937,6 +937,22 @@ tbody tr:last-child td{border-bottom:none}
 
       <div class="card">
         <div class="card-header">
+          <span class="card-title">Security Intelligence</span>
+          <button class="btn btn-sm" onclick="loadDashboardIntel()">Refresh</button>
+        </div>
+        <div class="card-body">
+          <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px;margin-bottom:12px">
+            <div class="panel-card"><div class="stat-title">Risk Score</div><div class="stat-value" id="intel-risk-score">—</div></div>
+            <div class="panel-card"><div class="stat-title">Coverage</div><div class="stat-value" id="intel-coverage">—</div></div>
+            <div class="panel-card"><div class="stat-title">Critical Projects</div><div class="stat-value" id="intel-critical-projects">—</div></div>
+            <div class="panel-card"><div class="stat-title">Scan Freshness</div><div class="stat-value" id="intel-freshness">—</div></div>
+          </div>
+          <div id="intel-insights" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:8px"></div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-header">
           <span class="card-title">Live Execution Logs</span>
           <span id="dash-log-status" style="font-size:12px;color:var(--text-secondary)">Idle</span>
         </div>
@@ -2162,6 +2178,52 @@ function applyStat(s) {
   document.getElementById('s-expg').textContent = fmt(s.unseen_alerts ?? s.mismatches);
 }
 
+function calcRiskScore(stats = {}, projects = []) {
+  const total = Math.max(1, Number(stats.total_domains ?? 0));
+  const mismatchRate = Number(stats.mismatches ?? 0) / total;
+  const errorRate = Number(stats.errors ?? 0) / total;
+  const expiredRate = Number(stats.expired ?? 0) / total;
+  const alertRate = Number(stats.unseen_alerts ?? 0) / total;
+  const disabledProjects = projects.filter(p => !p.enabled).length;
+  const disabledRate = projects.length ? disabledProjects / projects.length : 0;
+  const raw = (mismatchRate * 42) + (errorRate * 20) + (expiredRate * 25) + (alertRate * 8) + (disabledRate * 5);
+  return Math.max(0, Math.min(100, Math.round(raw * 100)));
+}
+
+function severityLabel(score) {
+  if (score >= 75) return 'Critical';
+  if (score >= 50) return 'High';
+  if (score >= 25) return 'Moderate';
+  return 'Low';
+}
+
+async function loadDashboardIntel() {
+  const insightBox = document.getElementById('intel-insights');
+  try {
+    const statsResp = await apiJSON('/api/stats');
+    const projects = projectsCache.length ? projectsCache : ((await apiJSON('/api/projects')).data || []);
+    const s = statsResp.data || {};
+    const total = Number(s.total_domains ?? 0);
+    const covered = Number(s.ok ?? 0) + Number(s.mismatches ?? 0) + Number(s.expired ?? 0) + Number(s.expiring ?? 0);
+    const coveragePct = total > 0 ? Math.round((covered / total) * 100) : 0;
+    const risk = calcRiskScore(s, projects);
+    const criticalProjects = projects.filter(p => (p.latest_scan?.mismatches || 0) >= 3 || (p.latest_scan?.errors || 0) >= 2).length;
+    const freshProjects = projects.filter(p => p.latest_scan?.finished_at).length;
+    document.getElementById('intel-risk-score').textContent = `${risk}/100 (${severityLabel(risk)})`;
+    document.getElementById('intel-coverage').textContent = `${coveragePct}%`;
+    document.getElementById('intel-critical-projects').textContent = `${criticalProjects}/${projects.length || 0}`;
+    document.getElementById('intel-freshness').textContent = `${freshProjects}/${projects.length || 0} scanned`;
+    const lines = [
+      `Top issue pressure: ${fmt(s.mismatches || 0)} mismatches and ${fmt(s.expired || 0)} expired certificates currently detected.`,
+      `Operational state: ${fmt(s.running_scans || 0)} active scans with ${fmt(s.unseen_alerts || 0)} unseen alerts awaiting triage.`,
+      `Program recommendation: prioritize ${criticalProjects} critical project(s) and trigger immediate rescans for stale projects.`,
+    ];
+    insightBox.innerHTML = lines.map(line => `<div class="panel-card" style="font-size:12.5px;color:var(--text-secondary)">${esc(line)}</div>`).join('');
+  } catch {
+    insightBox.innerHTML = '<div class="panel-card" style="color:var(--red)">Unable to compute intelligence right now.</div>';
+  }
+}
+
 async function loadDash() {
   try {
     const { data: s } = await fetch('/api/stats').then(r => r.json());
@@ -2171,6 +2233,7 @@ async function loadDash() {
   loadDashMismatches();
   loadLogs();
   loadSystemOverview();
+  loadDashboardIntel();
 }
 
 async function loadLogs() {
