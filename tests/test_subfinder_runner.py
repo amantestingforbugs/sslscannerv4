@@ -197,3 +197,23 @@ def test_query_urlscan_for_root_parses_task_and_page_domains(monkeypatch):
     )
     found = _query_urlscan_for_root("example.com")
     assert found == ["api.example.com", "example.com", "www.example.com"]
+
+
+def test_build_subfinder_cmd_adds_aggressive_supported_flags(monkeypatch):
+    monkeypatch.setattr(runner, "_subfinder_supports_flag", lambda *_args, flag=None: True)
+    cmd = runner._build_subfinder_cmd("subfinder", "example.com")
+    assert "-all" in cmd
+    assert "-recursive" in cmd
+
+
+def test_build_subfinder_cmd_skips_unsupported_extra_flags(monkeypatch):
+    monkeypatch.setenv("SUBFINDER_EXTRA_FLAGS", "-all -recursive -nW")
+
+    def fake_support(_bin, flag):
+        return flag in {"-all", "-recursive"}
+
+    monkeypatch.setattr(runner, "_subfinder_supports_flag", fake_support)
+    cmd = runner._build_subfinder_cmd("subfinder", "example.com")
+    assert "-all" in cmd
+    assert "-recursive" in cmd
+    assert "-nW" not in cmd
