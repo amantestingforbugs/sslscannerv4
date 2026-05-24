@@ -16,6 +16,7 @@ import json
 import logging
 import os
 import re
+import shlex
 import socket
 import ssl
 import shutil
@@ -79,7 +80,15 @@ def _build_subfinder_cmd(subfinder_bin: str, root_domain: str) -> List[str]:
     # Optional env override to add additional flags without code changes.
     extra = os.getenv("SUBFINDER_EXTRA_FLAGS", "").strip()
     if extra:
-        preferred_flags.extend([token for token in extra.split() if token.startswith("-")])
+        preferred_flags.extend([token for token in shlex.split(extra) if token.startswith("-")])
+
+    # Optional config/provider files improve coverage when users configure API keys/sources.
+    cfg = os.getenv("SUBFINDER_CONFIG", "").strip()
+    if cfg and Path(cfg).exists() and _subfinder_supports_flag(subfinder_bin, "-config"):
+        cmd.extend(["-config", cfg])
+    pconf = os.getenv("SUBFINDER_PROVIDER_CONFIG", "").strip()
+    if pconf and Path(pconf).exists() and _subfinder_supports_flag(subfinder_bin, "-pc"):
+        cmd.extend(["-pc", pconf])
 
     for flag in preferred_flags:
         if flag not in cmd and _subfinder_supports_flag(subfinder_bin, flag):
@@ -521,6 +530,50 @@ def _query_hackertarget_for_root(root_domain: str, timeout: int = 35) -> List[st
         return []
 
 
+
+
+def _query_virustotal_for_root(root_domain: str, timeout: int = 35) -> List[str]:
+    """Pull subdomains from VirusTotal when VT API key is configured."""
+    api_key = os.getenv("VT_API_KEY", "").strip()
+    if not api_key:
+        return []
+    url = f"https://www.virustotal.com/api/v3/domains/{root_domain}/subdomains?limit=1000"
+    try:
+        req = Request(url, headers={"User-Agent": "ssl-sentinel/1.0", "x-apikey": api_key})
+        ctx = ssl.create_default_context()
+        with urlopen(req, timeout=timeout, context=ctx) as res:
+            body = res.read().decode("utf-8", errors="replace")
+        payload = json.loads(body or "{}")
+        found: Set[str] = set()
+        for row in (payload or {}).get("data") or []:
+            host = _normalize_host(str((row or {}).get("id") or ""))
+            if host and _HOST_RE.match(host) and _is_host_within_root(host, root_domain):
+                found.add(host)
+        return sorted(found)
+    except Exception:
+        return []
+
+
+def _query_securitytrails_for_root(root_domain: str, timeout: int = 35) -> List[str]:
+    """Pull subdomains from SecurityTrails when API key is configured."""
+    api_key = os.getenv("SECURITYTRAILS_API_KEY", "").strip()
+    if not api_key:
+        return []
+    url = f"https://api.securitytrails.com/v1/domain/{root_domain}/subdomains"
+    try:
+        req = Request(url, headers={"User-Agent": "ssl-sentinel/1.0", "apikey": api_key})
+        ctx = ssl.create_default_context()
+        with urlopen(req, timeout=timeout, context=ctx) as res:
+            body = res.read().decode("utf-8", errors="replace")
+        payload = json.loads(body or "{}")
+        found: Set[str] = set()
+        for left in (payload or {}).get("subdomains") or []:
+            host = _normalize_host(f"{left}.{root_domain}")
+            if host and _HOST_RE.match(host) and _is_host_within_root(host, root_domain):
+                found.add(host)
+        return sorted(found)
+    except Exception:
+        return []
 def _query_certspotter_for_root(root_domain: str, timeout: int = 40) -> List[str]:
     """Pull certificate transparency names from Cert Spotter API."""
     url = f"https://api.certspotter.com/v1/issuances?domain={root_domain}&include_subdomains=true&expand=dns_names"
@@ -837,6 +890,8 @@ def run_subfinder_for_project(project_id: str, triggered_by: str = "scheduler") 
             "urlscan": _query_urlscan_for_root,
             "web_artifacts": _query_common_web_artifacts_for_root,
             "tls_san": _query_tls_san_hosts_for_root,
+            "virustotal": _query_virustotal_for_root,
+            "securitytrails": _query_securitytrails_for_root,
         }
         for source_name, source_fn in osint_sources.items():
             for root_domain in root_domains:
