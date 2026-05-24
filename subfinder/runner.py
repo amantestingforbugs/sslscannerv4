@@ -35,7 +35,7 @@ log = logging.getLogger(__name__)
 SUBFINDER_BIN = shutil.which("subfinder") or "/usr/local/bin/subfinder"
 _sf_lock = threading.Lock()
 _sf_state = {}  # project_id -> {status, job_id, new_count}
-_subfinder_all_flag_supported: Optional[bool] = None
+_subfinder_flag_support: Dict[str, bool] = {}
 
 
 def _resolve_subfinder_bin() -> Optional[str]:
@@ -50,14 +50,11 @@ def subfinder_available() -> bool:
     return bool(_resolve_subfinder_bin())
 
 
-def _subfinder_supports_all_flag(subfinder_bin: str) -> bool:
-    """
-    Detect whether the installed subfinder binary supports '-all'.
-    Some environments ship older builds where this flag is unavailable.
-    """
-    global _subfinder_all_flag_supported
-    if _subfinder_all_flag_supported is not None:
-        return _subfinder_all_flag_supported
+def _subfinder_supports_flag(subfinder_bin: str, flag: str) -> bool:
+    """Detect whether the installed subfinder binary supports a specific CLI flag."""
+    key = flag.strip().lower()
+    if key in _subfinder_flag_support:
+        return _subfinder_flag_support[key]
     try:
         help_result = subprocess.run(
             [subfinder_bin, "-h"],
@@ -66,17 +63,28 @@ def _subfinder_supports_all_flag(subfinder_bin: str) -> bool:
             timeout=20,
         )
         help_text = f"{help_result.stdout}\n{help_result.stderr}".lower()
-        _subfinder_all_flag_supported = "-all" in help_text
+        _subfinder_flag_support[key] = key in help_text
     except Exception:
-        # Be permissive on detection failure: prefer baseline command without -all.
-        _subfinder_all_flag_supported = False
-    return _subfinder_all_flag_supported
+        # Be permissive on detection failure: prefer baseline command without optional flags.
+        _subfinder_flag_support[key] = False
+    return _subfinder_flag_support[key]
 
 
 def _build_subfinder_cmd(subfinder_bin: str, root_domain: str) -> List[str]:
     cmd = [subfinder_bin, "-d", root_domain, "-silent", "-timeout", "30"]
-    if _subfinder_supports_all_flag(subfinder_bin):
-        cmd.append("-all")
+
+    # Aggressive defaults to maximize enumeration yield where supported.
+    preferred_flags = ["-all", "-recursive"]
+
+    # Optional env override to add additional flags without code changes.
+    extra = os.getenv("SUBFINDER_EXTRA_FLAGS", "").strip()
+    if extra:
+        preferred_flags.extend([token for token in extra.split() if token.startswith("-")])
+
+    for flag in preferred_flags:
+        if flag not in cmd and _subfinder_supports_flag(subfinder_bin, flag):
+            cmd.append(flag)
+
     return cmd
 
 
