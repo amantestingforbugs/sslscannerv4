@@ -893,19 +893,52 @@ def run_subfinder_for_project(project_id: str, triggered_by: str = "scheduler") 
             "virustotal": _query_virustotal_for_root,
             "securitytrails": _query_securitytrails_for_root,
         }
-        for source_name, source_fn in osint_sources.items():
-            for root_domain in root_domains:
-                found = source_fn(root_domain)
-                if found:
-                    discovered.extend(found)
-                    source_counts[source_name] = source_counts.get(source_name, 0) + len(found)
+        osint_tasks = [
+            (source_name, source_fn, root_domain)
+            for source_name, source_fn in osint_sources.items()
+            for root_domain in root_domains
+        ]
+        if osint_tasks:
+            osint_workers = max(4, min(48, len(osint_tasks)))
+            with ThreadPoolExecutor(max_workers=osint_workers) as pool:
+                future_map = {
+                    pool.submit(source_fn, root_domain): (source_name, root_domain)
+                    for source_name, source_fn, root_domain in osint_tasks
+                }
+                for future in as_completed(future_map):
+                    source_name, root_domain = future_map[future]
+                    try:
+                        found = future.result() or []
+                    except Exception as e:
+                        log.warning("Enumeration source failed source=%s root=%s err=%s", source_name, root_domain, e)
+                        continue
+                    if found:
+                        discovered.extend(found)
+                        source_counts[source_name] = source_counts.get(source_name, 0) + len(found)
         discovered = sorted(set(discovered))
         brute_discovered: Set[str] = set()
         permutation_discovered: Set[str] = set()
         if _dns_bruteforce_enabled():
-            for root_domain in root_domains:
-                brute_discovered.update(_bruteforce_dns_hosts(root_domain, discovered + root_domains))
-                permutation_discovered.update(_permutation_dns_hosts(root_domain, discovered + root_domains))
+            brute_tasks = [("dns_bruteforce", root_domain) for root_domain in root_domains]
+            permutation_tasks = [("dns_permutation", root_domain) for root_domain in root_domains]
+            mutation_seed_hosts = discovered + root_domains
+            with ThreadPoolExecutor(max_workers=max(4, min(24, len(brute_tasks) + len(permutation_tasks)))) as pool:
+                future_map = {}
+                for source_name, root_domain in brute_tasks:
+                    future_map[pool.submit(_bruteforce_dns_hosts, root_domain, mutation_seed_hosts)] = (source_name, root_domain)
+                for source_name, root_domain in permutation_tasks:
+                    future_map[pool.submit(_permutation_dns_hosts, root_domain, mutation_seed_hosts)] = (source_name, root_domain)
+                for future in as_completed(future_map):
+                    source_name, root_domain = future_map[future]
+                    try:
+                        found = set(future.result() or [])
+                    except Exception as e:
+                        log.warning("DNS mutation source failed source=%s root=%s err=%s", source_name, root_domain, e)
+                        continue
+                    if source_name == "dns_bruteforce":
+                        brute_discovered.update(found)
+                    else:
+                        permutation_discovered.update(found)
             if brute_discovered:
                 source_counts["dns_bruteforce"] = len(brute_discovered)
                 discovered = sorted(set(discovered) | brute_discovered)
