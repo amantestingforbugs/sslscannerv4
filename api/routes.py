@@ -181,6 +181,69 @@ def _normalize_hostname(raw: str) -> str:
     return v
 
 
+
+
+def _compute_risk_intelligence(total_hosts: int, latest: dict, previous: dict | None = None) -> dict:
+    """Compute normalized risk score, grade, trend, and prioritized actions."""
+    total = max(1, int(total_hosts or 0))
+    mismatches = int((latest or {}).get("mismatches") or 0)
+    expired = int((latest or {}).get("expired") or 0)
+    expiring = int((latest or {}).get("expiring") or 0)
+    errors = int((latest or {}).get("errors") or 0)
+
+    weighted = (expired * 45) + (mismatches * 30) + (expiring * 15) + (errors * 10)
+    max_weight = total * 45
+    score = min(100, round((weighted / max_weight) * 100, 2)) if max_weight > 0 else 0
+
+    if score >= 75:
+        grade = "critical"
+    elif score >= 50:
+        grade = "high"
+    elif score >= 25:
+        grade = "medium"
+    else:
+        grade = "low"
+
+    prev_score = None
+    trend = "stable"
+    if previous:
+        prev = _compute_risk_intelligence(total, previous, None)
+        prev_score = prev["score"]
+        delta = round(score - prev_score, 2)
+        trend = "up" if delta > 0.5 else ("down" if delta < -0.5 else "stable")
+
+    actions = []
+    if expired:
+        actions.append({"priority": 1, "title": "Rotate expired certificates", "count": expired})
+    if mismatches:
+        actions.append({"priority": 2, "title": "Fix certificate hostname mismatches", "count": mismatches})
+    if expiring:
+        actions.append({"priority": 3, "title": "Renew certificates expiring soon", "count": expiring})
+    if errors:
+        actions.append({"priority": 4, "title": "Investigate persistent TLS scan errors", "count": errors})
+
+    exposure = {
+        "expired_pct": round((expired / total) * 100, 2),
+        "mismatch_pct": round((mismatches / total) * 100, 2),
+        "expiring_pct": round((expiring / total) * 100, 2),
+        "error_pct": round((errors / total) * 100, 2),
+    }
+
+    return {
+        "score": score,
+        "grade": grade,
+        "trend": trend,
+        "previous_score": prev_score,
+        "total_hosts": total_hosts,
+        "latest": {
+            "mismatches": mismatches,
+            "expired": expired,
+            "expiring": expiring,
+            "errors": errors,
+        },
+        "exposure": exposure,
+        "recommended_actions": actions,
+    }
 def _run_openssl_subject(hostname: str, timeout: int = 20) -> dict:
     cmd = ["openssl", "s_client", "-connect", f"{hostname}:443"]
     try:
@@ -733,6 +796,42 @@ def global_stats():
     return ok(db.stats_global())
 
 
+
+
+@api.get("/projects/<pid>/risk-intelligence")
+def project_risk_intelligence(pid):
+    p = db.project_get(pid)
+    if not p:
+        return err("Project not found", 404)
+
+    latest = db.x(
+        """
+        SELECT id, created_at, finished_at, total, mismatches, expired, expiring, errors, ok
+        FROM scans
+        WHERE project_id=?
+        ORDER BY created_at DESC
+        LIMIT 2
+        """,
+        (pid,),
+    ).fetchall()
+    if not latest:
+        return ok({
+            "score": 0,
+            "grade": "unknown",
+            "trend": "stable",
+            "message": "No scans available yet",
+            "total_hosts": p.get("host_count", 0),
+        })
+
+    current = dict(latest[0])
+    previous = dict(latest[1]) if len(latest) > 1 else None
+    model = _compute_risk_intelligence(p.get("host_count") or current.get("total") or 0, current, previous)
+    model["scan"] = {
+        "id": current.get("id"),
+        "created_at": current.get("created_at"),
+        "finished_at": current.get("finished_at"),
+    }
+    return ok(model)
 
 
 @api.get("/system-overview")
