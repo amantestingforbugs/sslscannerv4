@@ -170,6 +170,10 @@ button{cursor:pointer;font-family:inherit}
 }
 
 .topbar-title{font-size:16px;font-weight:700;color:var(--text-primary)}
+.topbar-meta{display:flex;align-items:center;gap:10px;color:var(--text-muted);font-size:11px}
+.topbar-health{display:inline-flex;align-items:center;gap:6px;padding:4px 10px;border:1px solid var(--border);border-radius:999px;background:var(--bg-raised)}
+.topbar-health-dot{width:7px;height:7px;border-radius:50%;background:var(--green);box-shadow:0 0 0 0 rgba(52,211,153,.45);animation:pulse-ring 2.2s infinite}
+.topbar-meta-sep{opacity:.45}
 .topbar-right{margin-left:auto;display:flex;align-items:center;gap:10px}
 .command-btn{border:1px solid var(--border);background:var(--bg-raised);color:var(--text-secondary);padding:6px 10px;border-radius:10px;font-size:12px;display:inline-flex;align-items:center;gap:7px}
 .command-btn kbd{font-family:var(--mono);font-size:10px;padding:1px 5px;border-radius:6px;background:var(--bg-surface);border:1px solid var(--border);color:var(--text-muted)}
@@ -825,6 +829,11 @@ tbody tr:last-child td{border-bottom:none}
   <div class="topbar">
     <button class="mobile-menu-btn" id="mobileMenuBtn" aria-label="Open menu">☰</button>
     <div class="topbar-title" id="topTitle">Dashboard</div>
+    <div class="topbar-meta">
+      <span class="topbar-health"><span class="topbar-health-dot"></span>Live updates</span>
+      <span class="topbar-meta-sep">•</span>
+      <span id="topLastSync">Last sync: —</span>
+    </div>
     <div class="topbar-right">
       <select id="topProjectSelect" class="topbar-select">
         <option value="">All Projects</option>
@@ -1638,7 +1647,15 @@ async function apiJSON(url, opts) {
     req.headers = { 'Content-Type': 'application/json', ...(req.headers || {}) };
   }
   const resp = await fetch(url, req);
-  return resp.json();
+  const out = await resp.json();
+  if (out?.ok !== false) setLastSyncStamp();
+  return out;
+}
+
+function setLastSyncStamp(date = new Date()) {
+  const el = document.getElementById('topLastSync');
+  if (!el) return;
+  el.textContent = `Last sync: ${date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}`;
 }
 
 function debounce(fn, wait=250) {
@@ -1736,6 +1753,7 @@ document.getElementById('themeToggle').addEventListener('click', () => {
   setTheme(document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark');
 });
 setTheme(localStorage.getItem(THEME_KEY) || 'dark');
+setLastSyncStamp();
 
 // ════════════════════════════════════════════════════════════
 // ALERT SETTINGS
