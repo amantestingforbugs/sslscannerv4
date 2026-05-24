@@ -12,9 +12,13 @@ RUN apt-get update && apt-get install -y \
 
 # Install subfinder
 RUN go install -v github.com/projectdiscovery/subfinder/v2/cmd/subfinder@latest
+RUN go install -v github.com/projectdiscovery/nuclei/v3/cmd/nuclei@latest
 
 # Add Go bin to PATH
 ENV PATH="/root/go/bin:${PATH}"
+
+# Pre-download nuclei templates at build time
+RUN /root/go/bin/nuclei -ut
 
 # Set working dir
 WORKDIR /app
