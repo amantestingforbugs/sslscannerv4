@@ -14,11 +14,12 @@ RUN apt-get update && apt-get install -y \
 RUN go install -v github.com/projectdiscovery/subfinder/v2/cmd/subfinder@latest
 RUN go install -v github.com/projectdiscovery/nuclei/v3/cmd/nuclei@latest
 
-# Add Go bin to PATH
+# Add Go bin to PATH and use the same nuclei template location at build and runtime
 ENV PATH="/root/go/bin:${PATH}"
+ENV NUCLEI_TEMPLATES_DIR="/root/nuclei-templates"
 
 # Pre-download nuclei templates at build time
-RUN /root/go/bin/nuclei -ut
+RUN /root/go/bin/nuclei -ut -ud "$NUCLEI_TEMPLATES_DIR"
 
 # Set working dir
 WORKDIR /app
