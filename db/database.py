@@ -83,11 +83,7 @@ def init_db():
     CREATE TABLE IF NOT EXISTS results (
         id TEXT PRIMARY KEY, scan_id TEXT NOT NULL, project_id TEXT NOT NULL,
         hostname TEXT NOT NULL, cn TEXT DEFAULT '', sans TEXT DEFAULT '[]',
-        issuer TEXT DEFAULT '', expiry TEXT DEFAULT '', not_before TEXT DEFAULT '', days_left INTEGER,
-        serial_number TEXT DEFAULT '', fingerprint_sha256 TEXT DEFAULT '',
-        tls_version TEXT DEFAULT '', cipher_suite TEXT DEFAULT '', cipher_bits INTEGER DEFAULT 0,
-        signature_algorithm TEXT DEFAULT '', key_algorithm TEXT DEFAULT '', key_bits INTEGER DEFAULT 0,
-        san_count INTEGER DEFAULT 0,
+        issuer TEXT DEFAULT '', expiry TEXT DEFAULT '', days_left INTEGER,
         match_found INTEGER DEFAULT 0, same_base INTEGER DEFAULT 0,
         is_mismatch INTEGER DEFAULT 0, is_expired INTEGER DEFAULT 0,
         is_expiring INTEGER DEFAULT 0, is_ok INTEGER DEFAULT 0,
@@ -258,23 +254,6 @@ def init_db():
         commit()
     except sqlite3.OperationalError:
         pass
-    for column, ddl in {
-        "not_before": "TEXT DEFAULT ''",
-        "serial_number": "TEXT DEFAULT ''",
-        "fingerprint_sha256": "TEXT DEFAULT ''",
-        "tls_version": "TEXT DEFAULT ''",
-        "cipher_suite": "TEXT DEFAULT ''",
-        "cipher_bits": "INTEGER DEFAULT 0",
-        "signature_algorithm": "TEXT DEFAULT ''",
-        "key_algorithm": "TEXT DEFAULT ''",
-        "key_bits": "INTEGER DEFAULT 0",
-        "san_count": "INTEGER DEFAULT 0",
-    }.items():
-        try:
-            x(f"ALTER TABLE results ADD COLUMN {column} {ddl}")
-            commit()
-        except sqlite3.OperationalError:
-            pass
     # Data cleanup for old DBs: keep only the latest duplicate rows.
     x(
         """
@@ -471,20 +450,14 @@ def results_batch_save(sid, pid, batch):
     n = now()
     rows = [(uid(), sid, pid,
              r.get("hostname",""), r.get("cn",""), json.dumps(r.get("sans",[])),
-             r.get("issuer",""), r.get("expiry",""), r.get("not_before", ""), r.get("days_left"),
-             r.get("serial_number", ""), r.get("fingerprint_sha256", ""),
-             r.get("tls_version", ""), r.get("cipher_suite", ""), int(r.get("cipher_bits") or 0),
-             r.get("signature_algorithm", ""), r.get("key_algorithm", ""), int(r.get("key_bits") or 0),
-             int(r.get("san_count") or len(r.get("sans", []) or [])),
+             r.get("issuer",""), r.get("expiry",""), r.get("days_left"),
              1 if r.get("match_found") else 0, 1 if r.get("same_base") else 0,
              1 if r.get("is_mismatch") else 0, 1 if r.get("is_expired") else 0,
              1 if r.get("is_expiring_soon") else 0, 1 if r.get("is_ok") else 0,
              r.get("error","") or "", n) for r in batch]
-    xm("INSERT INTO results(id,scan_id,project_id,hostname,cn,sans,issuer,expiry,not_before,"
-       "days_left,serial_number,fingerprint_sha256,tls_version,cipher_suite,cipher_bits,"
-       "signature_algorithm,key_algorithm,key_bits,san_count,match_found,same_base,"
-       "is_mismatch,is_expired,is_expiring,is_ok,error,checked_at)"
-       " VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", rows)
+    xm("INSERT INTO results(id,scan_id,project_id,hostname,cn,sans,issuer,expiry,"
+       "days_left,match_found,same_base,is_mismatch,is_expired,is_expiring,is_ok,error,checked_at)"
+       " VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", rows)
     commit()
 
 def results_get(sid, flt="all", page=1, per_page=500):
@@ -506,101 +479,6 @@ def results_get(sid, flt="all", page=1, per_page=500):
         out.append(d)
     return {"results": out, "total": total, "page": page,
             "pages": max(1,(total+per_page-1)//per_page), "per_page": per_page}
-
-def scan_results_all(sid, flt="all"):
-    base, p = "FROM results WHERE scan_id=?", [sid]
-    if flt == "mismatch":  base += " AND is_mismatch=1"
-    elif flt == "expired":  base += " AND is_expired=1"
-    elif flt == "expiring": base += " AND is_expiring=1"
-    elif flt == "ok":       base += " AND is_ok=1"
-    elif flt == "errors":   base += " AND error!='' AND error IS NOT NULL"
-    rows = x(f"SELECT * {base} ORDER BY is_mismatch DESC,is_expired DESC,hostname", p).fetchall()
-    out = []
-    for row in rows:
-        d = dict(row)
-        try:
-            d["sans"] = json.loads(d.get("sans") or "[]")
-        except Exception:
-            d["sans"] = []
-        out.append(d)
-    return out
-
-
-def scan_compare(current_sid, previous_sid=None):
-    current_scan = scan_get(current_sid)
-    if not current_scan:
-        return None
-    if not previous_sid:
-        prev = x(
-            "SELECT id FROM scans WHERE project_id=? AND created_at < ? ORDER BY created_at DESC LIMIT 1",
-            (current_scan["project_id"], current_scan["created_at"]),
-        ).fetchone()
-        previous_sid = prev["id"] if prev else None
-    previous_scan = scan_get(previous_sid) if previous_sid else None
-
-    current_rows = {r["hostname"]: dict(r) for r in x("SELECT * FROM results WHERE scan_id=?", (current_sid,)).fetchall()}
-    previous_rows = {r["hostname"]: dict(r) for r in x("SELECT * FROM results WHERE scan_id=?", (previous_sid,)).fetchall()} if previous_sid else {}
-
-    current_hosts = set(current_rows)
-    previous_hosts = set(previous_rows)
-    added_hosts = sorted(current_hosts - previous_hosts)
-    removed_hosts = sorted(previous_hosts - current_hosts)
-    common_hosts = current_hosts & previous_hosts
-
-    def issue_key(row):
-        if not row:
-            return "missing"
-        if row.get("error"):
-            return f"error:{row.get('error')}"
-        if row.get("is_expired"):
-            return "expired"
-        if row.get("is_mismatch"):
-            return "mismatch"
-        if row.get("is_expiring"):
-            return "expiring"
-        if row.get("is_ok"):
-            return "ok"
-        return "unknown"
-
-    changed = []
-    renewed = []
-    for host in sorted(common_hosts):
-        cur = current_rows[host]
-        prev = previous_rows[host]
-        if issue_key(cur) != issue_key(prev):
-            changed.append({
-                "hostname": host,
-                "from": issue_key(prev),
-                "to": issue_key(cur),
-                "previous_expiry": prev.get("expiry") or "",
-                "current_expiry": cur.get("expiry") or "",
-            })
-        if (cur.get("fingerprint_sha256") and prev.get("fingerprint_sha256")
-                and cur.get("fingerprint_sha256") != prev.get("fingerprint_sha256")):
-            renewed.append({
-                "hostname": host,
-                "previous_expiry": prev.get("expiry") or "",
-                "current_expiry": cur.get("expiry") or "",
-                "previous_fingerprint": prev.get("fingerprint_sha256") or "",
-                "current_fingerprint": cur.get("fingerprint_sha256") or "",
-            })
-
-    return {
-        "current_scan": current_scan,
-        "previous_scan": previous_scan,
-        "summary": {
-            "added_hosts": len(added_hosts),
-            "removed_hosts": len(removed_hosts),
-            "changed_status": len(changed),
-            "renewed_certificates": len(renewed),
-            "current_total": len(current_rows),
-            "previous_total": len(previous_rows),
-        },
-        "added_hosts": added_hosts[:500],
-        "removed_hosts": removed_hosts[:500],
-        "changed_status": changed[:500],
-        "renewed_certificates": renewed[:500],
-    }
 
 
 # ── Alerts ────────────────────────────────────────────────────────────────────

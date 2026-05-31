@@ -9,7 +9,6 @@ import fnmatch
 import ipaddress
 import logging
 import os
-import hashlib
 from datetime import datetime, timezone
 from urllib.parse import urlparse
 from concurrent.futures import ThreadPoolExecutor, wait, FIRST_COMPLETED
@@ -25,7 +24,6 @@ try:
     from cryptography import x509
     from cryptography.hazmat.backends import default_backend
     from cryptography.x509.oid import NameOID
-    from cryptography.hazmat.primitives.asymmetric import rsa, ec, dsa
     HAS_CRYPTOGRAPHY = True
 except ImportError:
     HAS_CRYPTOGRAPHY = False
@@ -156,49 +154,16 @@ def get_cert_info(hostname: str) -> Dict:
                 match_found = is_hostname_match(hostname, all_names)
                 same_base = base_domain(hostname) == (base_domain(cn) if cn else "")
 
-                not_before = cert.not_valid_before_utc if hasattr(cert, "not_valid_before_utc") else cert.not_valid_before
-                not_before_str = not_before.strftime("%Y-%m-%d")
-                serial_number = format(cert.serial_number, "x")
-                fingerprint_sha256 = hashlib.sha256(der_cert).hexdigest()
-                tls_version = ssock.version() or ""
-                cipher_info = ssock.cipher() or ("", "", 0)
-                cipher_suite = cipher_info[0] or ""
-                cipher_bits = int(cipher_info[2] or 0)
-                signature_algorithm = (cert.signature_hash_algorithm.name if cert.signature_hash_algorithm else "")
-
-                public_key = cert.public_key()
-                key_algorithm = type(public_key).__name__
-                key_bits = 0
-                if isinstance(public_key, rsa.RSAPublicKey):
-                    key_algorithm = "RSA"
-                    key_bits = public_key.key_size
-                elif isinstance(public_key, ec.EllipticCurvePublicKey):
-                    key_algorithm = "EC"
-                    key_bits = public_key.key_size
-                elif isinstance(public_key, dsa.DSAPublicKey):
-                    key_algorithm = "DSA"
-                    key_bits = public_key.key_size
-
                 return {
                     "hostname": hostname,
                     "cn": cn,
                     "sans": sans,
                     "issuer": issuer,
                     "expiry": expiry_str,
-                    "not_before": not_before_str,
                     "days_left": days_left,
                     "match_found": match_found,
                     "same_base": same_base,
                     "error": None,
-                    "serial_number": serial_number,
-                    "fingerprint_sha256": fingerprint_sha256,
-                    "tls_version": tls_version,
-                    "cipher_suite": cipher_suite,
-                    "cipher_bits": cipher_bits,
-                    "signature_algorithm": signature_algorithm,
-                    "key_algorithm": key_algorithm,
-                    "key_bits": key_bits,
-                    "san_count": len(sans),
                     # Derived flags
                     "is_mismatch": not match_found,
                     "is_expired": days_left < 0,
