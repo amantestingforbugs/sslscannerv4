@@ -17,6 +17,7 @@ import logging
 import os
 import subprocess
 import shutil
+import tempfile
 from urllib.parse import urlparse
 import ipaddress
 import re
@@ -78,14 +79,28 @@ def _is_private_or_local_host(host: str) -> bool:
 
 
 def _resolve_nuclei_binary() -> str | None:
+    configured = os.environ.get("NUCLEI_BIN", "").strip()
+    if configured and os.path.isfile(configured) and os.access(configured, os.X_OK):
+        return configured
+
     bin_path = shutil.which("nuclei")
     if bin_path:
         return bin_path
 
-    for candidate in ("/usr/local/bin/nuclei", "/usr/bin/nuclei"):
-        if shutil.which(candidate):
+    for candidate in ("/root/go/bin/nuclei", "/usr/local/bin/nuclei", "/usr/bin/nuclei"):
+        if os.path.isfile(candidate) and os.access(candidate, os.X_OK):
             return candidate
     return None
+
+
+def _nuclei_templates_dir() -> str:
+    return os.environ.get("NUCLEI_TEMPLATES_DIR", "").strip() or os.path.expanduser("~/nuclei-templates")
+
+
+def _directory_has_files(path: str) -> bool:
+    if not os.path.isdir(path):
+        return False
+    return any(os.path.isfile(os.path.join(root, name)) for root, _, files in os.walk(path) for name in files)
 
 
 def _ensure_nuclei_templates(nuclei_bin: str) -> tuple[bool, str]:
@@ -93,25 +108,58 @@ def _ensure_nuclei_templates(nuclei_bin: str) -> tuple[bool, str]:
     Ensure nuclei templates exist locally.
     Returns (ok, message). Non-empty message is informational/warning text.
     """
-    templates_dir = os.environ.get("NUCLEI_TEMPLATES_DIR", "").strip() or os.path.expanduser("~/nuclei-templates")
-    has_templates = os.path.isdir(templates_dir) and any(True for _ in os.scandir(templates_dir))
-
-    if has_templates:
-        return True, ""
+    templates_dir = _nuclei_templates_dir()
+    if _directory_has_files(templates_dir):
+        return True, "templates already present"
 
     try:
+        os.makedirs(templates_dir, exist_ok=True)
         init_run = subprocess.run(
-            [nuclei_bin, "-ut"],
+            [nuclei_bin, "-ut", "-ud", templates_dir],
             text=True,
             capture_output=True,
             timeout=300,
         )
-        if init_run.returncode == 0:
+        if init_run.returncode == 0 and _directory_has_files(templates_dir):
             return True, "Nuclei templates were missing and have been downloaded."
         detail = (init_run.stderr or init_run.stdout or "").strip()
+        if not detail:
+            detail = f"nuclei exited with code {init_run.returncode}"
         return False, f"Failed to download nuclei templates automatically. {detail}"
     except Exception as ex:
         return False, f"Failed to download nuclei templates automatically: {ex}"
+
+
+def _normalize_nuclei_target(raw: str) -> str:
+    value = (raw or "").strip().lower()
+    if not value:
+        return ""
+    parsed = urlparse(value if "://" in value else f"//{value}")
+    host = (parsed.hostname or value.split("/", 1)[0].split(":", 1)[0]).strip(".[]")
+    if not host or _is_private_or_local_host(host):
+        return ""
+    try:
+        ipaddress.ip_address(host)
+        return host
+    except ValueError:
+        return host if _HOSTNAME_RE.match(host) else ""
+
+
+def _normalize_nuclei_finding(row: dict) -> dict:
+    info = row.get("info") or {}
+    severity = (info.get("severity") or row.get("severity") or "unknown").lower()
+    template_id = row.get("template_id") or row.get("template-id") or row.get("templateID") or ""
+    matched_at = row.get("matched_at") or row.get("matched-at") or row.get("matched") or row.get("url") or ""
+    host = row.get("host") or row.get("ip") or ""
+    if isinstance(host, list):
+        host = ", ".join(str(h) for h in host)
+    return {
+        **row,
+        "host": host or matched_at,
+        "matched_at": matched_at,
+        "template_id": template_id,
+        "info": {**info, "severity": severity, "name": info.get("name") or row.get("name") or template_id or "—"},
+    }
 
 def _validate_webhook_url(raw: str) -> str:
     value = (raw or "").strip()
@@ -1156,13 +1204,16 @@ def toggle_subfinder(pid):
 
 def _resolve_nuclei_hosts(pid: str, mode: str) -> list[str]:
     if mode == "all_subdomains":
-        hosts = {(h or "").strip().lower() for h in db.project_hosts(pid)}
+        hosts = {_normalize_nuclei_target(h or "") for h in db.project_hosts(pid)}
         rows = db.x("SELECT hostname FROM subfinder_hosts WHERE project_id=?", (pid,)).fetchall()
-        hosts |= {(r["hostname"] or "").strip().lower() for r in rows}
+        hosts |= {_normalize_nuclei_target(r["hostname"] or "") for r in rows}
         return sorted(h for h in hosts if h)
 
     hosts_data = db.subfinder_discoveries(pid, page=1, per_page=5000, search="", mode="latest")
-    return sorted({(r.get("hostname") or "").strip().lower() for r in (hosts_data.get("rows") or []) if (r.get("hostname") or "").strip()})
+    return sorted({
+        target for target in (_normalize_nuclei_target(r.get("hostname") or "") for r in (hosts_data.get("rows") or []))
+        if target
+    })
 
 
 @api.post("/projects/<pid>/nuclei/scan")
@@ -1181,37 +1232,49 @@ def nuclei_scan_hosts(pid):
             return err("No subdomains found for this project", 400)
         return err("No newly discovered hosts found for this project", 400)
 
+    targets_file = ""
     try:
-        import tempfile
         with tempfile.NamedTemporaryFile(mode="w", suffix=".txt", delete=False) as tf:
             tf.write("\n".join(hosts) + "\n")
             targets_file = tf.name
 
         nuclei_bin = _resolve_nuclei_binary()
         if not nuclei_bin:
-            return err("nuclei binary not found in PATH, /usr/local/bin/nuclei, or /usr/bin/nuclei", 400)
+            return err("nuclei binary not found in PATH, NUCLEI_BIN, /root/go/bin/nuclei, /usr/local/bin/nuclei, or /usr/bin/nuclei", 400)
         templates_ok, templates_msg = _ensure_nuclei_templates(nuclei_bin)
         if not templates_ok:
             return err(templates_msg, 400)
 
+        templates_dir = _nuclei_templates_dir()
         cmd = [
             nuclei_bin,
             "-l", targets_file,
             "-severity", "medium,high,critical",
             "-jsonl",
             "-silent",
+            "-stats",
+            "-duc",
+            "-ud", templates_dir,
+            "-t", templates_dir,
         ]
         run = subprocess.run(cmd, text=True, capture_output=True, timeout=900)
 
         findings = []
+        parse_errors = 0
         for ln in (run.stdout or "").splitlines():
             ln = ln.strip()
-            if not ln:
+            if not ln or not ln.startswith("{"):
                 continue
             try:
-                findings.append(json.loads(ln))
+                findings.append(_normalize_nuclei_finding(json.loads(ln)))
             except Exception:
-                continue
+                parse_errors += 1
+
+        stderr_tail = (run.stderr or "")[-4000:]
+        stdout_tail = (run.stdout or "")[-4000:]
+        if run.returncode != 0 and not findings:
+            detail = stderr_tail or stdout_tail or f"nuclei exited with code {run.returncode}"
+            return err(f"Nuclei scan failed: {detail}", 500)
 
         return ok({
             "project_id": pid,
@@ -1219,12 +1282,13 @@ def nuclei_scan_hosts(pid):
             "scan_mode": mode,
             "hosts_scanned": len(hosts),
             "severities": ["medium", "high", "critical"],
-            "command": "nuclei -l <hosts_file> -severity medium,high,critical -jsonl -silent",
+            "command": "nuclei -l <hosts_file> -severity medium,high,critical -jsonl -silent -duc -ud <templates_dir> -t <templates_dir>",
             "findings": findings,
             "findings_total": len(findings),
-            "stderr": (run.stderr or "")[-4000:],
+            "stderr": stderr_tail,
             "exit_code": run.returncode,
-            "templates_status": templates_msg or "templates already present",
+            "parse_errors": parse_errors,
+            "templates_status": templates_msg,
         })
     except subprocess.TimeoutExpired:
         return err("Nuclei scan timed out after 900s", 504)
@@ -1232,6 +1296,12 @@ def nuclei_scan_hosts(pid):
         return err("nuclei binary not found", 400)
     except Exception as e:
         return err(f"Nuclei scan failed: {e}", 500)
+    finally:
+        if targets_file:
+            try:
+                os.unlink(targets_file)
+            except OSError:
+                pass
 
 
 @api.post("/projects/<pid>/nuclei/scan-new-discoveries")
