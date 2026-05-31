@@ -14,6 +14,7 @@ import queue
 import threading
 import time
 import logging
+import os
 import subprocess
 import shutil
 from urllib.parse import urlparse
