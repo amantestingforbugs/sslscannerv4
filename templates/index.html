@@ -1210,6 +1210,10 @@ tbody tr:last-child td{border-bottom:none}
       <div class="card" id="results-card" style="display:none">
         <div class="card-header">
           <span class="card-title" id="results-title">Results</span>
+          <div style="display:flex;gap:8px;flex-wrap:wrap">
+            <button class="btn btn-sm" onclick="exportResultsCsv()">⬇ Export CSV</button>
+            <button class="btn btn-sm" onclick="loadScanCompare()">↔ Compare Previous</button>
+          </div>
         </div>
         <div class="filter-tabs" id="result-tabs">
           <div class="filter-tab active" onclick="loadResults('all',this)">All</div>
@@ -1221,6 +1225,7 @@ tbody tr:last-child td{border-bottom:none}
         </div>
         <!-- Summary stats bar -->
         <div id="results-stats" style="display:flex;gap:20px;padding:12px 18px;border-bottom:1px solid var(--border);flex-wrap:wrap"></div>
+        <div id="scan-compare" style="display:none;padding:12px 18px;border-bottom:1px solid var(--border);background:var(--bg-raised)"></div>
         <div class="table-toolbar">
           <div class="search-input">
             <svg width="14" height="14" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
@@ -1236,6 +1241,8 @@ tbody tr:last-child td{border-bottom:none}
               <th onclick="sortTable('cn')">Certificate CN <span class="sort-icon">↕</span></th>
               <th onclick="sortTable('expiry')">Expiry <span class="sort-icon">↕</span></th>
               <th onclick="sortTable('days_left')">Days Left <span class="sort-icon">↕</span></th>
+              <th onclick="sortTable('tls_version')">TLS <span class="sort-icon">↕</span></th>
+              <th onclick="sortTable('key_bits')">Key <span class="sort-icon">↕</span></th>
               <th onclick="sortTable('issuer')">Issuer <span class="sort-icon">↕</span></th>
             </tr></thead>
             <tbody id="res-body"></tbody>
@@ -2889,7 +2896,7 @@ function sortTable(col) {
     const si = th.querySelector('.sort-icon');
     if (si) si.textContent='↕';
   });
-  const colMap = ['hostname','status','cn','expiry','days_left','issuer'];
+  const colMap = ['hostname','status','cn','expiry','days_left','tls_version','key_bits','issuer'];
   const idx = colMap.indexOf(col);
   if (idx>=0 && headers[idx]) {
     headers[idx].classList.add('sorted');
@@ -2924,7 +2931,7 @@ function sortValue(row, col) {
 function renderResTable(rows) {
   const body = document.getElementById('res-body');
   if (!rows.length) {
-    body.innerHTML='<tr><td colspan="6" style="text-align:center;padding:32px;color:var(--text-muted)">No entries for this filter.</td></tr>';
+    body.innerHTML='<tr><td colspan="8" style="text-align:center;padding:32px;color:var(--text-muted)">No entries for this filter.</td></tr>';
     return;
   }
   body.innerHTML = rows.map(r => {
@@ -2938,6 +2945,8 @@ function renderResTable(rows) {
       <td style="font-size:12px;color:var(--text-secondary);max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(r.cn||r.error||'—')}</td>
       <td style="font-size:12px">${r.expiry||'—'}</td>
       <td style="font-weight:600;color:${daysColor(r.days_left)};font-variant-numeric:tabular-nums">${r.days_left??'—'}</td>
+      <td><span class="badge badge-done" title="${esc(r.cipher_suite || '—')}">${esc(r.tls_version || '—')}</span></td>
+      <td style="font-size:11px;color:var(--text-secondary)" title="SANs: ${esc(String(r.san_count ?? '—'))} · SHA256: ${esc(r.fingerprint_sha256 || '—')}">${esc([r.key_algorithm, r.key_bits].filter(Boolean).join(' ') || '—')}</td>
       <td style="font-size:11px;color:var(--text-muted);max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(r.issuer||'—')}</td>
     </tr>`;
   }).join('');
@@ -2956,6 +2965,46 @@ function changePage(dir) {
   const np = curPage+dir;
   if (np<1||np>totalPages) return;
   loadResults(curFilter, null, np);
+}
+
+async function exportResultsCsv() {
+  if (!curSid) return;
+  window.location.href = `/api/scans/${curSid}/results/export?filter=${encodeURIComponent(curFilter || 'all')}`;
+}
+
+async function loadScanCompare() {
+  if (!curSid) return;
+  const box = document.getElementById('scan-compare');
+  box.style.display = '';
+  box.innerHTML = '<span style="color:var(--text-muted)">Loading comparison…</span>';
+  try {
+    const { ok, data, error } = await apiJSON(`/api/scans/${curSid}/compare`);
+    if (!ok) throw new Error(error || 'Compare failed');
+    const s = data.summary || {};
+    const prev = data.previous_scan;
+    const chips = [
+      ['Added hosts', s.added_hosts, 'var(--purple)'],
+      ['Removed hosts', s.removed_hosts, 'var(--text-muted)'],
+      ['Status changed', s.changed_status, 'var(--amber)'],
+      ['Renewed certs', s.renewed_certificates, 'var(--green)'],
+    ];
+    const changed = (data.changed_status || []).slice(0, 5).map(r =>
+      `<div style="font-size:12px;color:var(--text-secondary);margin-top:4px"><b>${esc(r.hostname)}</b>: ${esc(r.from)} → ${esc(r.to)}</div>`
+    ).join('');
+    box.innerHTML = `
+      <div style="display:flex;justify-content:space-between;gap:10px;align-items:flex-start;flex-wrap:wrap">
+        <div>
+          <div style="font-weight:700;margin-bottom:4px">Scan Drift Intelligence</div>
+          <div style="font-size:12px;color:var(--text-muted)">${prev ? `Compared with ${new Date(prev.created_at).toLocaleString()}` : 'No previous scan found for this project.'}</div>
+        </div>
+        <button class="btn btn-sm" onclick="document.getElementById('scan-compare').style.display='none'">Close</button>
+      </div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px">${chips.map(([label,val,color]) => `<span class="badge" style="background:var(--bg-surface);color:${color};border:1px solid var(--border)">${label}: ${fmt(val || 0)}</span>`).join('')}</div>
+      ${changed ? `<div style="margin-top:8px">${changed}</div>` : ''}
+    `;
+  } catch (e) {
+    box.innerHTML = `<span style="color:var(--red)">${esc(e.message || 'Unable to compare scans')}</span>`;
+  }
 }
 
 async function loadHistory(pid) {
