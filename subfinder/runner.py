@@ -39,6 +39,29 @@ _sf_state = {}  # project_id -> {status, job_id, new_count}
 _subfinder_flag_support: Dict[str, bool] = {}
 
 
+
+def _env_int(name: str, default: int, minimum: int = 0, maximum: Optional[int] = None) -> int:
+    try:
+        value = int(os.getenv(name, str(default)) or default)
+    except (TypeError, ValueError):
+        value = default
+    value = max(minimum, value)
+    if maximum is not None:
+        value = min(maximum, value)
+    return value
+
+
+def _compact_raw_record(record: Dict[str, object], sample_size: int = 50) -> Dict[str, object]:
+    found = list(record.get("found") or [])
+    compact = {k: v for k, v in record.items() if k not in {"found", "stdout", "stderr"}}
+    compact["found_count"] = int(record.get("found_count") or len(found) or 0)
+    if sample_size > 0 and found:
+        compact["found_sample"] = found[:sample_size]
+    stderr = str(record.get("stderr") or "")
+    if stderr:
+        compact["stderr_preview"] = stderr[:1000]
+    return compact
+
 def _resolve_subfinder_bin() -> Optional[str]:
     path = shutil.which("subfinder")
     if path:
@@ -1064,7 +1087,7 @@ def run_subfinder_for_project(project_id: str, triggered_by: str = "scheduler") 
                     discovered.extend(found)
                     if found:
                         source_counts[source_name] = source_counts.get(source_name, 0) + len(found)
-                    raw_records.append(run)
+                    raw_records.append(_compact_raw_record(run, sample_size=_env_int("SUBFINDER_RAW_SAMPLE_SIZE", 50, minimum=0)))
                     rid = subfinder_raw_result_add(
                         job_id=job_id,
                         project_id=project_id,
@@ -1116,12 +1139,19 @@ def run_subfinder_for_project(project_id: str, triggered_by: str = "scheduler") 
         httpx_rows = _resolve_active_hosts_with_httpx(new_hosts)
         subfinder_httpx_results_upsert_batch(project_id, job_id, httpx_rows)
 
-        raw_dir = Path("data/subfinder_raw")
-        raw_dir.mkdir(parents=True, exist_ok=True)
-        raw_output_path = raw_dir / f"{job_id}.json.gz"
-        with gzip.open(raw_output_path, "wt", encoding="utf-8") as fp:
-            json.dump(raw_records, fp, separators=(",", ":"))
-        subfinder_job_finish(job_id, new_count, len(discovered), str(raw_output_path))
+        raw_output_path = ""
+        if os.getenv("SUBFINDER_STORE_RAW_FILE", "0").strip().lower() not in {"0", "false", "no", "off"}:
+            raw_dir = Path("data/subfinder_raw")
+            raw_dir.mkdir(parents=True, exist_ok=True)
+            path = raw_dir / f"{job_id}.json.gz"
+            compact_records = [
+                _compact_raw_record(record, sample_size=_env_int("SUBFINDER_RAW_SAMPLE_SIZE", 50, minimum=0))
+                for record in raw_records
+            ]
+            with gzip.open(path, "wt", encoding="utf-8") as fp:
+                json.dump(compact_records, fp, separators=(",", ":"))
+            raw_output_path = str(path)
+        subfinder_job_finish(job_id, new_count, len(discovered), raw_output_path)
         log_event("subfinder", "info", "Enumeration source summary", project_id=project_id, job_id=job_id, sources=source_counts, total_discovered=len(discovered))
 
         if not discovered:
