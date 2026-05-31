@@ -25,7 +25,7 @@ import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
-from typing import Dict, List, Optional, Set
+from typing import Callable, Dict, Iterable, List, Optional, Set
 from urllib.parse import urlparse
 from urllib.request import urlopen, Request
 from urllib.error import HTTPError, URLError
@@ -77,10 +77,9 @@ def _build_subfinder_cmd(subfinder_bin: str, root_domain: str) -> List[str]:
     # Aggressive defaults to maximize enumeration yield where supported.
     preferred_flags = ["-all", "-recursive"]
 
-    # Optional env override to add additional flags without code changes.
-    extra = os.getenv("SUBFINDER_EXTRA_FLAGS", "").strip()
-    if extra:
-        preferred_flags.extend([token for token in shlex.split(extra) if token.startswith("-")])
+    # Optional env override to add additional flags without code changes. Keep
+    # value tokens that belong to supported flags (for example: "-rate-limit 50").
+    extra_tokens = shlex.split(os.getenv("SUBFINDER_EXTRA_FLAGS", "").strip())
 
     # Optional config/provider files improve coverage when users configure API keys/sources.
     cfg = os.getenv("SUBFINDER_CONFIG", "").strip()
@@ -93,6 +92,22 @@ def _build_subfinder_cmd(subfinder_bin: str, root_domain: str) -> List[str]:
     for flag in preferred_flags:
         if flag not in cmd and _subfinder_supports_flag(subfinder_bin, flag):
             cmd.append(flag)
+
+    idx = 0
+    while idx < len(extra_tokens):
+        token = extra_tokens[idx]
+        idx += 1
+        if not token.startswith("-") or token in cmd:
+            continue
+        if not _subfinder_supports_flag(subfinder_bin, token):
+            # Skip a value token following an unsupported option.
+            if idx < len(extra_tokens) and not extra_tokens[idx].startswith("-"):
+                idx += 1
+            continue
+        cmd.append(token)
+        if idx < len(extra_tokens) and not extra_tokens[idx].startswith("-"):
+            cmd.append(extra_tokens[idx])
+            idx += 1
 
     return cmd
 
@@ -432,6 +447,34 @@ def _run_amass_passive_for_root(root_domain: str, timeout: int = 240) -> List[st
         return []
 
 
+def _run_findomain_for_root(root_domain: str, timeout: int = 240) -> List[str]:
+    findomain_bin = shutil.which("findomain") or "/usr/local/bin/findomain"
+    if not findomain_bin or not Path(findomain_bin).exists():
+        return []
+    try:
+        run = subprocess.run(
+            [findomain_bin, "-t", root_domain, "-q"],
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+        )
+        if run.returncode not in (0, 1):
+            return []
+        return _filter_hosts_for_root(run.stdout.splitlines(), root_domain)
+    except Exception:
+        return []
+
+
+def _filter_hosts_for_root(candidates: Iterable[str], root_domain: str) -> List[str]:
+    found = {
+        host
+        for token in candidates
+        for host in [_normalize_host(str(token or ""))]
+        if host and _HOST_RE.match(host) and _is_host_within_root(host, root_domain)
+    }
+    return sorted(found)
+
+
 def _query_crtsh_for_root(root_domain: str, timeout: int = 45) -> List[str]:
     url = f"https://crt.sh/?q=%25.{root_domain}&output=json"
     try:
@@ -530,6 +573,70 @@ def _query_hackertarget_for_root(root_domain: str, timeout: int = 35) -> List[st
         return []
 
 
+def _query_anubis_for_root(root_domain: str, timeout: int = 35) -> List[str]:
+    """Pull public subdomain lists from the jldc/anubis endpoint."""
+    url = f"https://jldc.me/anubis/subdomains/{root_domain}"
+    try:
+        rows = _http_json_with_retries(url, timeout=timeout, retries=2)
+        return _filter_hosts_for_root(rows if isinstance(rows, list) else [], root_domain)
+    except Exception:
+        return []
+
+
+def _query_subdomain_center_for_root(root_domain: str, timeout: int = 35) -> List[str]:
+    """Pull public hostnames from Subdomain Center."""
+    url = f"https://api.subdomain.center/?domain={root_domain}"
+    try:
+        rows = _http_json_with_retries(url, timeout=timeout, retries=2)
+        return _filter_hosts_for_root(rows if isinstance(rows, list) else [], root_domain)
+    except Exception:
+        return []
+
+
+def _query_shodan_for_root(root_domain: str, timeout: int = 35) -> List[str]:
+    """Pull subdomains from Shodan DNS Domain API when SHODAN_API_KEY is configured."""
+    api_key = os.getenv("SHODAN_API_KEY", "").strip()
+    if not api_key:
+        return []
+    url = f"https://api.shodan.io/dns/domain/{root_domain}?key={api_key}"
+    try:
+        payload = _http_json_with_retries(url, timeout=timeout, retries=2)
+        found: Set[str] = set()
+        for sub in (payload or {}).get("subdomains") or []:
+            host = _normalize_host(f"{sub}.{root_domain}")
+            if host and _HOST_RE.match(host) and _is_host_within_root(host, root_domain):
+                found.add(host)
+        for row in (payload or {}).get("data") or []:
+            token = str((row or {}).get("subdomain") or "").strip()
+            host = _normalize_host(token)
+            if host and "." not in host:
+                host = _normalize_host(f"{host}.{root_domain}")
+            if host and _HOST_RE.match(host) and _is_host_within_root(host, root_domain):
+                found.add(host)
+        return sorted(found)
+    except Exception:
+        return []
+
+
+def _query_chaos_for_root(root_domain: str, timeout: int = 35) -> List[str]:
+    """Pull subdomains from ProjectDiscovery Chaos when CHAOS_API_KEY is configured."""
+    api_key = os.getenv("CHAOS_API_KEY", "").strip()
+    if not api_key:
+        return []
+    url = f"https://dns.projectdiscovery.io/dns/{root_domain}/subdomains"
+    try:
+        req = Request(url, headers={"User-Agent": "ssl-sentinel/1.0", "Authorization": api_key})
+        ctx = ssl.create_default_context()
+        with urlopen(req, timeout=timeout, context=ctx) as res:
+            body = res.read().decode("utf-8", errors="replace")
+        payload = json.loads(body or "{}")
+        candidates = []
+        for token in (payload or {}).get("subdomains") or []:
+            token = str(token or "").strip()
+            candidates.append(token if token.endswith(f".{root_domain}") else f"{token}.{root_domain}")
+        return _filter_hosts_for_root(candidates, root_domain)
+    except Exception:
+        return []
 
 
 def _query_virustotal_for_root(root_domain: str, timeout: int = 35) -> List[str]:
@@ -574,6 +681,8 @@ def _query_securitytrails_for_root(root_domain: str, timeout: int = 35) -> List[
         return sorted(found)
     except Exception:
         return []
+
+
 def _query_certspotter_for_root(root_domain: str, timeout: int = 40) -> List[str]:
     """Pull certificate transparency names from Cert Spotter API."""
     url = f"https://api.certspotter.com/v1/issuances?domain={root_domain}&include_subdomains=true&expand=dns_names"
@@ -588,8 +697,6 @@ def _query_certspotter_for_root(root_domain: str, timeout: int = 40) -> List[str
         return sorted(found)
     except Exception:
         return []
-
-
 
 
 def _query_alienvault_otx_for_root(root_domain: str, timeout: int = 40) -> List[str]:
@@ -638,6 +745,8 @@ def _query_urlscan_for_root(root_domain: str, timeout: int = 45) -> List[str]:
         return sorted(found)
     except Exception:
         return []
+
+
 def _query_wayback_for_root(root_domain: str, timeout: int = 45) -> List[str]:
     """Harvest hostnames from Internet Archive CDX URLs index."""
     url = (
@@ -722,6 +831,64 @@ def _query_tls_san_hosts_for_root(root_domain: str, timeout: int = 8) -> List[st
     return sorted(found)
 
 
+EnumerationSource = Callable[[str], List[str]]
+
+
+def _passive_enumeration_sources() -> Dict[str, EnumerationSource]:
+    """Return every passive/tool source the pipeline knows how to query."""
+    return {
+        "assetfinder": _run_assetfinder_for_root,
+        "amass": _run_amass_passive_for_root,
+        "findomain": _run_findomain_for_root,
+        "crtsh": _query_crtsh_for_root,
+        "bufferover": _query_bufferover_for_root,
+        "rapiddns": _query_rapiddns_for_root,
+        "anubis": _query_anubis_for_root,
+        "subdomain_center": _query_subdomain_center_for_root,
+        "hackertarget": _query_hackertarget_for_root,
+        "certspotter": _query_certspotter_for_root,
+        "wayback": _query_wayback_for_root,
+        "alienvault_otx": _query_alienvault_otx_for_root,
+        "threatcrowd": _query_threatcrowd_for_root,
+        "urlscan": _query_urlscan_for_root,
+        "web_artifacts": _query_common_web_artifacts_for_root,
+        "tls_san": _query_tls_san_hosts_for_root,
+        "virustotal": _query_virustotal_for_root,
+        "securitytrails": _query_securitytrails_for_root,
+        "shodan": _query_shodan_for_root,
+        "chaos": _query_chaos_for_root,
+    }
+
+
+def _tool_summary() -> str:
+    sources = ["subfinder(all-sources)", *_passive_enumeration_sources().keys(), "dns_bruteforce", "dns_permutation"]
+    return ",".join(sources)
+
+
+def _run_passive_source(source_name: str, source_fn: EnumerationSource, root_domain: str) -> Dict[str, object]:
+    started = time.time()
+    try:
+        found = _filter_hosts_for_root(source_fn(root_domain) or [], root_domain)
+        return {
+            "source": source_name,
+            "root_domain": root_domain,
+            "status": "done",
+            "found": found,
+            "found_count": len(found),
+            "elapsed_ms": int((time.time() - started) * 1000),
+            "stderr": "",
+        }
+    except Exception as e:
+        return {
+            "source": source_name,
+            "root_domain": root_domain,
+            "status": "error",
+            "found": [],
+            "found_count": 0,
+            "elapsed_ms": int((time.time() - started) * 1000),
+            "stderr": str(e),
+        }
+
 
 def _mutation_labels_from_hosts(root_domain: str, known_hosts: List[str], max_labels: int = 120) -> List[str]:
     labels: Set[str] = set()
@@ -776,6 +943,7 @@ def _permutation_dns_hosts(root_domain: str, known_hosts: List[str], max_candida
                 continue
     return sorted(set(resolved))
 
+
 def run_subfinder_for_project(project_id: str, triggered_by: str = "scheduler") -> Optional[str]:
     """
     Full subfinder pipeline for a project:
@@ -819,7 +987,7 @@ def run_subfinder_for_project(project_id: str, triggered_by: str = "scheduler") 
         project_id=project_id,
         root_domains=root_domains,
         status="running",
-        feature_set=["subfinder","osint","dns_bruteforce","dns_permutation"],
+        feature_set=["subfinder", *_passive_enumeration_sources().keys(), "dns_bruteforce", "dns_permutation"],
     )
 
     job_id = subfinder_job_create(project_id, ",".join(root_domains), triggered_by)
@@ -876,45 +1044,41 @@ def run_subfinder_for_project(project_id: str, triggered_by: str = "scheduler") 
                     log.warning("Subfinder returned 0 results — check sources/config (root=%s)", root_domain)
 
         discovered = sorted(set(discovered_all))
-        osint_sources = {
-            "assetfinder": _run_assetfinder_for_root,
-            "amass": _run_amass_passive_for_root,
-            "crtsh": _query_crtsh_for_root,
-            "bufferover": _query_bufferover_for_root,
-            "rapiddns": _query_rapiddns_for_root,
-            "hackertarget": _query_hackertarget_for_root,
-            "certspotter": _query_certspotter_for_root,
-            "wayback": _query_wayback_for_root,
-            "alienvault_otx": _query_alienvault_otx_for_root,
-            "threatcrowd": _query_threatcrowd_for_root,
-            "urlscan": _query_urlscan_for_root,
-            "web_artifacts": _query_common_web_artifacts_for_root,
-            "tls_san": _query_tls_san_hosts_for_root,
-            "virustotal": _query_virustotal_for_root,
-            "securitytrails": _query_securitytrails_for_root,
-        }
+        osint_sources = _passive_enumeration_sources()
         osint_tasks = [
             (source_name, source_fn, root_domain)
             for source_name, source_fn in osint_sources.items()
             for root_domain in root_domains
         ]
         if osint_tasks:
-            osint_workers = max(4, min(48, len(osint_tasks)))
+            osint_workers = max(4, min(64, len(osint_tasks)))
             with ThreadPoolExecutor(max_workers=osint_workers) as pool:
                 future_map = {
-                    pool.submit(source_fn, root_domain): (source_name, root_domain)
+                    pool.submit(_run_passive_source, source_name, source_fn, root_domain): (source_name, root_domain)
                     for source_name, source_fn, root_domain in osint_tasks
                 }
                 for future in as_completed(future_map):
                     source_name, root_domain = future_map[future]
-                    try:
-                        found = future.result() or []
-                    except Exception as e:
-                        log.warning("Enumeration source failed source=%s root=%s err=%s", source_name, root_domain, e)
-                        continue
+                    run = future.result()
+                    found = run.get("found") or []
+                    discovered.extend(found)
                     if found:
-                        discovered.extend(found)
                         source_counts[source_name] = source_counts.get(source_name, 0) + len(found)
+                    raw_records.append(run)
+                    rid = subfinder_raw_result_add(
+                        job_id=job_id,
+                        project_id=project_id,
+                        root_domain=root_domain,
+                        command=f"{source_name}:{root_domain}",
+                    )
+                    subfinder_raw_result_finish(
+                        rid,
+                        run.get("status", "done"),
+                        0 if run.get("status") == "done" else 1,
+                        len(found),
+                        "\n".join(found),
+                        run.get("stderr", ""),
+                    )
         discovered = sorted(set(discovered))
         brute_discovered: Set[str] = set()
         permutation_discovered: Set[str] = set()
@@ -1112,38 +1276,26 @@ def run_domain_enumeration_scan(domain: str, triggered_by: str = "manual") -> di
     scan_id = db.domain_enum_scan_create(
         root,
         triggered_by=triggered_by,
-        tool_summary="subfinder(all-sources),dns_bruteforce,dns_permutation,assetfinder,amass,findomain,crtsh,bufferover,rapiddns,certspotter,hackertarget,wayback,alienvault_otx,threatcrowd,urlscan",
+        tool_summary=_tool_summary(),
     )
     all_found: Set[str] = set()
     source_map: Dict[str, Set[str]] = {}
 
-    with ThreadPoolExecutor(max_workers=8) as pool:
-        futures = {
-            "subfinder": pool.submit(_run_subfinder_for_root, root, 220),
-            "assetfinder": pool.submit(_run_assetfinder_for_root, root, 220),
-            "amass": pool.submit(_run_amass_passive_for_root, root, 280),
-            "crtsh": pool.submit(_query_crtsh_for_root, root, 60),
-            "bufferover": pool.submit(_query_bufferover_for_root, root, 45),
-            "rapiddns": pool.submit(_query_rapiddns_for_root, root, 45),
-            "certspotter": pool.submit(_query_certspotter_for_root, root, 45),
-            "hackertarget": pool.submit(_query_hackertarget_for_root, root, 45),
-            "wayback": pool.submit(_query_wayback_for_root, root, 45),
-            "alienvault_otx": pool.submit(_query_alienvault_otx_for_root, root, 45),
-            "threatcrowd": pool.submit(_query_threatcrowd_for_root, root, 45),
-            "urlscan": pool.submit(_query_urlscan_for_root, root, 45),
-        }
-        if shutil.which("findomain") or Path("/usr/local/bin/findomain").exists():
-            futures["findomain"] = pool.submit(lambda: subprocess.run(["findomain", "-t", root, "-q"], capture_output=True, text=True, timeout=240))
+    passive_sources = _passive_enumeration_sources()
+    max_workers = max(8, min(64, len(passive_sources) + 1))
+    with ThreadPoolExecutor(max_workers=max_workers) as pool:
+        futures = {"subfinder": pool.submit(_run_subfinder_for_root, root, 220)}
+        futures.update(
+            {
+                source_name: pool.submit(_run_passive_source, source_name, source_fn, root)
+                for source_name, source_fn in passive_sources.items()
+            }
+        )
 
         for src, fut in futures.items():
             try:
                 result = fut.result()
-                if src == "subfinder":
-                    hosts = result.get("found") or []
-                elif src == "findomain":
-                    hosts = [_normalize_host(ln) for ln in (result.stdout or "").splitlines()]
-                else:
-                    hosts = result or []
+                hosts = (result.get("found") or []) if isinstance(result, dict) else (result or [])
                 for h in hosts:
                     if h and _HOST_RE.match(h) and _is_host_within_root(h, root):
                         source_map.setdefault(src, set()).add(h)

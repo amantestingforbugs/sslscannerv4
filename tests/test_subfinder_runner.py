@@ -217,3 +217,55 @@ def test_build_subfinder_cmd_skips_unsupported_extra_flags(monkeypatch):
     assert "-all" in cmd
     assert "-recursive" in cmd
     assert "-nW" not in cmd
+
+
+def test_query_anubis_for_root_parses_public_json(monkeypatch):
+    monkeypatch.setattr(
+        runner,
+        "_http_json_with_retries",
+        lambda *args, **kwargs: ["api.example.com", "*.dev.example.com", "bad.net"],
+    )
+    found = runner._query_anubis_for_root("example.com")
+    assert found == ["api.example.com", "dev.example.com"]
+
+
+def test_query_subdomain_center_for_root_parses_public_json(monkeypatch):
+    monkeypatch.setattr(
+        runner,
+        "_http_json_with_retries",
+        lambda *args, **kwargs: ["portal.example.com", "cdn.example.com", "bad.net"],
+    )
+    found = runner._query_subdomain_center_for_root("example.com")
+    assert found == ["cdn.example.com", "portal.example.com"]
+
+
+def test_query_shodan_for_root_parses_keyed_api(monkeypatch):
+    monkeypatch.setenv("SHODAN_API_KEY", "secret")
+    monkeypatch.setattr(
+        runner,
+        "_http_json_with_retries",
+        lambda *args, **kwargs: {
+            "subdomains": ["api", "www"],
+            "data": [{"subdomain": "dev"}, {"subdomain": "bad.net"}],
+        },
+    )
+    found = runner._query_shodan_for_root("example.com")
+    assert found == ["api.example.com", "dev.example.com", "www.example.com"]
+
+
+def test_build_subfinder_cmd_preserves_supported_extra_flag_values(monkeypatch):
+    monkeypatch.setenv("SUBFINDER_EXTRA_FLAGS", "-rate-limit 50 -nW")
+
+    def fake_support(_bin, flag):
+        return flag in {"-all", "-recursive", "-rate-limit"}
+
+    monkeypatch.setattr(runner, "_subfinder_supports_flag", fake_support)
+    cmd = runner._build_subfinder_cmd("subfinder", "example.com")
+    assert "-rate-limit" in cmd
+    assert cmd[cmd.index("-rate-limit") + 1] == "50"
+    assert "-nW" not in cmd
+
+
+def test_passive_enumeration_sources_include_all_optional_integrations():
+    sources = runner._passive_enumeration_sources()
+    assert {"findomain", "anubis", "subdomain_center", "shodan", "chaos"}.issubset(sources)
