@@ -183,40 +183,6 @@ def _normalize_hostname(raw: str) -> str:
 
 
 
-def _analyze_hosts_text(content: str) -> dict:
-    """Return normalized host inventory metadata before saving a pasted/uploaded list."""
-    raw_items = []
-    for line in (content or "").splitlines():
-        item = line.split("#", 1)[0].strip()
-        if item:
-            raw_items.append(item)
-
-    normalized = []
-    invalid = []
-    seen = set()
-    duplicates = []
-    for raw in raw_items:
-        host = _normalize_hostname(raw)
-        if not host:
-            invalid.append(raw)
-            continue
-        if host in seen:
-            duplicates.append(host)
-            continue
-        seen.add(host)
-        normalized.append(host)
-
-    return {
-        "hosts": normalized,
-        "host_count": len(normalized),
-        "input_count": len(raw_items),
-        "invalid_count": len(invalid),
-        "duplicate_count": len(duplicates),
-        "invalid_samples": invalid[:25],
-        "duplicate_samples": duplicates[:25],
-    }
-
-
 
 def _compute_risk_intelligence(total_hosts: int, latest: dict, previous: dict | None = None) -> dict:
     """Compute normalized risk score, grade, trend, and prioritized actions."""
@@ -604,25 +570,16 @@ def upload_hosts(pid):
         content = request.files["file"].read().decode("utf-8", errors="ignore")
     else:
         content = (request.json or {}).get("hosts", "") or (request.data or b"").decode()
-    analysis = _analyze_hosts_text(content)
-    hosts = analysis["hosts"]
+    hosts = parse_hosts_file(content)
     if not hosts:
         return err("No valid hostnames found")
     db.project_save_hosts(pid, hosts)
-    return ok({"count": len(hosts), "analysis": analysis})
+    return ok({"count": len(hosts)})
 
 
 @api.get("/projects/<pid>/hosts")
 def get_hosts(pid):
     return ok(db.project_hosts(pid))
-
-
-@api.post("/projects/<pid>/hosts/preview")
-def preview_hosts(pid):
-    if not db.project_get(pid):
-        return err("Project not found", 404)
-    content = (request.json or {}).get("hosts", "") or (request.data or b"").decode(errors="ignore")
-    return ok(_analyze_hosts_text(content))
 
 
 # ── Scans ─────────────────────────────────────────────────────────────────────
@@ -660,64 +617,6 @@ def get_results(sid):
     page = _safe_int(request.args.get("page", 1), 1, min_value=1)
     per_page = _safe_int(request.args.get("per_page", 500), 500, min_value=50, max_value=1000)
     return ok(db.results_get(sid, flt, page, per_page))
-
-
-@api.get("/scans/<sid>/results/export")
-def export_results(sid):
-    scan = db.scan_get(sid)
-    if not scan:
-        return err("Scan not found", 404)
-    flt = (request.args.get("filter", "all") or "all").strip().lower()
-    if flt not in {"all", "mismatch", "expired", "expiring", "ok", "errors"}:
-        return err("Invalid filter", 400)
-    rows = db.scan_results_all(sid, flt)
-    out = io.StringIO()
-    writer = csv.writer(out)
-    writer.writerow([
-        "hostname", "status", "cn", "issuer", "not_before", "expiry", "days_left",
-        "tls_version", "cipher_suite", "cipher_bits", "key_algorithm", "key_bits",
-        "signature_algorithm", "san_count", "fingerprint_sha256", "serial_number", "error", "checked_at",
-    ])
-    for r in rows:
-        writer.writerow([
-            r.get("hostname", ""), _result_status(r), r.get("cn", ""), r.get("issuer", ""),
-            r.get("not_before", ""), r.get("expiry", ""), r.get("days_left", ""),
-            r.get("tls_version", ""), r.get("cipher_suite", ""), r.get("cipher_bits", ""),
-            r.get("key_algorithm", ""), r.get("key_bits", ""), r.get("signature_algorithm", ""),
-            r.get("san_count", ""), r.get("fingerprint_sha256", ""), r.get("serial_number", ""),
-            r.get("error", ""), r.get("checked_at", ""),
-        ])
-    filename = f"ssl-scan-{sid[:8]}-{flt}.csv"
-    return Response(
-        out.getvalue(),
-        content_type="text/csv; charset=utf-8",
-        headers={"Content-Disposition": f"attachment; filename={filename}"},
-    )
-
-
-def _result_status(row: dict) -> str:
-    if row.get("error"):
-        return "error"
-    if row.get("is_expired"):
-        return "expired"
-    if row.get("is_mismatch"):
-        return "mismatch"
-    if row.get("is_expiring") or row.get("is_expiring_soon"):
-        return "expiring"
-    if row.get("is_ok"):
-        return "ok"
-    return "unknown"
-
-
-@api.get("/scans/<sid>/compare")
-def compare_scan(sid):
-    if not db.scan_get(sid):
-        return err("Scan not found", 404)
-    previous_sid = (request.args.get("previous_scan_id") or "").strip() or None
-    comparison = db.scan_compare(sid, previous_sid)
-    if comparison is None:
-        return err("Scan not found", 404)
-    return ok(comparison)
 
 
 @api.get("/active-scans")
