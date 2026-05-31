@@ -15,8 +15,6 @@ log = logging.getLogger(__name__)
 BATCH_SIZE = 500
 PROGRESS_UPDATE_EVERY = 500
 MAX_WORKERS = int(os.getenv("SSL_MAX_WORKERS", "200"))
-SCAN_STATE_TTL_SECONDS = int(os.getenv("SCAN_STATE_TTL_SECONDS", "3600"))
-SCAN_STATE_MAX_COMPLETED = int(os.getenv("SCAN_STATE_MAX_COMPLETED", "100"))
 
 # ── In-memory scan state (shared with subfinder via import) ───────────────────
 _scan_state: Dict[str, Dict] = {}
@@ -68,29 +66,6 @@ def get_scan_state(sid: str) -> Optional[Dict]:
 def list_active_scans() -> list:
     with _scan_lock:
         return [v.copy() for v in _scan_state.values() if v.get("status") in {"running", "paused"}]
-
-
-def prune_finished_scan_state(now_ts: Optional[float] = None) -> int:
-    """Bound completed in-memory scan state so long-running workers do not leak RAM."""
-    now_ts = time.time() if now_ts is None else now_ts
-    with _scan_lock:
-        completed = [
-            (sid, state)
-            for sid, state in _scan_state.items()
-            if state.get("status") in {"done", "error", "stopped"}
-        ]
-        stale_ids = {
-            sid
-            for sid, state in completed
-            if now_ts - float(state.get("finished_ts") or state.get("start_ts") or 0) > SCAN_STATE_TTL_SECONDS
-        }
-        remaining = [(sid, state) for sid, state in completed if sid not in stale_ids]
-        if len(remaining) > SCAN_STATE_MAX_COMPLETED:
-            remaining.sort(key=lambda item: float(item[1].get("finished_ts") or item[1].get("start_ts") or 0))
-            stale_ids.update(sid for sid, _ in remaining[: len(remaining) - SCAN_STATE_MAX_COMPLETED])
-        for sid in stale_ids:
-            _scan_state.pop(sid, None)
-        return len(stale_ids)
 
 
 def pause_scan(sid: str) -> bool:
@@ -156,7 +131,7 @@ def run_project_scan(project_id: str, triggered_by: str = "manual") -> Optional[
         _scan_state[sid] = {
             "status": "running", "progress": 0, "total": total,
             "project_id": project_id, "project_name": project["name"],
-            "started_at": _now(), "start_ts": time.time(), "triggered_by": triggered_by,
+            "started_at": _now(),
         }
         _scan_controls[sid] = {"pause": threading.Event(), "stop": threading.Event()}
 
@@ -209,14 +184,14 @@ def run_project_scan(project_id: str, triggered_by: str = "manual") -> Optional[
             scan_update(sid, status="stopped", finished_at=_now(), done=done)
             with _scan_lock:
                 if sid in _scan_state:
-                    _scan_state[sid].update({"status": "stopped", "progress": done, "finished_at": _now(), "finished_ts": time.time(), "done": done})
+                    _scan_state[sid].update({"status": "stopped", "progress": done, "finished_at": _now(), "done": done})
             log_event("ssl_scan", "warning", "Scan stopped by user", project_id=project_id, scan_id=sid, total=total, done=done, status="stopped")
         else:
             scan_finish(sid)
             log_event("ssl_scan", "info", "Scan finished", project_id=project_id, scan_id=sid, total=total, status="idle")
             with _scan_lock:
                 if sid in _scan_state:
-                    _scan_state[sid].update({"status": "done", "progress": total, "finished_at": _now(), "finished_ts": time.time(), "done": total})
+                    _scan_state[sid].update({"status": "done", "progress": total, "finished_at": _now(), "done": total})
 
         # Send Telegram
         unsent = [a for a in alerts_unsent() if a["project_id"] == project_id]
@@ -238,8 +213,6 @@ def run_project_scan(project_id: str, triggered_by: str = "manual") -> Optional[
         with _scan_lock:
             if sid in _scan_state:
                 _scan_state[sid]["status"] = "error"
-                _scan_state[sid]["finished_ts"] = time.time()
-                _scan_state[sid]["finished_at"] = _now()
         return None
     finally:
         with _scan_lock:
@@ -280,25 +253,21 @@ class ContinuousScheduler:
             self._stop.wait(60)
 
     def _tick(self):
-        from db.database import project_list, storage_prune
+        from db.database import project_list, scans_prune_older_than
         now_ts = time.time()
-        pruned_state = prune_finished_scan_state(now_ts)
-        if pruned_state:
-            log.debug("Pruned %s completed scan states from memory", pruned_state)
 
-        # Keep DB and raw-output growth bounded: run retention sweep once per day.
+        # Keep DB growth bounded: run retention sweep once per day.
         if now_ts - self._last_retention_run >= 24 * 60 * 60:
-            stats = storage_prune(
-                scan_days=int(os.getenv("SCAN_RETENTION_DAYS", "7")),
-                raw_days=int(os.getenv("RAW_RETENTION_DAYS", "2")),
-                max_scans_per_project=int(os.getenv("MAX_SCANS_PER_PROJECT", "50")),
-                max_domain_enum_scans=int(os.getenv("MAX_DOMAIN_ENUM_SCANS", "200")),
-                vacuum=os.getenv("DB_VACUUM_AFTER_RETENTION", "1").strip().lower() not in {"0", "false", "no", "off"},
-            )
+            stats = scans_prune_older_than(days=7)
             self._last_retention_run = now_ts
-            deleted = sum(v for k, v in stats.items() if k.endswith("_deleted") and isinstance(v, int))
-            if deleted:
-                log.info("Storage retention cleanup complete: %s", stats)
+            if stats.get("scans_deleted"):
+                log.info(
+                    "Retention cleanup complete (cutoff=%s): scans=%s results=%s alerts=%s",
+                    stats.get("cutoff"),
+                    stats.get("scans_deleted", 0),
+                    stats.get("results_deleted", 0),
+                    stats.get("alerts_deleted", 0),
+                )
 
         for p in project_list():
             if not p.get("enabled"):

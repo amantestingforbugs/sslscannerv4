@@ -4,7 +4,7 @@ Persistent SQLite layer. Per-thread connection pool, WAL mode, batch writes.
 Extended with subfinder_jobs and subfinder_hosts tables.
 """
 
-import os, sqlite3, json, uuid, threading, logging, zlib
+import sqlite3, json, uuid, threading, logging, zlib
 from itertools import islice
 from datetime import datetime, timezone
 from pathlib import Path
@@ -21,11 +21,9 @@ def _conn():
         c.row_factory = sqlite3.Row
         c.execute("PRAGMA journal_mode=WAL")
         c.execute("PRAGMA synchronous=NORMAL")
-        cache_kib = max(1024, int(os.getenv("SQLITE_CACHE_KIB", "8192") or 8192))
-        mmap_size = max(0, int(os.getenv("SQLITE_MMAP_SIZE", "0") or 0))
-        c.execute(f"PRAGMA cache_size=-{cache_kib}")
-        c.execute("PRAGMA temp_store=FILE")
-        c.execute(f"PRAGMA mmap_size={mmap_size}")
+        c.execute("PRAGMA cache_size=-32000")
+        c.execute("PRAGMA temp_store=MEMORY")
+        c.execute("PRAGMA mmap_size=268435456")
         c.execute("PRAGMA foreign_keys=ON")
         _local.c = c
     return _local.c
@@ -37,25 +35,6 @@ def commit():       _conn().commit()
 def now():          return datetime.now(timezone.utc).isoformat()
 def uid():          return str(uuid.uuid4())
 
-
-
-def _env_int(name: str, default: int, minimum: int = 0, maximum: int | None = None) -> int:
-    try:
-        value = int(os.getenv(name, str(default)) or default)
-    except (TypeError, ValueError):
-        value = default
-    value = max(minimum, value)
-    if maximum is not None:
-        value = min(maximum, value)
-    return value
-
-
-def _trim_text(text: str, max_chars: int) -> str:
-    if not text or max_chars <= 0:
-        return ""
-    if len(text) <= max_chars:
-        return text
-    return text[:max_chars] + f"\n…truncated; original length {len(text)} chars…"
 
 def _compress_text(text: str):
     if not text:
@@ -457,142 +436,33 @@ def scan_latest(pid):
     return dict(r) if r else None
 
 
-def _delete_by_ids(table: str, id_column: str, ids: list[str]) -> int:
-    deleted = 0
-    for chunk in _chunked(ids, 500):
-        placeholders = ",".join(["?"] * len(chunk))
-        deleted += x(f"DELETE FROM {table} WHERE {id_column} IN ({placeholders})", chunk).rowcount or 0
-    return deleted
+def scans_prune_older_than(days: int = 7) -> dict:
+    """Delete scan/history data older than `days` to keep DB size bounded."""
+    keep_days = max(1, int(days or 7))
+    cutoff_row = x("SELECT datetime('now', ?)", (f"-{keep_days} days",)).fetchone()
+    cutoff = cutoff_row[0] if cutoff_row else None
+    if not cutoff:
+        return {"cutoff": None, "scans_deleted": 0, "results_deleted": 0, "alerts_deleted": 0}
 
-
-def _checkpoint_and_vacuum(should_vacuum: bool = False):
-    # Flush WAL pages so the on-disk size visible to hosts/containers drops after cleanup.
-    try:
-        x("PRAGMA wal_checkpoint(TRUNCATE)")
-    except sqlite3.OperationalError:
-        pass
-    if should_vacuum:
-        try:
-            x("VACUUM")
-        except sqlite3.OperationalError as exc:
-            log.warning("SQLite VACUUM skipped: %s", exc)
-
-
-def storage_prune(
-    scan_days: int = 7,
-    raw_days: int = 2,
-    max_scans_per_project: int = 50,
-    max_domain_enum_scans: int = 200,
-    vacuum: bool = False,
-) -> dict:
-    """Delete old high-volume history so DB and raw-output storage stay bounded."""
-    keep_scan_days = max(1, int(scan_days or 7))
-    keep_raw_days = max(1, int(raw_days or 2))
-    max_scans = max(1, int(max_scans_per_project or 50))
-    max_domain_enum = max(1, int(max_domain_enum_scans or 200))
-    scan_cutoff = x("SELECT datetime('now', ?)", (f"-{keep_scan_days} days",)).fetchone()[0]
-    raw_cutoff = x("SELECT datetime('now', ?)", (f"-{keep_raw_days} days",)).fetchone()[0]
-
-    old_scan_ids = {r["id"] for r in x("SELECT id FROM scans WHERE created_at < ?", (scan_cutoff,)).fetchall()}
-    overflow_scan_ids = {
-        r["id"]
-        for r in x(
-            """
-            SELECT id FROM (
-              SELECT id, ROW_NUMBER() OVER (PARTITION BY project_id ORDER BY created_at DESC, id DESC) AS rn
-              FROM scans
-            ) WHERE rn > ?
-            """,
-            (max_scans,),
-        ).fetchall()
-    }
-    scan_ids = sorted(old_scan_ids | overflow_scan_ids)
+    old_scan_ids = [r["id"] for r in x("SELECT id FROM scans WHERE created_at < ?", (cutoff,)).fetchall()]
+    if not old_scan_ids:
+        return {"cutoff": cutoff, "scans_deleted": 0, "results_deleted": 0, "alerts_deleted": 0}
 
     results_deleted = 0
     alerts_deleted = 0
-    scans_deleted = 0
-    if scan_ids:
-        results_deleted = _delete_by_ids("results", "scan_id", scan_ids)
-        alerts_deleted = _delete_by_ids("alerts", "scan_id", scan_ids)
-        scans_deleted = _delete_by_ids("scans", "id", scan_ids)
+    for chunk in _chunked(old_scan_ids, 500):
+        placeholders = ",".join(["?"] * len(chunk))
+        results_deleted += x(f"DELETE FROM results WHERE scan_id IN ({placeholders})", chunk).rowcount or 0
+        alerts_deleted += x(f"DELETE FROM alerts WHERE scan_id IN ({placeholders})", chunk).rowcount or 0
 
-    raw_job_rows = x("SELECT id, raw_output_path FROM subfinder_jobs WHERE started_at < ?", (raw_cutoff,)).fetchall()
-    raw_job_ids = {r["id"] for r in raw_job_rows}
-    old_raw_paths = [r["raw_output_path"] for r in raw_job_rows if r["raw_output_path"]]
-    raw_result_ids = {
-        r["id"]
-        for r in x(
-            """
-            SELECT id FROM subfinder_raw_results
-            WHERE started_at < ?
-               OR (job_id IN (SELECT id FROM subfinder_jobs WHERE started_at < ?))
-            """,
-            (raw_cutoff, raw_cutoff),
-        ).fetchall()
-    }
-    discoveries_deleted = _delete_by_ids("subfinder_new_discoveries", "job_id", sorted(raw_job_ids)) if raw_job_ids else 0
-    raw_results_deleted = _delete_by_ids("subfinder_raw_results", "id", sorted(raw_result_ids)) if raw_result_ids else 0
-    subfinder_jobs_deleted = _delete_by_ids("subfinder_jobs", "id", sorted(raw_job_ids)) if raw_job_ids else 0
-
-    raw_files_deleted = 0
-    for raw_path in old_raw_paths:
-        try:
-            path = Path(raw_path)
-            if path.exists() and path.is_file():
-                path.unlink()
-                raw_files_deleted += 1
-        except OSError as exc:
-            log.warning("Unable to delete raw subfinder file %s: %s", raw_path, exc)
-
-    stale_domain_ids = {r["id"] for r in x("SELECT id FROM domain_enum_scans WHERE started_at < ?", (scan_cutoff,)).fetchall()}
-    overflow_domain_ids = {
-        r["id"]
-        for r in x(
-            """
-            SELECT id FROM (
-              SELECT id, ROW_NUMBER() OVER (ORDER BY started_at DESC, id DESC) AS rn
-              FROM domain_enum_scans
-            ) WHERE rn > ?
-            """,
-            (max_domain_enum,),
-        ).fetchall()
-    }
-    domain_ids = sorted(stale_domain_ids | overflow_domain_ids)
-    domain_results_deleted = _delete_by_ids("domain_enum_results", "scan_id", domain_ids) if domain_ids else 0
-    domain_scans_deleted = _delete_by_ids("domain_enum_scans", "id", domain_ids) if domain_ids else 0
-
+    scans_deleted = x("DELETE FROM scans WHERE created_at < ?", (cutoff,)).rowcount or 0
     commit()
-    deleted_total = sum([
-        results_deleted, alerts_deleted, scans_deleted, discoveries_deleted, raw_results_deleted,
-        subfinder_jobs_deleted, domain_results_deleted, domain_scans_deleted, raw_files_deleted,
-    ])
-    _checkpoint_and_vacuum(should_vacuum=vacuum and deleted_total > 0)
     return {
-        "scan_cutoff": scan_cutoff,
-        "raw_cutoff": raw_cutoff,
+        "cutoff": cutoff,
         "scans_deleted": scans_deleted,
         "results_deleted": results_deleted,
         "alerts_deleted": alerts_deleted,
-        "subfinder_jobs_deleted": subfinder_jobs_deleted,
-        "subfinder_raw_results_deleted": raw_results_deleted,
-        "subfinder_discoveries_deleted": discoveries_deleted,
-        "subfinder_raw_files_deleted": raw_files_deleted,
-        "domain_enum_scans_deleted": domain_scans_deleted,
-        "domain_enum_results_deleted": domain_results_deleted,
     }
-
-
-def scans_prune_older_than(days: int = 7) -> dict:
-    """Backward-compatible scan retention wrapper used by tests/older callers."""
-    stats = storage_prune(
-        scan_days=days,
-        raw_days=_env_int("RAW_RETENTION_DAYS", 2, minimum=1),
-        max_scans_per_project=_env_int("MAX_SCANS_PER_PROJECT", 50, minimum=1),
-        max_domain_enum_scans=_env_int("MAX_DOMAIN_ENUM_SCANS", 200, minimum=1),
-        vacuum=False,
-    )
-    stats["cutoff"] = stats.get("scan_cutoff")
-    return stats
 
 
 # ── Results (batch) ───────────────────────────────────────────────────────────
@@ -1123,10 +993,6 @@ def subfinder_raw_result_finish(
     stdout_text,
     stderr_text,
 ):
-    max_stdout = _env_int("SUBFINDER_RAW_STDOUT_MAX_CHARS", 65536, minimum=0)
-    max_stderr = _env_int("SUBFINDER_RAW_STDERR_MAX_CHARS", 16384, minimum=0)
-    stdout_preview = _trim_text(stdout_text or "", max_stdout)
-    stderr_preview = _trim_text(stderr_text or "", max_stderr)
     x(
         "UPDATE subfinder_raw_results "
         "SET status=?,exit_code=?,total_found=?,stdout_text='',stderr_text='',stdout_z=?,stderr_z=?,finished_at=? "
@@ -1135,8 +1001,8 @@ def subfinder_raw_result_finish(
             status,
             exit_code,
             total_found,
-            _compress_text(stdout_preview),
-            _compress_text(stderr_preview),
+            _compress_text(stdout_text),
+            _compress_text(stderr_text),
             now(),
             rid,
         ),
