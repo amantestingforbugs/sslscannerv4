@@ -2169,9 +2169,13 @@ async function loadSystemOverview(){
 // ════════════════════════════════════════════════════════════
 // DASHBOARD
 // ════════════════════════════════════════════════════════════
+function totalHostCount(s = {}) {
+  return Number(s.hosts ?? s.total_domains ?? s.domains ?? s.total ?? s.host_count ?? s.hosts_total ?? s.projects ?? 0);
+}
+
 function applyStat(s) {
   if (!s) return;
-  const totalDomains = s.total_domains ?? s.domains ?? s.total ?? s.projects;
+  const totalDomains = totalHostCount(s);
   document.getElementById('s-projects').textContent = fmt(totalDomains);
   document.getElementById('s-ok').textContent = fmt(s.ok);
   document.getElementById('s-mis').textContent = fmt(s.mismatches);
@@ -2179,7 +2183,7 @@ function applyStat(s) {
 }
 
 function calcRiskScore(stats = {}, projects = []) {
-  const total = Math.max(1, Number(stats.total_domains ?? 0));
+  const total = Math.max(1, totalHostCount(stats));
   const mismatchRate = Number(stats.mismatches ?? 0) / total;
   const errorRate = Number(stats.errors ?? 0) / total;
   const expiredRate = Number(stats.expired ?? 0) / total;
@@ -2203,7 +2207,7 @@ async function loadDashboardIntel() {
     const statsResp = await apiJSON('/api/stats');
     const projects = projectsCache.length ? projectsCache : ((await apiJSON('/api/projects')).data || []);
     const s = statsResp.data || {};
-    const total = Number(s.total_domains ?? 0);
+    const total = totalHostCount(s);
     const covered = Number(s.ok ?? 0) + Number(s.mismatches ?? 0) + Number(s.expired ?? 0) + Number(s.expiring ?? 0);
     const coveragePct = total > 0 ? Math.round((covered / total) * 100) : 0;
     const risk = calcRiskScore(s, projects);
