@@ -712,16 +712,18 @@ def update_alert_settings():
     if bool(out.get("telegram_enabled")) and (out.get("telegram_bot_token") or "").strip() and (out.get("telegram_chat_id") or "").strip():
         channel_checks["telegram"] = bool(TelegramNotifier(out).send_mismatch_digest("Settings Test", sample_alert))
 
+    discord_turned_on = bool(out.get("discord_enabled")) and not bool(previous.get("discord_enabled"))
+    discord_webhook_changed = (out.get("discord_webhook_url") or "") != (previous.get("discord_webhook_url") or "")
+    if bool(out.get("discord_enabled")) and (discord_turned_on or discord_webhook_changed):
+        # Re-queue existing unresolved alerts even when a smoke-test fails below.
+        # Settings have already been persisted, so a retry with the same webhook
+        # would no longer look like a newly enabled/updated Discord channel.
+        db.alerts_mark_all_unsent()
+
     failed_channels = [name for name, passed in channel_checks.items() if not passed]
     if failed_channels:
         return err(f"Saved, but webhook test failed for: {', '.join(failed_channels)}", 400)
 
-    discord_turned_on = bool(out.get("discord_enabled")) and not bool(previous.get("discord_enabled"))
-    discord_webhook_changed = (out.get("discord_webhook_url") or "") != (previous.get("discord_webhook_url") or "")
-    if bool(out.get("discord_enabled")) and (discord_turned_on or discord_webhook_changed):
-        # Re-queue existing unresolved alerts so a newly enabled/updated Discord webhook
-        # can receive them on the next scan dispatch.
-        db.alerts_mark_all_unsent()
     return ok(out, channel_checks=channel_checks)
 
 
