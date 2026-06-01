@@ -327,6 +327,170 @@ def _compute_risk_intelligence(total_hosts: int, latest: dict, previous: dict | 
         "exposure": exposure,
         "recommended_actions": actions,
     }
+
+_SENSITIVE_HOST_LABELS = {
+    "admin", "adm", "auth", "login", "sso", "vpn", "portal", "dashboard",
+    "console", "grafana", "jenkins", "jira", "gitlab", "dev", "staging", "stage",
+    "test", "qa", "uat", "internal", "intranet", "api", "beta", "preview",
+}
+
+
+def _bounty_severity(score: int) -> str:
+    if score >= 75:
+        return "critical"
+    if score >= 55:
+        return "high"
+    if score >= 30:
+        return "medium"
+    return "low"
+
+
+def _has_sensitive_label(hostname: str) -> bool:
+    labels = {part.lower() for part in (hostname or "").split(".") if part}
+    return bool(labels & _SENSITIVE_HOST_LABELS)
+
+
+def _build_bounty_report(project_name: str, candidate: dict) -> str:
+    evidence = candidate.get("evidence") or []
+    steps = candidate.get("next_steps") or []
+    evidence_md = "\n".join(f"- {item}" for item in evidence) or "- Review the host manually and attach screenshots/headers."
+    steps_md = "\n".join(f"- {item}" for item in steps) or "- Validate behavior manually within program scope."
+    return (
+        f"## Potential finding: {candidate.get('title')}\n\n"
+        f"**Program/asset:** {project_name}\n"
+        f"**Host:** `{candidate.get('hostname')}`\n"
+        f"**Priority:** {candidate.get('severity')} ({candidate.get('score')}/100)\n\n"
+        "### Evidence captured by SSL Sentinel\n"
+        f"{evidence_md}\n\n"
+        "### Suggested safe validation\n"
+        f"{steps_md}\n\n"
+        "### Notes\n"
+        "Only test assets that are explicitly in scope, avoid destructive actions, "
+        "and include fresh timestamps, screenshots, request/response snippets, and business impact in the final report.\n"
+    )
+
+
+def _score_bounty_opportunity(row: dict, project_name: str = "Project") -> dict:
+    hostname = row.get("hostname") or ""
+    score = 0
+    signals = []
+    evidence = []
+    next_steps = [
+        "Confirm the asset is in the bounty program scope before interacting with it.",
+        "Open the final URL in a browser, capture a timestamped screenshot, and save response headers.",
+    ]
+
+    active = bool(row.get("http_is_active")) or bool(row.get("status_code"))
+    status_code = row.get("status_code")
+    title = (row.get("page_title") or "").strip()
+    final_url = (row.get("final_url") or "").strip()
+
+    if active:
+        score += 8
+        signals.append("live web surface")
+        evidence.append(f"HTTP probe is active{f' with status {status_code}' if status_code else ''}.")
+    if final_url:
+        evidence.append(f"Final URL: {final_url}")
+    if title:
+        evidence.append(f"Page title: {title}")
+
+    if row.get("is_expired"):
+        score += 35 if active else 25
+        signals.append("expired certificate")
+        evidence.append(f"Certificate expired on {row.get('expiry') or 'unknown date'}.")
+        next_steps.append("Capture browser TLS warning and prove the affected live endpoint is customer/user reachable.")
+    elif row.get("is_expiring"):
+        score += 12
+        signals.append("expiring certificate")
+        evidence.append(f"Certificate expires in {row.get('days_left')} days ({row.get('expiry') or 'unknown date'}).")
+
+    if row.get("is_mismatch"):
+        same_base = bool(row.get("same_base"))
+        score += 42 if not same_base else 24
+        signals.append("cross-domain certificate mismatch" if not same_base else "same-domain certificate mismatch")
+        evidence.append(f"Certificate CN `{row.get('cn') or 'unknown'}` does not match `{hostname}`.")
+        if not same_base:
+            next_steps.append("Check if the mismatch points to a third-party or unrelated tenant and document takeover/misrouting impact if present.")
+        else:
+            next_steps.append("Document user-facing trust impact and any authentication/session flows exposed on the mismatched host.")
+
+    if row.get("error"):
+        score += 18 if active else 10
+        signals.append("TLS handshake/error condition")
+        evidence.append(f"TLS scan error: {row.get('error')}")
+        next_steps.append("Reproduce with openssl/curl and include exact TLS error output in the report.")
+
+    if _has_sensitive_label(hostname):
+        score += 15
+        signals.append("sensitive hostname keyword")
+        evidence.append("Hostname contains a high-value label such as admin, auth, dev, staging, internal, api, or dashboard.")
+        next_steps.append("Prioritize low-impact checks for exposed admin panels, debug banners, default pages, and auth misconfiguration.")
+
+    if status_code in {401, 403}:
+        score += 8
+        signals.append("protected endpoint")
+        evidence.append(f"HTTP status {status_code} suggests an access-controlled surface worth documenting.")
+    elif status_code and 500 <= int(status_code) <= 599:
+        score += 10
+        signals.append("server error surface")
+        evidence.append(f"HTTP status {status_code} may indicate an unstable or misconfigured service.")
+
+    if row.get("first_seen"):
+        score += 6
+        signals.append("newly discovered subdomain")
+        evidence.append(f"First observed by discovery pipeline at {row.get('first_seen')}.")
+
+    score = min(100, score)
+    primary = signals[0] if signals else "review candidate"
+    candidate = {
+        "hostname": hostname,
+        "score": score,
+        "severity": _bounty_severity(score),
+        "title": f"{primary.title()} on {hostname}",
+        "signals": signals,
+        "evidence": evidence,
+        "next_steps": next_steps,
+        "http": {
+            "active": active,
+            "status_code": status_code,
+            "title": title,
+            "final_url": final_url,
+            "scheme": row.get("scheme") or "",
+            "checked_at": row.get("http_checked_at") or "",
+        },
+        "ssl": {
+            "cn": row.get("cn") or "",
+            "issuer": row.get("issuer") or "",
+            "expiry": row.get("expiry") or "",
+            "days_left": row.get("days_left"),
+            "is_mismatch": bool(row.get("is_mismatch")),
+            "same_base": bool(row.get("same_base")),
+            "is_expired": bool(row.get("is_expired")),
+            "is_expiring": bool(row.get("is_expiring")),
+            "error": row.get("error") or "",
+            "checked_at": row.get("checked_at") or "",
+        },
+        "discovery": {
+            "first_seen": row.get("first_seen") or "",
+            "last_seen": row.get("last_seen") or "",
+        },
+    }
+    candidate["report_markdown"] = _build_bounty_report(project_name, candidate)
+    return candidate
+
+
+def _bounty_summary(candidates: list[dict]) -> dict:
+    return {
+        "total_candidates": len(candidates),
+        "critical": sum(1 for c in candidates if c.get("severity") == "critical"),
+        "high": sum(1 for c in candidates if c.get("severity") == "high"),
+        "medium": sum(1 for c in candidates if c.get("severity") == "medium"),
+        "live": sum(1 for c in candidates if (c.get("http") or {}).get("active")),
+        "mismatches": sum(1 for c in candidates if (c.get("ssl") or {}).get("is_mismatch")),
+        "expired": sum(1 for c in candidates if (c.get("ssl") or {}).get("is_expired")),
+    }
+
+
 def _run_openssl_subject(hostname: str, timeout: int = 20) -> dict:
     cmd = ["openssl", "s_client", "-connect", f"{hostname}:443"]
     try:
@@ -982,6 +1146,89 @@ def project_risk_intelligence(pid):
         "finished_at": current.get("finished_at"),
     }
     return ok(model)
+
+
+
+
+@api.get("/projects/<pid>/bounty-intel")
+def project_bounty_intel(pid):
+    p = db.project_get(pid)
+    if not p:
+        return err("Project not found", 404)
+
+    limit = _safe_int(request.args.get("limit", 50), 50, min_value=10, max_value=200)
+    rows_by_host: dict[str, dict] = {}
+
+    latest_rows = db.x(
+        """
+        SELECT r.*,
+               hx.status_code,
+               hx.page_title,
+               hx.redirect_location,
+               hx.final_url,
+               hx.scheme,
+               hx.is_active AS http_is_active,
+               hx.last_checked AS http_checked_at,
+               sf.first_seen,
+               sf.last_seen
+        FROM results r
+        JOIN (
+          SELECT hostname, MAX(checked_at) AS checked_at
+          FROM results
+          WHERE project_id=?
+          GROUP BY hostname
+        ) latest
+          ON latest.hostname=r.hostname
+         AND latest.checked_at=r.checked_at
+        LEFT JOIN subfinder_httpx_results hx
+          ON hx.project_id=r.project_id
+         AND hx.hostname=r.hostname
+        LEFT JOIN subfinder_hosts sf
+          ON sf.project_id=r.project_id
+         AND sf.hostname=r.hostname
+        WHERE r.project_id=?
+        """,
+        (pid, pid),
+    ).fetchall()
+    for row in latest_rows:
+        d = dict(row)
+        rows_by_host[d["hostname"]] = d
+
+    discovery_rows = db.x(
+        """
+        SELECT sf.hostname, sf.first_seen, sf.last_seen,
+               hx.status_code, hx.page_title, hx.redirect_location, hx.final_url,
+               hx.scheme, hx.is_active AS http_is_active, hx.last_checked AS http_checked_at
+        FROM subfinder_hosts sf
+        LEFT JOIN subfinder_httpx_results hx
+          ON hx.project_id=sf.project_id
+         AND hx.hostname=sf.hostname
+        WHERE sf.project_id=?
+        """,
+        (pid,),
+    ).fetchall()
+    for row in discovery_rows:
+        d = dict(row)
+        rows_by_host.setdefault(d["hostname"], d)
+
+    candidates = []
+    for row in rows_by_host.values():
+        candidate = _score_bounty_opportunity(row, p.get("name") or "Project")
+        if candidate["score"] >= 18:
+            candidates.append(candidate)
+
+    candidates.sort(key=lambda c: (c["score"], c["hostname"]), reverse=True)
+    candidates = candidates[:limit]
+    return ok({
+        "project_id": pid,
+        "project_name": p["name"],
+        "summary": _bounty_summary(candidates),
+        "candidates": candidates,
+        "methodology": [
+            "Prioritizes live subdomains with certificate mismatches, expired certificates, TLS errors, sensitive host labels, and interesting HTTP statuses.",
+            "This is a triage assistant, not proof of vulnerability; manually validate impact and program scope before reporting.",
+        ],
+    })
 
 
 @api.get("/system-overview")

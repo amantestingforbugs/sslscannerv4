@@ -890,6 +890,10 @@ tbody tr{contain:content}
       <svg fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path d="M4 4h16v16H4z"/><path d="M8 8h8M8 12h8M8 16h5"/></svg>
       <span>Subfinder Enumeration</span>
     </button>
+    <button class="nav-item" data-page="bounty">
+      <svg fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path d="M12 3l8 4v5c0 5-3.4 8-8 9-4.6-1-8-4-8-9V7l8-4z"/><path d="M9 12l2 2 4-5"/></svg>
+      <span>Bounty Radar</span>
+    </button>
     <button class="nav-item" data-page="nuclei">
       <svg fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path d="M4 4h16v16H4z"/><path d="M8 8h8M8 12h8M8 16h6"/></svg>
       <span>Nuclei CVEs</span>
@@ -1478,6 +1482,39 @@ tbody tr{contain:content}
         <div class="table-wrap"><table><thead><tr><th>Hostname</th><th>Source</th><th>Discovered</th></tr></thead><tbody id="sf-enum-results-body"></tbody></table></div>
       </div>
     </div>
+    <div class="page" id="page-bounty">
+      <div class="page-header">
+        <div>
+          <div class="page-title">Bounty Radar</div>
+          <div class="page-sub">Prioritize reward-worthy leads from discovery, HTTP probes, and TLS evidence.</div>
+        </div>
+      </div>
+      <div class="form-row" style="margin-bottom:14px;max-width:760px">
+        <div class="form-group">
+          <label class="form-label">Project</label>
+          <select class="form-input" id="bounty-project-select"><option value="">— Choose a project —</option></select>
+        </div>
+        <button class="btn btn-primary" style="height:36px" id="bounty-refresh-btn" onclick="loadBountyRadar()">🎯 Build Radar</button>
+      </div>
+      <div class="stats-row" style="margin-bottom:14px">
+        <div class="stat-card"><div class="stat-label">Candidates</div><div class="stat-num" id="bounty-candidates">0</div></div>
+        <div class="stat-card"><div class="stat-label">Critical / High</div><div class="stat-num" id="bounty-high">0</div></div>
+        <div class="stat-card"><div class="stat-label">Live Surfaces</div><div class="stat-num" id="bounty-live">0</div></div>
+        <div class="stat-card"><div class="stat-label">TLS Issues</div><div class="stat-num" id="bounty-tls">0</div></div>
+      </div>
+      <div class="card">
+        <div class="card-body" style="padding-bottom:8px">
+          <div id="bounty-meta" style="font-size:12px;color:var(--text-secondary);margin-bottom:10px">Choose a project, then build a triage radar. Only test assets that are in scope.</div>
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>Priority</th><th>Host</th><th>Signals</th><th>Evidence</th><th>Report Draft</th></tr></thead>
+              <tbody id="bounty-body"><tr><td colspan="5" style="text-align:center;padding:16px;color:var(--text-muted)">No bounty candidates loaded yet.</td></tr></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </div>
+
 
 
 
@@ -1977,12 +2014,13 @@ const PAGE_INFRA = {
   discoveries: { title: 'New Discoveries', onEnter: initDiscoveriesPage },
   'discoveries-latest': { title: 'Latest Discovery Batch', onEnter: initLatestDiscoveriesPage },
   'subfinder-raw': { title: 'Subfinder Enumeration', onEnter: initSfRawPage },
+  bounty: { title: 'Bounty Radar', onEnter: initBountyPage },
   nuclei: { title: 'Nuclei CVEs', onEnter: initNucleiPage },
   openssl: { title: 'OpenSSL', onEnter: initOpenSSLPage },
   logs: { title: 'Logs', onEnter: loadLogsPage },
   settings: { title: 'Settings', onEnter: loadAlertSettings },
 };
-const QUICK_ACTION_PAGES = ['dashboard', 'projects', 'alerts', 'logs', 'settings'];
+const QUICK_ACTION_PAGES = ['dashboard', 'projects', 'bounty', 'alerts', 'logs', 'settings'];
 const QUICK_ACTIONS = [
   ...QUICK_ACTION_PAGES.map(page => ({ label: `Open ${PAGE_INFRA[page]?.title || page}`, page })),
   { label: 'Toggle Theme', action: () => setTheme(document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark') }
@@ -3628,6 +3666,80 @@ document.addEventListener('visibilitychange', () => {
 });
 
 
+
+
+let bountyRows = [];
+
+async function initBountyPage() {
+  const projs = projectsCache.length ? projectsCache : ((await apiJSON('/api/projects')).data || []);
+  const sel = document.getElementById('bounty-project-select');
+  const cur = sel.value;
+  sel.innerHTML = '<option value="">— Choose a project —</option>' + projs.map(p => `<option value="${p.id}">${esc(p.name)}</option>`).join('');
+  if (cur) sel.value = cur;
+  if (!sel.value && projs.length) sel.value = projs[0].id;
+  if (sel.value && !bountyRows.length) await loadBountyRadar();
+}
+
+function renderBountyRows(rows) {
+  const body = document.getElementById('bounty-body');
+  if (!rows.length) {
+    body.innerHTML = '<tr><td colspan="5" style="text-align:center;padding:16px;color:var(--text-muted)">No strong candidates yet. Run Subfinder, HTTP probing, and SSL scans to enrich evidence.</td></tr>';
+    return;
+  }
+  body.innerHTML = rows.map((r, idx) => {
+    const badge = r.severity === 'critical' ? 'badge-expired' : r.severity === 'high' ? 'badge-mismatch' : r.severity === 'medium' ? 'badge-expiring' : 'badge-ok';
+    const evidence = (r.evidence || []).slice(0, 3).map(item => `<div>• ${esc(item)}</div>`).join('') || '—';
+    const signals = (r.signals || []).map(sig => `<span class="badge ${badge}" style="margin:2px 4px 2px 0">${esc(sig)}</span>`).join('') || '—';
+    return `<tr>
+      <td data-sort-value="${r.score}"><span class="badge ${badge}">${esc(r.severity)} · ${fmt(r.score)}</span></td>
+      <td style="font-family:var(--mono);font-size:12px">${esc(r.hostname)}</td>
+      <td>${signals}</td>
+      <td style="font-size:12px;color:var(--text-secondary);min-width:260px">${evidence}</td>
+      <td><button class="btn btn-sm" onclick="copyBountyReport(${idx})">Copy Markdown</button></td>
+    </tr>`;
+  }).join('');
+}
+
+async function loadBountyRadar() {
+  const pid = document.getElementById('bounty-project-select').value;
+  if (!pid) return toast('Please choose a project', 'err');
+  const btn = document.getElementById('bounty-refresh-btn');
+  const meta = document.getElementById('bounty-meta');
+  btn.disabled = true;
+  meta.textContent = 'Building bounty radar from latest SSL, discovery, and HTTP evidence...';
+  try {
+    const { ok, data, error } = await apiJSON(`/api/projects/${pid}/bounty-intel?limit=100`);
+    if (!ok) {
+      meta.textContent = error || 'Unable to build bounty radar';
+      renderBountyRows([]);
+      return;
+    }
+    bountyRows = data?.candidates || [];
+    const s = data?.summary || {};
+    document.getElementById('bounty-candidates').textContent = fmt(s.total_candidates || 0);
+    document.getElementById('bounty-high').textContent = fmt((s.critical || 0) + (s.high || 0));
+    document.getElementById('bounty-live').textContent = fmt(s.live || 0);
+    document.getElementById('bounty-tls').textContent = fmt((s.mismatches || 0) + (s.expired || 0));
+    meta.textContent = `Radar ready for ${data?.project_name || 'project'} · ${fmt(bountyRows.length)} candidates · manually validate scope and impact before reporting.`;
+    renderBountyRows(bountyRows);
+  } catch (e) {
+    meta.textContent = 'Unable to build bounty radar';
+    toast('Bounty radar failed', 'err');
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+async function copyBountyReport(idx) {
+  const row = bountyRows[idx];
+  if (!row?.report_markdown) return;
+  try {
+    await navigator.clipboard.writeText(row.report_markdown);
+    toast('Report draft copied', 'ok');
+  } catch {
+    toast('Clipboard unavailable; open dev tools to copy from API response', 'err');
+  }
+}
 
 async function initNucleiPage() {
   const projs = projectsCache.length ? projectsCache : ((await apiJSON('/api/projects')).data || []);
