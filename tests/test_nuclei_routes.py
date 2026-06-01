@@ -80,7 +80,7 @@ def test_nuclei_scan_route_runs_with_normalized_results_and_removes_targets(
     app = Flask(__name__)
     app.register_blueprint(routes.api)
 
-    response = app.test_client().post("/api/projects/p1/nuclei/scan?mode=all_subdomains")
+    response = app.test_client().post("/api/projects/p1/nuclei/scan?mode=all_subdomains&wait=1")
     payload = response.get_json()
 
     assert response.status_code == 200
@@ -90,3 +90,48 @@ def test_nuclei_scan_route_runs_with_normalized_results_and_removes_targets(
     assert captured["targets"] == ["example.com"]
     assert str(template_dir) in captured["cmd"]
     assert not Path(captured["target_file"]).exists()
+
+
+def test_nuclei_scan_route_starts_async_scan(monkeypatch):
+    from flask import Flask
+    import api.routes as routes
+
+    captured = {}
+
+    def fake_start(pid, project_name, mode, hosts):
+        captured.update({"pid": pid, "project_name": project_name, "mode": mode, "hosts": hosts})
+        return {
+            "id": "scan-1",
+            "project_id": pid,
+            "project_name": project_name,
+            "scan_mode": mode,
+            "status": "queued",
+            "hosts_scanned": len(hosts),
+            "estimated_seconds": 30,
+            "estimated_completion_at": "2026-06-01T00:01:00Z",
+            "findings": [],
+            "findings_total": 0,
+            "logs": [],
+        }
+
+    monkeypatch.setattr(routes.db, "project_get", lambda pid: {"id": pid, "name": "Project"})
+    monkeypatch.setattr(routes, "_resolve_nuclei_hosts", lambda pid, mode: ["example.com"])
+    monkeypatch.setattr(routes, "_start_nuclei_scan", fake_start)
+
+    app = Flask(__name__)
+    app.register_blueprint(routes.api)
+
+    response = app.test_client().post("/api/projects/p1/nuclei/scan?mode=all_subdomains")
+    payload = response.get_json()
+
+    assert response.status_code == 200
+    assert payload["ok"] is True
+    assert payload["data"]["id"] == "scan-1"
+    assert payload["data"]["status"] == "queued"
+    assert "started" in payload["data"]["message"].lower()
+    assert captured == {
+        "pid": "p1",
+        "project_name": "Project",
+        "mode": "all_subdomains",
+        "hosts": ["example.com"],
+    }
