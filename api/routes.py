@@ -53,7 +53,7 @@ _quick_scan_lock = threading.Lock()
 _nuclei_threads: dict[str, threading.Thread] = {}
 _nuclei_state: dict[str, dict] = {}
 _nuclei_lock = threading.Lock()
-NUCLEI_LOG_BUFFER = 300
+NUCLEI_LOG_BUFFER = 600
 QUICK_SCAN_ROWS_BUFFER = 500
 STARTED_AT_TS = time.time()
 
@@ -1227,7 +1227,6 @@ def _nuclei_command(nuclei_bin: str, targets_file: str, templates_dir: str) -> l
         "-l", targets_file,
         "-severity", "medium,high,critical",
         "-jsonl",
-        "-silent",
         "-stats",
         "-duc",
         "-ud", templates_dir,
@@ -1287,6 +1286,33 @@ def _nuclei_set_state(scan_id: str, **updates) -> dict:
     return payload
 
 
+def _nuclei_active_statuses() -> set[str]:
+    return {"queued", "preparing", "running", "paused", "stopping"}
+
+
+def _nuclei_log_status(scan_id: str, message: str, **updates) -> dict:
+    payload = _nuclei_set_state(scan_id, message=message, **updates)
+    _nuclei_append_log(scan_id, message, stream="status")
+    return payload
+
+
+def _nuclei_scan_sort_key(state: dict) -> str:
+    return str(state.get("started_at") or state.get("finished_at") or "")
+
+
+def _nuclei_list_public(project_id: str | None = None, limit: int = 20, active_only: bool = False) -> list[dict]:
+    with _nuclei_lock:
+        states = list(_nuclei_state.values())
+        if project_id:
+            states = [s for s in states if s.get("project_id") == project_id]
+        if active_only:
+            active = _nuclei_active_statuses()
+            states = [s for s in states if s.get("status") in active]
+        states.sort(key=_nuclei_scan_sort_key, reverse=True)
+        ids = [s.get("id") for s in states[:limit] if s.get("id")]
+        return [_nuclei_public_state_locked(scan_id) for scan_id in ids]
+
+
 def _run_nuclei_sync(pid: str, project_name: str, mode: str, hosts: list[str]) -> tuple[dict | None, str | None, int]:
     targets_file = ""
     try:
@@ -1328,7 +1354,7 @@ def _run_nuclei_sync(pid: str, project_name: str, mode: str, hosts: list[str]) -
             "scan_mode": mode,
             "hosts_scanned": len(hosts),
             "severities": ["medium", "high", "critical"],
-            "command": "nuclei -l <hosts_file> -severity medium,high,critical -jsonl -silent -stats -duc -ud <templates_dir> -t <templates_dir>",
+            "command": "nuclei -l <hosts_file> -severity medium,high,critical -jsonl -stats -duc -ud <templates_dir> -t <templates_dir>",
             "findings": findings,
             "findings_total": len(findings),
             "stderr": stderr_tail,
@@ -1354,7 +1380,7 @@ def _nuclei_worker(scan_id: str):
     targets_file = ""
     started = time.time()
     try:
-        _nuclei_set_state(scan_id, status="preparing", message="Preparing nuclei templates and target list")
+        _nuclei_log_status(scan_id, "Preparing nuclei target file and template directory", status="preparing")
         with _nuclei_lock:
             state = _nuclei_state.get(scan_id) or {}
             hosts = list(state.get("hosts") or [])
@@ -1367,22 +1393,25 @@ def _nuclei_worker(scan_id: str):
 
         nuclei_bin = _resolve_nuclei_binary()
         if not nuclei_bin:
-            _nuclei_set_state(scan_id, status="error", error="nuclei binary not found in PATH, NUCLEI_BIN, /root/go/bin/nuclei, /usr/local/bin/nuclei, or /usr/bin/nuclei", finished_at=db.now())
+            _nuclei_log_status(scan_id, "Nuclei binary was not found; install nuclei or set NUCLEI_BIN", status="error", error="nuclei binary not found in PATH, NUCLEI_BIN, /root/go/bin/nuclei, /usr/local/bin/nuclei, or /usr/bin/nuclei", finished_at=db.now())
             return
         templates_ok, templates_msg = _ensure_nuclei_templates(nuclei_bin)
         if not templates_ok:
-            _nuclei_set_state(scan_id, status="error", error=templates_msg, templates_status=templates_msg, finished_at=db.now())
+            _nuclei_log_status(scan_id, f"Template preparation failed: {templates_msg}", status="error", error=templates_msg, templates_status=templates_msg, finished_at=db.now())
             return
 
         templates_dir = _nuclei_templates_dir()
         with _nuclei_lock:
             stopped_before_start = bool((_nuclei_state.get(scan_id) or {}).get("stop_requested"))
         if stopped_before_start:
-            _nuclei_set_state(scan_id, status="stopped", finished_at=db.now(), message="Nuclei scan stopped before process start")
+            _nuclei_log_status(scan_id, "Nuclei scan stopped before process start", status="stopped", finished_at=db.now())
             return
         cmd = _nuclei_command(nuclei_bin, targets_file, templates_dir)
-        _nuclei_append_log(scan_id, f"Starting: nuclei -l <hosts_file> -severity medium,high,critical -jsonl -silent -stats -duc -ud <templates_dir> -t <templates_dir>")
-        _nuclei_set_state(scan_id, status="running", message="Nuclei scan is running", templates_status=templates_msg, command=" ".join(cmd))
+        _nuclei_append_log(scan_id, f"Binary: {nuclei_bin}", stream="status")
+        _nuclei_append_log(scan_id, f"Templates: {templates_dir} ({templates_msg})", stream="status")
+        _nuclei_append_log(scan_id, f"Targets: {len(hosts)} host(s); mode={mode}; severities=medium,high,critical", stream="status")
+        _nuclei_append_log(scan_id, "Command: nuclei -l <hosts_file> -severity medium,high,critical -jsonl -stats -duc -ud <templates_dir> -t <templates_dir>", stream="status")
+        _nuclei_set_state(scan_id, status="running", message="Nuclei process is starting", templates_status=templates_msg, command=" ".join(cmd))
         process = subprocess.Popen(
             cmd,
             stdout=subprocess.PIPE,
@@ -1391,7 +1420,23 @@ def _nuclei_worker(scan_id: str):
             bufsize=1,
             preexec_fn=os.setsid if hasattr(os, "setsid") else None,
         )
-        _nuclei_set_state(scan_id, process=process)
+        _nuclei_set_state(scan_id, process=process, process_id=process.pid, message=f"Nuclei process started (PID {process.pid})")
+        _nuclei_append_log(scan_id, f"Process started with PID {process.pid}; streaming output below", stream="status")
+        heartbeat_stop = threading.Event()
+
+        def heartbeat():
+            while not heartbeat_stop.wait(10):
+                with _nuclei_lock:
+                    state = _nuclei_state.get(scan_id) or {}
+                    if state.get("status") not in {"running", "paused"}:
+                        return
+                    findings_count = len(state.get("findings") or [])
+                    current_status = state.get("status") or "running"
+                elapsed_hb = max(0, int(time.time() - started))
+                _nuclei_append_log(scan_id, f"Still {current_status}: elapsed {elapsed_hb}s, findings {findings_count}, waiting for next nuclei event", stream="heartbeat")
+
+        heartbeat_thread = threading.Thread(target=heartbeat, daemon=True, name=f"nuclei-heartbeat-{scan_id[:8]}")
+        heartbeat_thread.start()
         parse_errors = 0
         assert process.stdout is not None
         for raw in process.stdout:
@@ -1418,6 +1463,7 @@ def _nuclei_worker(scan_id: str):
                 if payload:
                     broadcast("nuclei_update", payload)
             _nuclei_append_log(scan_id, line)
+        heartbeat_stop.set()
         exit_code = process.wait(timeout=10)
         elapsed = max(0, int(time.time() - started))
         with _nuclei_lock:
@@ -1425,13 +1471,13 @@ def _nuclei_worker(scan_id: str):
             stopped = bool(state.get("stop_requested"))
             findings = list(state.get("findings") or [])
         if stopped:
-            _nuclei_set_state(scan_id, status="stopped", exit_code=exit_code, finished_at=db.now(), elapsed_seconds=elapsed, message="Nuclei scan stopped")
+            _nuclei_log_status(scan_id, "Nuclei scan stopped", status="stopped", exit_code=exit_code, finished_at=db.now(), elapsed_seconds=elapsed)
         elif exit_code != 0 and not findings:
-            _nuclei_set_state(scan_id, status="error", exit_code=exit_code, finished_at=db.now(), elapsed_seconds=elapsed, error=f"nuclei exited with code {exit_code}")
+            _nuclei_log_status(scan_id, f"Nuclei exited with code {exit_code} and no findings", status="error", exit_code=exit_code, finished_at=db.now(), elapsed_seconds=elapsed, error=f"nuclei exited with code {exit_code}")
         else:
-            _nuclei_set_state(scan_id, status="done", exit_code=exit_code, finished_at=db.now(), elapsed_seconds=elapsed, message="Nuclei scan complete")
+            _nuclei_log_status(scan_id, f"Nuclei scan complete: {len(findings)} finding(s), exit code {exit_code}", status="done", exit_code=exit_code, finished_at=db.now(), elapsed_seconds=elapsed)
     except Exception as e:
-        _nuclei_set_state(scan_id, status="error", error=f"Nuclei scan failed: {e}", finished_at=db.now())
+        _nuclei_log_status(scan_id, f"Nuclei scan failed: {e}", status="error", error=f"Nuclei scan failed: {e}", finished_at=db.now())
     finally:
         if targets_file:
             try:
@@ -1452,7 +1498,7 @@ def _start_nuclei_scan(pid: str, project_name: str, mode: str, hosts: list[str])
     now = db.now()
     with _nuclei_lock:
         for existing in _nuclei_state.values():
-            if existing.get("project_id") == pid and existing.get("status") in {"preparing", "running", "paused", "stopping"}:
+            if existing.get("project_id") == pid and existing.get("status") in _nuclei_active_statuses():
                 raise RuntimeError("A nuclei scan is already running for this project")
         _nuclei_state[scan_id] = {
             "id": scan_id,
@@ -1509,6 +1555,14 @@ def nuclei_scan_hosts(pid):
     except RuntimeError as e:
         return err(str(e), 409)
     return ok({**payload, "message": f"Nuclei scan started for {len(hosts)} targets"})
+
+
+@api.get("/nuclei/scans")
+def nuclei_scans_list():
+    project_id = (request.args.get("project_id") or "").strip() or None
+    limit = _safe_int(request.args.get("limit", 20), 20, min_value=1, max_value=100)
+    active_only = (request.args.get("active") or "").strip().lower() in {"1", "true", "yes"}
+    return ok({"rows": _nuclei_list_public(project_id=project_id, limit=limit, active_only=active_only)})
 
 
 @api.get("/nuclei/scans/<scan_id>")
