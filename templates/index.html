@@ -735,6 +735,19 @@ tbody tr:last-child td{border-bottom:none}
   border:1px solid var(--border);
 }
 
+.nuclei-log-panel{max-height:360px;overflow:auto;margin:0;padding:0;border:1px solid color-mix(in srgb,var(--border) 72%,var(--accent));border-radius:12px;background:#07101f;color:#dbeafe;font-family:var(--mono);font-size:12px;white-space:normal;box-shadow:inset 0 0 0 1px rgba(255,255,255,.02)}
+.nuclei-log-row{display:grid;grid-template-columns:84px 92px minmax(0,1fr);gap:10px;align-items:start;padding:8px 12px;border-bottom:1px solid rgba(148,163,184,.12);line-height:1.45}
+.nuclei-log-row:last-child{border-bottom:none}
+.nuclei-log-time{color:#93c5fd;font-size:11px}
+.nuclei-log-stream{display:inline-flex;justify-content:center;border-radius:999px;padding:2px 8px;font-size:10px;font-weight:800;text-transform:uppercase;letter-spacing:.04em;background:rgba(79,70,229,.22);color:#c7d2fe}
+.nuclei-log-stream.status{background:rgba(52,211,153,.16);color:#86efac}
+.nuclei-log-stream.heartbeat{background:rgba(251,191,36,.14);color:#fde68a}
+.nuclei-log-line{word-break:break-word;color:#e5e7eb}
+.nuclei-log-empty{padding:18px;color:#93a4b8;text-align:center}
+.nuclei-history-row{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:8px 10px;border:1px solid var(--border);border-radius:10px;background:var(--bg-raised);margin-top:8px}
+.nuclei-history-row button{flex-shrink:0}
+@media(max-width:720px){.nuclei-log-row{grid-template-columns:1fr}.nuclei-log-time{font-size:10px}}
+
 .dashboard-hero{
   display:flex;align-items:center;justify-content:space-between;gap:18px;
   padding:20px;border:1px solid var(--border);border-radius:14px;
@@ -1630,8 +1643,12 @@ html[data-density="comfortable"] .card-body,html[data-density="comfortable"] .mo
           </div>
           <div class="progress-wrap" style="height:8px;margin-bottom:10px"><div class="progress-bar" id="nuclei-progress-bar" style="width:5%"></div></div>
           <div id="nuclei-live-stats" style="display:flex;gap:12px;flex-wrap:wrap;font-size:12px;color:var(--text-muted);margin-bottom:10px"></div>
-          <div style="font-size:12px;font-weight:700;color:var(--text-secondary);margin-bottom:6px">Live verbose output</div>
-          <pre id="nuclei-log" style="max-height:220px;overflow:auto;margin:0;padding:10px;border:1px solid var(--border);border-radius:10px;background:var(--bg-raised);color:var(--text-secondary);font-family:var(--mono);font-size:11px;white-space:pre-wrap">Waiting for nuclei output…</pre>
+          <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:6px;flex-wrap:wrap">
+            <div style="font-size:12px;font-weight:800;color:var(--text-primary);letter-spacing:.02em">Live nuclei log</div>
+            <div style="font-size:11px;color:var(--text-muted)">Status, heartbeat, and nuclei output are streamed here while the scan runs.</div>
+          </div>
+          <div id="nuclei-log" class="nuclei-log-panel"><div class="nuclei-log-empty">Waiting for nuclei output…</div></div>
+          <div id="nuclei-history" style="margin-top:12px"></div>
         </div>
       </div>
       <div class="card">
@@ -2414,10 +2431,7 @@ function connectSSE() {
   es.addEventListener('nuclei_log', e => {
     const d = JSON.parse(e.data || '{}');
     if (!nucleiCurrentScanId || d.id !== nucleiCurrentScanId || !d.entry) return;
-    const logEl = document.getElementById('nuclei-log');
-    if (logEl.textContent === 'Waiting for nuclei output…') logEl.textContent = '';
-    logEl.textContent += `${logEl.textContent ? '\n' : ''}[${new Date(d.entry.ts).toLocaleTimeString()}] ${d.entry.line}`;
-    logEl.scrollTop = logEl.scrollHeight;
+    appendNucleiLogEntry(d.entry);
   });
   es.addEventListener('nuclei_update', e => {
     const d = JSON.parse(e.data || '{}');
@@ -3916,6 +3930,48 @@ document.addEventListener('visibilitychange', () => {
 let nucleiCurrentScanId = null;
 let nucleiPollTimer = null;
 let nucleiFindings = [];
+const NUCLEI_SCAN_KEY = 'sentinel-nuclei-current-scan';
+
+function isNucleiActiveStatus(status) {
+  return ['queued','preparing','running','paused','stopping'].includes(status);
+}
+
+function rememberNucleiScan(scan) {
+  if (!scan?.id) return;
+  localStorage.setItem(NUCLEI_SCAN_KEY, JSON.stringify({ id: scan.id, project_id: scan.project_id || '', ts: Date.now() }));
+}
+
+function getRememberedNucleiScan() {
+  try { return JSON.parse(localStorage.getItem(NUCLEI_SCAN_KEY) || '{}') || {}; }
+  catch { return {}; }
+}
+
+function renderNucleiLogEntries(entries = []) {
+  const logEl = document.getElementById('nuclei-log');
+  if (!logEl) return;
+  if (!entries.length) {
+    logEl.innerHTML = '<div class="nuclei-log-empty">Waiting for nuclei output…</div>';
+    return;
+  }
+  logEl.innerHTML = entries.map(nucleiLogEntryHTML).join('');
+  logEl.scrollTop = logEl.scrollHeight;
+}
+
+function nucleiLogEntryHTML(entry) {
+  const stream = (entry.stream || 'stdout').toLowerCase();
+  const label = stream === 'heartbeat' ? 'heartbeat' : stream === 'status' ? 'status' : 'output';
+  const ts = entry.ts ? new Date(entry.ts).toLocaleTimeString() : new Date().toLocaleTimeString();
+  return `<div class="nuclei-log-row"><span class="nuclei-log-time">${esc(ts)}</span><span class="nuclei-log-stream ${esc(label)}">${esc(label)}</span><span class="nuclei-log-line">${esc(entry.line || '')}</span></div>`;
+}
+
+function appendNucleiLogEntry(entry) {
+  const logEl = document.getElementById('nuclei-log');
+  if (!logEl || !entry) return;
+  if (logEl.querySelector('.nuclei-log-empty')) logEl.innerHTML = '';
+  logEl.insertAdjacentHTML('beforeend', nucleiLogEntryHTML(entry));
+  while (logEl.children.length > 650) logEl.firstElementChild?.remove();
+  logEl.scrollTop = logEl.scrollHeight;
+}
 
 async function initNucleiPage() {
   const projs = projectsCache.length ? projectsCache : ((await apiJSON('/api/projects')).data || []);
@@ -3924,6 +3980,61 @@ async function initNucleiPage() {
   sel.innerHTML = '<option value="">— Choose a project —</option>' + projs.map(p => `<option value="${p.id}">${esc(p.name)}</option>`).join('');
   if (cur) sel.value = cur;
   if (!sel.value && projs.length) sel.value = projs[0].id;
+  if (!sel.dataset.nucleiBound) {
+    sel.addEventListener('change', () => hydrateNucleiScanForProject(sel.value));
+    sel.dataset.nucleiBound = '1';
+  }
+  await hydrateNucleiScanForProject(sel.value);
+}
+
+async function hydrateNucleiScanForProject(pid) {
+  if (!pid) return;
+  const remembered = getRememberedNucleiScan();
+  if (remembered.id && (!remembered.project_id || remembered.project_id === pid)) {
+    try {
+      const { ok, data } = await apiJSON(`/api/nuclei/scans/${remembered.id}`);
+      if (ok && data?.project_id === pid) {
+        updateNucleiLive(data);
+        if (isNucleiActiveStatus(data.status)) scheduleNucleiPolling();
+        return;
+      }
+    } catch {}
+  }
+  await loadRecentNucleiScans(pid);
+}
+
+async function loadRecentNucleiScans(pid) {
+  const history = document.getElementById('nuclei-history');
+  if (history) history.innerHTML = '';
+  if (!pid) return;
+  try {
+    const { ok, data } = await apiJSON(`/api/nuclei/scans?project_id=${encodeURIComponent(pid)}&limit=5`);
+    const rows = data?.rows || [];
+    if (!ok || !rows.length) return;
+    const active = rows.find(r => isNucleiActiveStatus(r.status));
+    updateNucleiLive(active || rows[0]);
+    renderNucleiHistory(rows);
+    if (active) scheduleNucleiPolling();
+  } catch {}
+}
+
+function renderNucleiHistory(rows = []) {
+  const history = document.getElementById('nuclei-history');
+  if (!history) return;
+  history.innerHTML = rows.map(r => `<div class="nuclei-history-row">
+    <div>
+      <div style="font-weight:700;color:var(--text-primary)">${esc(r.status || 'unknown')} · ${fmt(r.findings_total || 0)} findings · ${fmt(r.hosts_scanned || r.total || 0)} targets</div>
+      <div style="font-size:11px;color:var(--text-muted)">${esc(r.project_name || '')} · ${r.started_at ? new Date(r.started_at).toLocaleString() : 'unknown start'}</div>
+    </div>
+    <button class="btn btn-sm" onclick="loadNucleiScanById('${esc(r.id)}')">View log</button>
+  </div>`).join('');
+}
+
+async function loadNucleiScanById(id) {
+  const { ok, data, error } = await apiJSON(`/api/nuclei/scans/${encodeURIComponent(id)}`);
+  if (!ok) return toast(error || 'Unable to load nuclei scan', 'err');
+  updateNucleiLive(data);
+  if (isNucleiActiveStatus(data.status)) scheduleNucleiPolling();
 }
 
 function renderNucleiRows(rows) {
@@ -3956,7 +4067,7 @@ function updateNucleiLive(scan) {
   const pauseBtn = document.getElementById('nuclei-pause-btn');
   const resumeBtn = document.getElementById('nuclei-resume-btn');
   const stopBtn = document.getElementById('nuclei-stop-btn');
-  const active = ['queued','preparing','running','paused','stopping'].includes(scan.status);
+  const active = isNucleiActiveStatus(scan.status);
   const elapsed = scan.elapsed_seconds || Math.max(0, Math.round((Date.now() - Date.parse(scan.started_at || new Date())) / 1000));
   const progress = scan.status === 'done' || scan.status === 'stopped' ? 100 : scan.status === 'error' ? 100 : Math.min(95, Math.max(5, Math.round((elapsed / Math.max(scan.estimated_seconds || 60, 1)) * 100)));
   live.style.display = '';
@@ -3972,10 +4083,8 @@ function updateNucleiLive(scan) {
   meta.textContent = active
     ? `Nuclei scan started · expected to complete around ${scan.estimated_completion_at ? new Date(scan.estimated_completion_at).toLocaleTimeString() : 'soon'} · use Pause, Resume, or Stop while it runs.`
     : `Scanned ${fmt(scan.hosts_scanned || 0)} targets · Findings: ${fmt(scan.findings_total || nucleiFindings.length || 0)} · Status: ${scan.status || 'unknown'}`;
-  if (scan.logs?.length) {
-    logEl.textContent = scan.logs.map(l => `[${new Date(l.ts).toLocaleTimeString()}] ${l.line}`).join('\n');
-    logEl.scrollTop = logEl.scrollHeight;
-  }
+  renderNucleiLogEntries(scan.logs || []);
+  rememberNucleiScan(scan);
   renderNucleiRows(nucleiFindings);
   runBtn.disabled = active;
   pauseBtn.style.display = scan.status === 'running' ? '' : 'none';
@@ -4012,7 +4121,7 @@ async function runNucleiScan() {
   btn.disabled = true;
   nucleiFindings = [];
   renderNucleiRows([]);
-  document.getElementById('nuclei-log').textContent = 'Waiting for nuclei output…';
+  renderNucleiLogEntries([]);
   const mode = document.getElementById('nuclei-scope-select')?.value || 'all_subdomains';
   const scopeLabel = mode === 'all_subdomains' ? 'all subdomains' : 'latest discoveries';
   meta.textContent = `Starting nuclei scan on ${scopeLabel}...`;
