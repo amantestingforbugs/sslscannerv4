@@ -59,10 +59,12 @@ def test_generate_bruteforce_candidates_includes_nested_label_patterns():
 
 def test_bruteforce_dns_hosts_filters_to_resolvable_entries(monkeypatch):
     def fake_resolver(host: str, timeout: float = 1.5):
-        return host in {"www.example.com", "admin.api.example.com"}
+        if host.startswith("ssl-sentinel-nohit"):
+            return set()
+        return {"203.0.113.10"} if host in {"www.example.com", "admin.api.example.com"} else set()
 
-    monkeypatch.setattr(runner, "_host_resolves", fake_resolver)
-    found = _bruteforce_dns_hosts("example.com", ["api.example.com"], max_candidates=500)
+    monkeypatch.setattr(runner, "_resolve_host_ips", fake_resolver)
+    found = _bruteforce_dns_hosts("example.com", ["api.example.com"], max_candidates=1500)
     assert found == ["admin.api.example.com", "www.example.com"]
 
 
@@ -268,4 +270,66 @@ def test_build_subfinder_cmd_preserves_supported_extra_flag_values(monkeypatch):
 
 def test_passive_enumeration_sources_include_all_optional_integrations():
     sources = runner._passive_enumeration_sources()
-    assert {"findomain", "anubis", "subdomain_center", "shodan", "chaos"}.issubset(sources)
+    assert {"findomain", "anubis", "subdomain_center", "shodan", "chaos", "commoncrawl", "github_code"}.issubset(sources)
+
+
+def test_brute_labels_uses_builtin_top_n_without_network(monkeypatch):
+    monkeypatch.delenv("DNS_BRUTEFORCE_LABELS", raising=False)
+    monkeypatch.delenv("DNS_BRUTEFORCE_WORDLIST_FILES", raising=False)
+    monkeypatch.delenv("DNS_BRUTEFORCE_WORDLIST_URLS", raising=False)
+    monkeypatch.setenv("DNS_BRUTEFORCE_TOP_N", "1000")
+    labels = runner._brute_labels()
+    assert "www" in labels
+    assert "api" in labels
+    assert "api30" in labels
+    assert len(labels) == 1000
+
+
+def test_bruteforce_dns_hosts_filters_wildcard_dns(monkeypatch):
+    def fake_resolve(host: str, timeout: float = 1.5):
+        if host.startswith("ssl-sentinel-nohit"):
+            return {"203.0.113.10"}
+        if host == "www.example.com":
+            return {"203.0.113.20"}
+        if host == "api.example.com":
+            return {"203.0.113.10"}
+        return set()
+
+    monkeypatch.setenv("DNS_BRUTEFORCE_LABELS", "www,api")
+    monkeypatch.setattr(runner, "_resolve_host_ips", fake_resolve)
+    found = _bruteforce_dns_hosts("example.com", [], max_candidates=10)
+    assert found == ["www.example.com"]
+
+
+def test_query_commoncrawl_for_root_parses_json_lines(monkeypatch):
+    def fake_json(url, *args, **kwargs):
+        assert url == "https://index.commoncrawl.org/collinfo.json"
+        return [{"id": "CC-MAIN-2026-01"}]
+
+    def fake_text(url, *args, **kwargs):
+        assert "CC-MAIN-2026-01-index" in url
+        return '{"url":"https://api.example.com/v1"}\nnot json https://cdn.example.com/app.js\nhttps://bad.net/'
+
+    monkeypatch.setattr(runner, "_http_json_with_retries", fake_json)
+    monkeypatch.setattr(runner, "_http_text_with_retries", fake_text)
+    found = runner._query_commoncrawl_for_root("example.com")
+    assert found == ["api.example.com", "cdn.example.com"]
+
+
+def test_query_github_code_for_root_requires_token_and_parses_text_matches(monkeypatch):
+    monkeypatch.setenv("GITHUB_TOKEN", "secret")
+    monkeypatch.setattr(
+        runner,
+        "_http_json_with_retries",
+        lambda *args, **kwargs: {
+            "items": [
+                {
+                    "name": "config",
+                    "path": "deploy/api.example.com.yml",
+                    "text_matches": [{"fragment": "BASE_URL=https://portal.example.com bad.net"}],
+                }
+            ]
+        },
+    )
+    found = runner._query_github_code_for_root("example.com")
+    assert found == ["api.example.com", "portal.example.com"]

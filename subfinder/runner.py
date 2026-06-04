@@ -12,6 +12,7 @@ How it works:
 """
 
 import gzip
+import itertools
 import json
 import logging
 import os
@@ -26,7 +27,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Callable, Dict, Iterable, List, Optional, Set
-from urllib.parse import urlparse
+from urllib.parse import quote_plus, urlparse
 from urllib.request import urlopen, Request
 from urllib.error import HTTPError, URLError
 from core.observability import log_event
@@ -213,10 +214,40 @@ _COMMON_COMPOUND_SUFFIXES = {
     "com.br", "com.mx", "com.tr",
 }
 _DEFAULT_BRUTE_LABELS = (
-    "www", "api", "app", "admin", "dev", "test", "staging", "stage",
-    "qa", "uat", "prod", "portal", "vpn", "mail", "smtp", "imap",
-    "cdn", "img", "assets", "files", "docs", "status", "auth", "login",
-    "gateway", "edge", "m", "beta", "shop", "blog", "mobile", "monitoring",
+    # A compact built-in "top subdomains" list used before any custom files/URLs.
+    # Operators can extend/replace this with DNS_BRUTEFORCE_LABELS,
+    # DNS_BRUTEFORCE_WORDLIST_FILES, or DNS_BRUTEFORCE_WORDLIST_URLS.
+    "www", "mail", "ftp", "localhost", "webmail", "smtp", "pop", "ns1", "webdisk", "ns2",
+    "cpanel", "whm", "autodiscover", "autoconfig", "m", "imap", "test", "ns", "blog", "pop3",
+    "dev", "www2", "admin", "forum", "news", "vpn", "ns3", "mail2", "new", "mysql",
+    "old", "lists", "support", "mobile", "mx", "static", "docs", "beta", "shop", "sql",
+    "secure", "demo", "cp", "calendar", "wiki", "web", "media", "email", "images", "img",
+    "www1", "intranet", "portal", "video", "sip", "dns2", "api", "cdn", "stats", "dns1",
+    "ns4", "www3", "dns", "search", "staging", "server", "mx1", "chat", "wap", "my",
+    "svn", "mail1", "sites", "proxy", "ads", "host", "crm", "cms", "backup", "mx2",
+    "lyncdiscover", "info", "apps", "download", "remote", "db", "forums", "store", "relay", "files",
+    "newsletter", "app", "live", "owa", "en", "start", "sms", "office", "exchange", "ipv4",
+    "mail3", "help", "blogs", "helpdesk", "web1", "home", "library", "ftp2", "ntp", "monitor",
+    "login", "service", "correo", "www4", "mssql", "dev2", "stage", "gw", "jobs", "cloud",
+    "download2", "ldap", "archive", "payment", "payments", "auth", "sso", "idp", "vpn2", "git",
+    "gitlab", "jenkins", "ci", "build", "registry", "docker", "k8s", "kubernetes", "grafana", "prometheus",
+    "status", "assets", "edge", "gateway", "gw1", "gw2", "uat", "qa", "preprod", "prod",
+    "internal", "external", "partners", "partner", "client", "clients", "customer", "customers", "account", "accounts",
+    "billing", "invoice", "invoices", "pay", "checkout", "cart", "orders", "order", "tracking", "track",
+    "api1", "api2", "api3", "dev-api", "staging-api", "test-api", "admin-api", "mobile-api", "graphql", "rest",
+    "v1", "v2", "v3", "legacy", "old-api", "new-api", "sandbox", "lab", "labs", "research",
+    "web2", "web3", "web4", "node1", "node2", "node3", "app1", "app2", "app3", "db1",
+    "db2", "db3", "cache", "redis", "memcached", "queue", "rabbitmq", "kafka", "elastic", "elasticsearch",
+    "solr", "splunk", "kibana", "log", "logs", "logging", "metrics", "monitoring", "alerts", "alert",
+    "noc", "ops", "sec", "security", "waf", "firewall", "fw", "fw1", "fw2", "bastion",
+    "jump", "jumpbox", "rdp", "ssh", "sftp", "vpn1", "openvpn", "wireguard", "citrix", "remote2",
+    "adfs", "ldap1", "dc", "dc1", "dc2", "ad", "radius", "kerberos", "ntp1", "time",
+    "voip", "pbx", "sip1", "lync", "teams", "meet", "meeting", "conference", "call", "calls",
+    "img1", "img2", "static1", "static2", "cdn1", "cdn2", "media1", "media2", "uploads", "upload",
+    "download1", "downloads", "file", "files1", "assets1", "asset", "content", "content1", "origin", "origin1",
+    "www5", "www6", "www7", "mail4", "mail5", "mx3", "mx4", "smtp1", "smtp2", "imap1",
+    "pop1", "ns5", "ns6", "dns3", "dns4", "host1", "host2", "server1", "server2", "test1",
+    "test2", "dev1", "stage1", "stage2", "qa1", "qa2", "uat1", "uat2", "preprod1", "prod1",
 )
 
 
@@ -224,11 +255,78 @@ def _dns_bruteforce_enabled() -> bool:
     return os.getenv("DNS_BRUTEFORCE_ENABLED", "1").strip().lower() not in {"0", "false", "no", "off"}
 
 
+def _dedupe_labels(labels: Iterable[str], limit: int = 0) -> List[str]:
+    cleaned: List[str] = []
+    seen: Set[str] = set()
+    for raw in labels:
+        label = (raw or "").strip().lower().strip(".")
+        if not label or "." in label or not re.fullmatch(r"[a-z0-9-]{1,63}", label):
+            continue
+        if label in seen:
+            continue
+        cleaned.append(label)
+        seen.add(label)
+        if limit > 0 and len(cleaned) >= limit:
+            break
+    return cleaned
+
+
+def _numbered_brute_labels() -> List[str]:
+    """Generate common numbered labels so the built-in list reaches top-N depth."""
+    bases = (
+        "www", "api", "app", "web", "mail", "smtp", "mx", "ns", "dns", "dev", "test", "stage",
+        "staging", "qa", "uat", "prod", "vpn", "portal", "admin", "cdn", "static", "img",
+        "db", "server", "host", "node", "gw", "proxy", "cache", "login", "auth", "sso",
+    )
+    return [f"{base}{num}" for base, num in itertools.product(bases, range(1, 31))]
+
+
+def _labels_from_wordlist_file(path: str, limit: int) -> List[str]:
+    try:
+        with open(path, "r", encoding="utf-8", errors="replace") as fp:
+            return _dedupe_labels((line.split("#", 1)[0] for line in fp), limit=limit)
+    except Exception as e:
+        log.warning("Unable to read DNS brute-force wordlist file %s: %s", path, e)
+        return []
+
+
+def _labels_from_wordlist_url(url: str, limit: int, timeout: int = 30) -> List[str]:
+    try:
+        req = Request(url, headers={"User-Agent": "ssl-sentinel/1.0"})
+        ctx = ssl.create_default_context()
+        with urlopen(req, timeout=timeout, context=ctx) as res:
+            body = res.read(2_000_000).decode("utf-8", errors="replace")
+        return _dedupe_labels((line.split("#", 1)[0] for line in body.splitlines()), limit=limit)
+    except Exception as e:
+        log.warning("Unable to fetch DNS brute-force wordlist URL %s: %s", url, e)
+        return []
+
+
 def _brute_labels() -> List[str]:
+    top_n = _env_int("DNS_BRUTEFORCE_TOP_N", 1000, minimum=1, maximum=1_000_000)
     raw = os.getenv("DNS_BRUTEFORCE_LABELS", "")
-    custom = [x.strip().lower() for x in raw.split(",") if x.strip()]
-    labels = custom or list(_DEFAULT_BRUTE_LABELS)
-    return [label for label in labels if re.fullmatch(r"[a-z0-9-]{1,63}", label)]
+    custom = _dedupe_labels(raw.split(","), limit=top_n)
+    if custom:
+        return custom
+
+    labels: List[str] = []
+    labels.extend(_DEFAULT_BRUTE_LABELS)
+    labels.extend(_numbered_brute_labels())
+
+    remaining = max(0, top_n - len(_dedupe_labels(labels)))
+    for file_path in [x.strip() for x in os.getenv("DNS_BRUTEFORCE_WORDLIST_FILES", "").split(",") if x.strip()]:
+        if remaining <= 0:
+            break
+        labels.extend(_labels_from_wordlist_file(file_path, remaining))
+        remaining = max(0, top_n - len(_dedupe_labels(labels)))
+
+    for url in [x.strip() for x in os.getenv("DNS_BRUTEFORCE_WORDLIST_URLS", "").split(",") if x.strip()]:
+        if remaining <= 0:
+            break
+        labels.extend(_labels_from_wordlist_url(url, remaining))
+        remaining = max(0, top_n - len(_dedupe_labels(labels)))
+
+    return _dedupe_labels(labels, limit=top_n)
 
 
 def _normalize_host(host: str) -> str:
@@ -303,19 +401,30 @@ def _is_host_within_root(host: str, root_domain: str) -> bool:
     return host.endswith(f".{root_domain}")
 
 
-def _host_resolves(host: str, timeout: float = 1.5) -> bool:
-    """Resolve a host without mutating process-wide socket defaults."""
+def _resolve_host_ips(host: str, timeout: float = 1.5) -> Set[str]:
+    """Resolve a host to IP strings without mutating process-wide socket defaults."""
 
-    def _resolve() -> bool:
-        socket.getaddrinfo(host, None)
-        return True
+    def _resolve() -> Set[str]:
+        return {str(row[4][0]) for row in socket.getaddrinfo(host, None) if row and row[4]}
 
     with ThreadPoolExecutor(max_workers=1) as resolver:
         future = resolver.submit(_resolve)
         try:
             return future.result(timeout=timeout)
         except Exception:
-            return False
+            return set()
+
+
+def _host_resolves(host: str, timeout: float = 1.5) -> bool:
+    return bool(_resolve_host_ips(host, timeout=timeout))
+
+
+def _wildcard_dns_ips(root_domain: str) -> Set[str]:
+    labels = ("ssl-sentinel-nohit-a", "ssl-sentinel-nohit-b")
+    ips: Set[str] = set()
+    for label in labels:
+        ips.update(_resolve_host_ips(f"{label}-{int(time.time())}.{root_domain}"))
+    return ips
 
 
 def _generate_bruteforce_candidates(root_domain: str, seed_hosts: List[str]) -> Set[str]:
@@ -335,18 +444,48 @@ def _generate_bruteforce_candidates(root_domain: str, seed_hosts: List[str]) -> 
     return {c for c in candidates if _HOST_RE.match(c)}
 
 
-def _bruteforce_dns_hosts(root_domain: str, seed_hosts: List[str], max_candidates: int = 400) -> List[str]:
-    candidates = sorted(_generate_bruteforce_candidates(root_domain, seed_hosts))
+def _ordered_bruteforce_candidates(root_domain: str, seed_hosts: List[str]) -> List[str]:
+    labels = _brute_labels()
+    ordered: List[str] = [f"{label}.{root_domain}" for label in labels]
+    relevant = [h for h in seed_hosts if _is_host_within_root(h, root_domain)]
+    for host in sorted(relevant):
+        left = host[:-len(root_domain)].rstrip(".")
+        if not left:
+            continue
+        host_labels = [part for part in left.split(".") if part]
+        if not host_labels:
+            continue
+        last_label = host_labels[-1]
+        ordered.extend(f"{label}.{last_label}.{root_domain}" for label in labels)
+    deduped: List[str] = []
+    seen: Set[str] = set()
+    for candidate in ordered:
+        if candidate in seen or not _HOST_RE.match(candidate):
+            continue
+        deduped.append(candidate)
+        seen.add(candidate)
+    return deduped
+
+
+def _bruteforce_dns_hosts(root_domain: str, seed_hosts: List[str], max_candidates: int = 0) -> List[str]:
+    if max_candidates <= 0:
+        max_candidates = _env_int("DNS_BRUTEFORCE_MAX_CANDIDATES", 5000, minimum=1, maximum=1_000_000)
+    candidates = _ordered_bruteforce_candidates(root_domain, seed_hosts)
     if max_candidates > 0:
         candidates = candidates[:max_candidates]
     resolved: List[str] = []
-    workers = max(8, min(64, len(candidates) or 1))
+    wildcard_ips = set()
+    keep_wildcards = os.getenv("DNS_BRUTEFORCE_KEEP_WILDCARD", "0").strip().lower() in {"1", "true", "yes", "on"}
+    if not keep_wildcards:
+        wildcard_ips = _wildcard_dns_ips(root_domain)
+    workers = max(8, min(128, len(candidates) or 1))
     with ThreadPoolExecutor(max_workers=workers) as pool:
-        futures = {pool.submit(_host_resolves, host): host for host in candidates}
+        futures = {pool.submit(_resolve_host_ips, host): host for host in candidates}
         for future in as_completed(futures):
             host = futures[future]
             try:
-                if future.result():
+                ips = set(future.result() or [])
+                if ips and (keep_wildcards or not wildcard_ips or not ips.issubset(wildcard_ips)):
                     resolved.append(host)
             except Exception:
                 continue
@@ -556,17 +695,26 @@ def _query_rapiddns_for_root(root_domain: str, timeout: int = 30) -> List[str]:
         return []
 
 
-def _http_json_with_retries(url: str, timeout: int = 30, retries: int = 3, backoff: float = 1.4) -> object:
-    """Fetch JSON endpoint with lightweight retries/jitter for unstable OSINT APIs."""
+def _http_text_with_retries(
+    url: str,
+    timeout: int = 30,
+    retries: int = 3,
+    backoff: float = 1.4,
+    headers: Optional[Dict[str, str]] = None,
+    max_bytes: int = 5_000_000,
+) -> str:
+    """Fetch text endpoint with lightweight retries/jitter for unstable OSINT APIs."""
     last_err = None
     for attempt in range(1, max(1, retries) + 1):
         try:
-            req = Request(url, headers={"User-Agent": "ssl-sentinel/1.0"})
+            req_headers = {"User-Agent": "ssl-sentinel/1.0"}
+            if headers:
+                req_headers.update(headers)
+            req = Request(url, headers=req_headers)
             ctx = ssl.create_default_context()
             with urlopen(req, timeout=timeout, context=ctx) as res:
-                body = res.read().decode("utf-8", errors="replace")
-            return json.loads(body or "{}")
-        except (HTTPError, URLError, TimeoutError, json.JSONDecodeError, ssl.SSLError) as e:
+                return res.read(max_bytes).decode("utf-8", errors="replace")
+        except (HTTPError, URLError, TimeoutError, ssl.SSLError) as e:
             last_err = e
             if attempt < retries:
                 sleep_for = (backoff ** attempt) + (attempt * 0.13)
@@ -575,6 +723,18 @@ def _http_json_with_retries(url: str, timeout: int = 30, retries: int = 3, backo
             last_err = e
             break
     raise RuntimeError(f"request failed for {url}: {last_err}")
+
+
+def _http_json_with_retries(
+    url: str,
+    timeout: int = 30,
+    retries: int = 3,
+    backoff: float = 1.4,
+    headers: Optional[Dict[str, str]] = None,
+) -> object:
+    """Fetch JSON endpoint with lightweight retries/jitter for unstable OSINT APIs."""
+    body = _http_text_with_retries(url, timeout=timeout, retries=retries, backoff=backoff, headers=headers)
+    return json.loads(body or "{}")
 
 
 def _query_hackertarget_for_root(root_domain: str, timeout: int = 35) -> List[str]:
@@ -790,6 +950,70 @@ def _query_wayback_for_root(root_domain: str, timeout: int = 45) -> List[str]:
     except Exception:
         return []
 
+def _query_commoncrawl_for_root(root_domain: str, timeout: int = 40) -> List[str]:
+    """Harvest hosts from the most recent Common Crawl URL indexes."""
+    try:
+        indexes = _http_json_with_retries("https://index.commoncrawl.org/collinfo.json", timeout=timeout, retries=2)
+        index_ids = [str(row.get("id") or "") for row in indexes or [] if row.get("id")]
+    except Exception:
+        index_ids = []
+    max_indexes = _env_int("COMMONCRAWL_INDEX_LIMIT", 2, minimum=1, maximum=10)
+    found: Set[str] = set()
+    for index_id in index_ids[:max_indexes]:
+        url = (
+            f"https://index.commoncrawl.org/{index_id}-index"
+            f"?url=*.{root_domain}/*&output=json&fl=url&collapse=urlkey"
+        )
+        try:
+            body = _http_text_with_retries(url, timeout=timeout, retries=2, max_bytes=8_000_000)
+            for line in body.splitlines():
+                try:
+                    row = json.loads(line)
+                    found.update(_extract_hosts_from_text(str(row.get("url") or ""), root_domain))
+                except Exception:
+                    found.update(_extract_hosts_from_text(line, root_domain))
+        except Exception:
+            continue
+    return sorted(found)
+
+
+def _query_github_code_for_root(root_domain: str, timeout: int = 40) -> List[str]:
+    """Search GitHub code for hostnames when GITHUB_TOKEN is configured."""
+    token = os.getenv("GITHUB_TOKEN", "").strip()
+    if not token:
+        return []
+    query = quote_plus(f'".{root_domain}"')
+    url = f"https://api.github.com/search/code?q={query}&per_page=100"
+    try:
+        payload = _http_json_with_retries(
+            url,
+            timeout=timeout,
+            retries=2,
+            headers={"Authorization": f"Bearer {token}", "Accept": "application/vnd.github.text-match+json"},
+        )
+        found: Set[str] = set()
+        for item in (payload or {}).get("items") or []:
+            found.update(_extract_hosts_from_text(str(item.get("name") or ""), root_domain))
+            found.update(_extract_hosts_from_text(str(item.get("path") or ""), root_domain))
+            for match in item.get("text_matches") or []:
+                found.update(_extract_hosts_from_text(str(match.get("fragment") or ""), root_domain))
+        return sorted(found)
+    except Exception:
+        return []
+
+
+def _query_dnsdumpster_for_root(root_domain: str, timeout: int = 30) -> List[str]:
+    """Parse hosts from an operator-provided DNSDumpster export/mirror URL."""
+    export_url = os.getenv("DNSDUMPSTER_EXPORT_URL", "").strip()
+    if not export_url:
+        return []
+    try:
+        body = _http_text_with_retries(export_url.format(domain=root_domain), timeout=timeout, retries=2)
+        return sorted(_extract_hosts_from_text(body, root_domain))
+    except Exception as e:
+        log.debug("DNSDumpster export failed for %s: %s", root_domain, e)
+        return []
+
 def _extract_hosts_from_text(body: str, root_domain: str) -> Set[str]:
     found: Set[str] = set()
     if not body:
@@ -871,6 +1095,9 @@ def _passive_enumeration_sources() -> Dict[str, EnumerationSource]:
         "hackertarget": _query_hackertarget_for_root,
         "certspotter": _query_certspotter_for_root,
         "wayback": _query_wayback_for_root,
+        "commoncrawl": _query_commoncrawl_for_root,
+        "github_code": _query_github_code_for_root,
+        "dnsdumpster_export": _query_dnsdumpster_for_root,
         "alienvault_otx": _query_alienvault_otx_for_root,
         "threatcrowd": _query_threatcrowd_for_root,
         "urlscan": _query_urlscan_for_root,
@@ -949,7 +1176,9 @@ def _generate_permutation_candidates(root_domain: str, known_hosts: List[str], m
     return filtered
 
 
-def _permutation_dns_hosts(root_domain: str, known_hosts: List[str], max_candidates: int = 1200) -> List[str]:
+def _permutation_dns_hosts(root_domain: str, known_hosts: List[str], max_candidates: int = 0) -> List[str]:
+    if max_candidates <= 0:
+        max_candidates = _env_int("DNS_PERMUTATION_MAX_CANDIDATES", 5000, minimum=1, maximum=1_000_000)
     candidates = sorted(_generate_permutation_candidates(root_domain, known_hosts, max_candidates=max_candidates))
     if not candidates:
         return []
