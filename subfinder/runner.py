@@ -24,7 +24,7 @@ import shutil
 import subprocess
 import threading
 import time
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, as_completed, wait
 from pathlib import Path
 from typing import Callable, Dict, Iterable, List, Optional, Set
 from urllib.parse import quote_plus, urlparse
@@ -50,6 +50,53 @@ def _env_int(name: str, default: int, minimum: int = 0, maximum: Optional[int] =
     if maximum is not None:
         value = min(maximum, value)
     return value
+
+
+def _env_bool(name: str, default: bool = False) -> bool:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _cancel_pending_futures(futures: Iterable[object]) -> None:
+    for future in futures:
+        try:
+            future.cancel()
+        except Exception:
+            pass
+
+
+def _iter_completed_with_deadline(future_map: Dict[object, object], timeout: int, phase_name: str):
+    """Yield completed futures until a phase deadline, then cancel pending work.
+
+    This deliberately avoids ``as_completed(..., timeout=...)`` inside a
+    ThreadPoolExecutor context manager because the context manager waits for
+    still-running futures during shutdown. A single wedged resolver, HTTP
+    source, or external tool should not keep the whole subdomain scan running
+    forever.
+    """
+    pending = set(future_map)
+    deadline = time.monotonic() + max(1, timeout)
+    while pending:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            break
+        done, pending = wait(pending, timeout=remaining, return_when=FIRST_COMPLETED)
+        if not done:
+            break
+        for future in done:
+            yield future, future_map[future], False
+    if pending:
+        log.warning(
+            "%s phase timed out after %ss; cancelling %d pending task(s)",
+            phase_name,
+            timeout,
+            len(pending),
+        )
+        _cancel_pending_futures(pending)
+        for future in pending:
+            yield future, future_map[future], True
 
 
 def _compact_raw_record(record: Dict[str, object], sample_size: int = 50) -> Dict[str, object]:
@@ -1196,6 +1243,11 @@ def _permutation_dns_hosts(root_domain: str, known_hosts: List[str], max_candida
     return sorted(set(resolved))
 
 
+def _subfinder_ssl_scan_targets(discovered: List[str], new_hosts: List[str]) -> List[str]:
+    targets = discovered if _env_bool("SUBFINDER_SCAN_ALL_DISCOVERED", False) else new_hosts
+    return sorted(set(targets))
+
+
 def run_subfinder_for_project(project_id: str, triggered_by: str = "scheduler") -> Optional[str]:
     """
     Full subfinder pipeline for a project:
@@ -1261,11 +1313,24 @@ def run_subfinder_for_project(project_id: str, triggered_by: str = "scheduler") 
             for root_domain in root_domains
         }
         workers = max(1, min(8, len(root_domains)))
-        with ThreadPoolExecutor(max_workers=workers) as pool:
-            futures = {pool.submit(_run_subfinder_for_root, root_domain): root_domain for root_domain in root_domains}
-            for future in as_completed(futures):
-                root_domain = futures[future]
-                run = future.result()
+        subfinder_pool = ThreadPoolExecutor(max_workers=workers)
+        try:
+            futures = {subfinder_pool.submit(_run_subfinder_for_root, root_domain): root_domain for root_domain in root_domains}
+            phase_timeout = _env_int("SUBFINDER_TOOL_PHASE_TIMEOUT_SECONDS", 240, minimum=30, maximum=3600)
+            for future, root_domain, timed_out in _iter_completed_with_deadline(futures, phase_timeout, "subfinder tool"):
+                if timed_out:
+                    msg = f"Subfinder phase timed out after {phase_timeout}s for {root_domain}"
+                    run = {
+                        "root_domain": root_domain,
+                        "command": " ".join(_build_subfinder_cmd("subfinder", root_domain)),
+                        "status": "timeout",
+                        "exit_code": None,
+                        "stdout": "",
+                        "stderr": msg,
+                        "found": [],
+                    }
+                else:
+                    run = future.result()
                 raw_records.append(
                     {
                         "root_domain": run["root_domain"],
@@ -1294,6 +1359,8 @@ def run_subfinder_for_project(project_id: str, triggered_by: str = "scheduler") 
                     )
                 elif len(run["found"]) == 0:
                     log.warning("Subfinder returned 0 results — check sources/config (root=%s)", root_domain)
+        finally:
+            subfinder_pool.shutdown(wait=False, cancel_futures=True)
 
         discovered = sorted(set(discovered_all))
         osint_sources = _passive_enumeration_sources()
@@ -1304,14 +1371,26 @@ def run_subfinder_for_project(project_id: str, triggered_by: str = "scheduler") 
         ]
         if osint_tasks:
             osint_workers = max(4, min(64, len(osint_tasks)))
-            with ThreadPoolExecutor(max_workers=osint_workers) as pool:
+            osint_pool = ThreadPoolExecutor(max_workers=osint_workers)
+            try:
                 future_map = {
-                    pool.submit(_run_passive_source, source_name, source_fn, root_domain): (source_name, root_domain)
+                    osint_pool.submit(_run_passive_source, source_name, source_fn, root_domain): (source_name, root_domain)
                     for source_name, source_fn, root_domain in osint_tasks
                 }
-                for future in as_completed(future_map):
-                    source_name, root_domain = future_map[future]
-                    run = future.result()
+                phase_timeout = _env_int("PASSIVE_ENUM_PHASE_TIMEOUT_SECONDS", 240, minimum=30, maximum=3600)
+                for future, source_info, timed_out in _iter_completed_with_deadline(future_map, phase_timeout, "passive enumeration"):
+                    source_name, root_domain = source_info
+                    if timed_out:
+                        run = {
+                            "source": source_name,
+                            "root_domain": root_domain,
+                            "status": "timeout",
+                            "found": [],
+                            "found_count": 0,
+                            "stderr": f"Passive source timed out after {phase_timeout}s",
+                        }
+                    else:
+                        run = future.result()
                     found = run.get("found") or []
                     discovered.extend(found)
                     if found:
@@ -1331,6 +1410,8 @@ def run_subfinder_for_project(project_id: str, triggered_by: str = "scheduler") 
                         "\n".join(found),
                         run.get("stderr", ""),
                     )
+            finally:
+                osint_pool.shutdown(wait=False, cancel_futures=True)
         discovered = sorted(set(discovered))
         brute_discovered: Set[str] = set()
         permutation_discovered: Set[str] = set()
@@ -1338,14 +1419,19 @@ def run_subfinder_for_project(project_id: str, triggered_by: str = "scheduler") 
             brute_tasks = [("dns_bruteforce", root_domain) for root_domain in root_domains]
             permutation_tasks = [("dns_permutation", root_domain) for root_domain in root_domains]
             mutation_seed_hosts = discovered + root_domains
-            with ThreadPoolExecutor(max_workers=max(4, min(24, len(brute_tasks) + len(permutation_tasks)))) as pool:
+            dns_pool = ThreadPoolExecutor(max_workers=max(4, min(24, len(brute_tasks) + len(permutation_tasks))))
+            try:
                 future_map = {}
                 for source_name, root_domain in brute_tasks:
-                    future_map[pool.submit(_bruteforce_dns_hosts, root_domain, mutation_seed_hosts)] = (source_name, root_domain)
+                    future_map[dns_pool.submit(_bruteforce_dns_hosts, root_domain, mutation_seed_hosts)] = (source_name, root_domain)
                 for source_name, root_domain in permutation_tasks:
-                    future_map[pool.submit(_permutation_dns_hosts, root_domain, mutation_seed_hosts)] = (source_name, root_domain)
-                for future in as_completed(future_map):
-                    source_name, root_domain = future_map[future]
+                    future_map[dns_pool.submit(_permutation_dns_hosts, root_domain, mutation_seed_hosts)] = (source_name, root_domain)
+                phase_timeout = _env_int("DNS_ENUM_PHASE_TIMEOUT_SECONDS", 180, minimum=15, maximum=3600)
+                for future, source_info, timed_out in _iter_completed_with_deadline(future_map, phase_timeout, "DNS enumeration"):
+                    source_name, root_domain = source_info
+                    if timed_out:
+                        log.warning("DNS mutation source timed out source=%s root=%s", source_name, root_domain)
+                        continue
                     try:
                         found = set(future.result() or [])
                     except Exception as e:
@@ -1355,6 +1441,8 @@ def run_subfinder_for_project(project_id: str, triggered_by: str = "scheduler") 
                         brute_discovered.update(found)
                     else:
                         permutation_discovered.update(found)
+            finally:
+                dns_pool.shutdown(wait=False, cancel_futures=True)
             if brute_discovered:
                 source_counts["dns_bruteforce"] = len(brute_discovered)
                 discovered = sorted(set(discovered) | brute_discovered)
@@ -1398,10 +1486,13 @@ def run_subfinder_for_project(project_id: str, triggered_by: str = "scheduler") 
                  new_count, project["name"])
         log_event("subfinder", "info", f"Discovered {new_count} new hosts", project_id=project_id, job_id=job_id, status="running")
 
-        # SSL scan all discovered hosts from this run so recurring certificate
-        # issues are checked and surfaced on every subfinder cycle.
-        if discovered:
-            _ssl_scan_subfinder_hosts(project_id, discovered, job_id)
+        # SSL scan only newly discovered hosts by default. Re-scanning every
+        # previously known host on each enumeration run can make subfinder jobs
+        # appear stuck for very large projects. Operators who want the old
+        # behavior can opt in with SUBFINDER_SCAN_ALL_DISCOVERED=1.
+        scan_hosts = _subfinder_ssl_scan_targets(discovered, new_hosts)
+        if scan_hosts:
+            _ssl_scan_subfinder_hosts(project_id, scan_hosts, job_id)
 
         with _sf_lock:
             _sf_state[project_id]["status"] = "done"
@@ -1433,6 +1524,15 @@ def _ssl_scan_subfinder_hosts(project_id: str, hostnames: List[str], job_id: str
 
     if not hostnames:
         return
+
+    max_scan_hosts = _env_int("SUBFINDER_SSL_SCAN_MAX_HOSTS", 2000, minimum=1, maximum=1_000_000)
+    if len(hostnames) > max_scan_hosts:
+        log.warning(
+            "Subfinder SSL scan host list capped at %d of %d hosts; set SUBFINDER_SSL_SCAN_MAX_HOSTS to raise this limit",
+            max_scan_hosts,
+            len(hostnames),
+        )
+        hostnames = sorted(set(hostnames))[:max_scan_hosts]
 
     total = len(hostnames)
     scan = scan_create(project_id, total, by=f"subfinder:{job_id}")
@@ -1542,16 +1642,20 @@ def run_domain_enumeration_scan(domain: str, triggered_by: str = "manual") -> di
 
     passive_sources = _passive_enumeration_sources()
     max_workers = max(8, min(64, len(passive_sources) + 1))
-    with ThreadPoolExecutor(max_workers=max_workers) as pool:
-        futures = {"subfinder": pool.submit(_run_subfinder_for_root, root, 220)}
-        futures.update(
+    enum_pool = ThreadPoolExecutor(max_workers=max_workers)
+    try:
+        future_map = {enum_pool.submit(_run_subfinder_for_root, root, 220): "subfinder"}
+        future_map.update(
             {
-                source_name: pool.submit(_run_passive_source, source_name, source_fn, root)
+                enum_pool.submit(_run_passive_source, source_name, source_fn, root): source_name
                 for source_name, source_fn in passive_sources.items()
             }
         )
 
-        for src, fut in futures.items():
+        phase_timeout = _env_int("DOMAIN_ENUM_PHASE_TIMEOUT_SECONDS", 240, minimum=30, maximum=3600)
+        for fut, src, timed_out in _iter_completed_with_deadline(future_map, phase_timeout, "domain enumeration"):
+            if timed_out:
+                continue
             try:
                 result = fut.result()
                 hosts = (result.get("found") or []) if isinstance(result, dict) else (result or [])
@@ -1561,19 +1665,30 @@ def run_domain_enumeration_scan(domain: str, triggered_by: str = "manual") -> di
                         all_found.add(h)
             except Exception:
                 continue
+    finally:
+        enum_pool.shutdown(wait=False, cancel_futures=True)
 
     seed_hosts = list(all_found) or [root]
-    brute = _bruteforce_dns_hosts(root, seed_hosts, max_candidates=2500)
-    for h in brute:
-        if _is_host_within_root(h, root):
-            source_map.setdefault("dns_bruteforce", set()).add(h)
-            all_found.add(h)
-
-    permutations = _permutation_dns_hosts(root, seed_hosts, max_candidates=2500)
-    for h in permutations:
-        if _is_host_within_root(h, root):
-            source_map.setdefault("dns_permutation", set()).add(h)
-            all_found.add(h)
+    dns_pool = ThreadPoolExecutor(max_workers=2)
+    try:
+        future_map = {
+            dns_pool.submit(_bruteforce_dns_hosts, root, seed_hosts, 2500): "dns_bruteforce",
+            dns_pool.submit(_permutation_dns_hosts, root, seed_hosts, 2500): "dns_permutation",
+        }
+        phase_timeout = _env_int("DOMAIN_DNS_ENUM_PHASE_TIMEOUT_SECONDS", 180, minimum=15, maximum=3600)
+        for fut, src, timed_out in _iter_completed_with_deadline(future_map, phase_timeout, "domain DNS enumeration"):
+            if timed_out:
+                continue
+            try:
+                hosts = fut.result() or []
+            except Exception:
+                continue
+            for h in hosts:
+                if _is_host_within_root(h, root):
+                    source_map.setdefault(src, set()).add(h)
+                    all_found.add(h)
+    finally:
+        dns_pool.shutdown(wait=False, cancel_futures=True)
 
     for src, hosts in source_map.items():
         if hosts:
