@@ -4,8 +4,10 @@ import sys
 sys.path.append(str(Path(__file__).resolve().parents[1]))
 
 from api.routes import (  # noqa: E402
+    _looks_like_nuclei_finding,
     _normalize_nuclei_finding,
     _normalize_nuclei_target,
+    _parse_nuclei_stats_line,
     _resolve_nuclei_binary,
 )
 
@@ -28,6 +30,33 @@ def test_normalize_nuclei_finding_supports_jsonl_dash_keys():
     assert finding["matched_at"] == "https://app.example.com/login"
     assert finding["host"] == "https://app.example.com/login"
     assert finding["info"]["severity"] == "high"
+
+
+
+def test_parse_nuclei_stats_json_does_not_look_like_finding():
+    line = '{"templates":120,"hosts":4,"requests":80,"matched":2,"errors":1,"rps":9.5,"percent":42}'
+
+    assert _looks_like_nuclei_finding({"templates": 120, "hosts": 4}) is False
+    stats = _parse_nuclei_stats_line(line)
+
+    assert stats["templates"] == 120
+    assert stats["hosts"] == 4
+    assert stats["requests"] == 80
+    assert stats["matched"] == 2
+    assert stats["errors"] == 1
+    assert stats["rps"] == 9.5
+    assert stats["percent"] == 42
+
+
+def test_parse_nuclei_text_stats_line():
+    stats = _parse_nuclei_stats_line("Templates: 30 | Hosts: 3 | Requests: 99 | Matched: 1 | Errors: 0 | RPS: 7")
+
+    assert stats["templates"] == 30
+    assert stats["hosts"] == 3
+    assert stats["requests"] == 99
+    assert stats["matched"] == 1
+    assert stats["errors"] == 0
+    assert stats["rps"] == 7
 
 
 def test_resolve_nuclei_binary_prefers_configured_executable(tmp_path, monkeypatch):

@@ -742,8 +742,15 @@ tbody tr:last-child td{border-bottom:none}
 .nuclei-log-stream{display:inline-flex;justify-content:center;border-radius:999px;padding:2px 8px;font-size:10px;font-weight:800;text-transform:uppercase;letter-spacing:.04em;background:rgba(79,70,229,.22);color:#c7d2fe}
 .nuclei-log-stream.status{background:rgba(52,211,153,.16);color:#86efac}
 .nuclei-log-stream.heartbeat{background:rgba(251,191,36,.14);color:#fde68a}
+.nuclei-log-stream.stats{background:rgba(14,165,233,.16);color:#7dd3fc}
 .nuclei-log-line{word-break:break-word;color:#e5e7eb}
 .nuclei-log-empty{padding:18px;color:#93a4b8;text-align:center}
+.nuclei-terminal{border:1px solid rgba(34,197,94,.24);border-radius:12px;background:linear-gradient(180deg,#020617,#07101f);box-shadow:inset 0 0 0 1px rgba(255,255,255,.03);overflow:hidden;margin-bottom:12px}
+.nuclei-terminal-head{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:8px 12px;border-bottom:1px solid rgba(148,163,184,.14);color:#86efac;font-family:var(--mono);font-size:11px;text-transform:uppercase;letter-spacing:.08em}
+.nuclei-terminal-dots{display:flex;gap:5px}.nuclei-terminal-dots span{width:9px;height:9px;border-radius:50%;display:block}.nuclei-terminal-dots span:nth-child(1){background:#ef4444}.nuclei-terminal-dots span:nth-child(2){background:#f59e0b}.nuclei-terminal-dots span:nth-child(3){background:#22c55e}
+.nuclei-stats-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(112px,1fr));gap:1px;background:rgba(148,163,184,.14)}
+.nuclei-stat-cell{background:#07101f;padding:10px 12px;min-height:58px}.nuclei-stat-label{font-family:var(--mono);font-size:10px;color:#93a4b8;text-transform:uppercase;letter-spacing:.08em}.nuclei-stat-value{font-family:var(--mono);font-size:18px;font-weight:800;color:#e5e7eb;margin-top:4px}.nuclei-stat-value.good{color:#86efac}.nuclei-stat-value.warn{color:#fde68a}.nuclei-stat-value.bad{color:#fca5a5}
+.nuclei-terminal-line{font-family:var(--mono);font-size:12px;color:#d1fae5;padding:10px 12px;border-top:1px solid rgba(148,163,184,.12);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.nuclei-terminal-line::before{content:'$ ';color:#22c55e;font-weight:800}
 .nuclei-history-row{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:8px 10px;border:1px solid var(--border);border-radius:10px;background:var(--bg-raised);margin-top:8px}
 .nuclei-history-row button{flex-shrink:0}
 @media(max-width:720px){.nuclei-log-row{grid-template-columns:1fr}.nuclei-log-time{font-size:10px}}
@@ -1642,6 +1649,11 @@ html[data-density="comfortable"] .card-body,html[data-density="comfortable"] .mo
             </div>
           </div>
           <div class="progress-wrap" style="height:8px;margin-bottom:10px"><div class="progress-bar" id="nuclei-progress-bar" style="width:5%"></div></div>
+          <div class="nuclei-terminal" id="nuclei-stats-terminal">
+            <div class="nuclei-terminal-head"><div class="nuclei-terminal-dots"><span></span><span></span><span></span></div><div>nuclei live stats</div></div>
+            <div class="nuclei-stats-grid" id="nuclei-stats-grid"></div>
+            <div class="nuclei-terminal-line" id="nuclei-stats-line">waiting for nuclei -stats output</div>
+          </div>
           <div id="nuclei-live-stats" style="display:flex;gap:12px;flex-wrap:wrap;font-size:12px;color:var(--text-muted);margin-bottom:10px"></div>
           <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:6px;flex-wrap:wrap">
             <div style="font-size:12px;font-weight:800;color:var(--text-primary);letter-spacing:.02em">Live nuclei log</div>
@@ -2432,6 +2444,11 @@ function connectSSE() {
     const d = JSON.parse(e.data || '{}');
     if (!nucleiCurrentScanId || d.id !== nucleiCurrentScanId || !d.entry) return;
     appendNucleiLogEntry(d.entry);
+  });
+  es.addEventListener('nuclei_stats', e => {
+    const d = JSON.parse(e.data || '{}');
+    if (!nucleiCurrentScanId || d.id !== nucleiCurrentScanId) return;
+    renderNucleiStatsTerminal({ id: d.id, status: 'running', stats: d.stats || {}, progress_percent: d.progress_percent, findings_total: nucleiFindings.length });
   });
   es.addEventListener('nuclei_update', e => {
     const d = JSON.parse(e.data || '{}');
@@ -3959,7 +3976,7 @@ function renderNucleiLogEntries(entries = []) {
 
 function nucleiLogEntryHTML(entry) {
   const stream = (entry.stream || 'stdout').toLowerCase();
-  const label = stream === 'heartbeat' ? 'heartbeat' : stream === 'status' ? 'status' : 'output';
+  const label = stream === 'heartbeat' ? 'heartbeat' : stream === 'status' ? 'status' : stream === 'stats' ? 'stats' : 'output';
   const ts = entry.ts ? new Date(entry.ts).toLocaleTimeString() : new Date().toLocaleTimeString();
   return `<div class="nuclei-log-row"><span class="nuclei-log-time">${esc(ts)}</span><span class="nuclei-log-stream ${esc(label)}">${esc(label)}</span><span class="nuclei-log-line">${esc(entry.line || '')}</span></div>`;
 }
@@ -4037,6 +4054,34 @@ async function loadNucleiScanById(id) {
   if (isNucleiActiveStatus(data.status)) scheduleNucleiPolling();
 }
 
+function nucleiStatValue(stats, key, fallback = '—') {
+  const value = stats?.[key];
+  return value === undefined || value === null || value === '' ? fallback : fmt(value);
+}
+
+function renderNucleiStatsTerminal(scan) {
+  const grid = document.getElementById('nuclei-stats-grid');
+  const line = document.getElementById('nuclei-stats-line');
+  if (!grid || !line) return;
+  const stats = scan?.stats || {};
+  const findings = scan?.findings_total ?? nucleiFindings.length ?? 0;
+  const percent = scan?.progress_percent ?? stats.percent ?? 0;
+  const cells = [
+    ['Templates', nucleiStatValue(stats, 'templates'), ''],
+    ['Targets', nucleiStatValue(stats, 'hosts', scan?.total ?? scan?.hosts_scanned ?? '—'), ''],
+    ['Requests', nucleiStatValue(stats, 'requests'), ''],
+    ['RPS', nucleiStatValue(stats, 'rps'), 'good'],
+    ['Matched', fmt(stats.matched ?? findings), findings ? 'warn' : 'good'],
+    ['Errors', nucleiStatValue(stats, 'errors', 0), Number(stats.errors || 0) ? 'bad' : 'good'],
+    ['Progress', `${Math.max(0, Math.min(100, Math.round(Number(percent) || 0)))}%`, 'good'],
+    ['Elapsed', `${fmt(scan?.elapsed_seconds || Math.max(0, Math.round((Date.now() - Date.parse(scan?.started_at || new Date())) / 1000)))}s`, ''],
+  ];
+  grid.innerHTML = cells.map(([label, value, tone]) => `<div class="nuclei-stat-cell"><div class="nuclei-stat-label">${esc(label)}</div><div class="nuclei-stat-value ${tone}">${esc(String(value))}</div></div>`).join('');
+  const status = scan?.status || 'queued';
+  const statsLine = stats.last_line || `nuclei -stats active · status=${status} · targets=${fmt(scan?.total || scan?.hosts_scanned || 0)} · findings=${fmt(findings)}`;
+  line.textContent = statsLine;
+}
+
 function renderNucleiRows(rows) {
   const body = document.getElementById('nuclei-body');
   if (!rows.length) {
@@ -4069,20 +4114,22 @@ function updateNucleiLive(scan) {
   const stopBtn = document.getElementById('nuclei-stop-btn');
   const active = isNucleiActiveStatus(scan.status);
   const elapsed = scan.elapsed_seconds || Math.max(0, Math.round((Date.now() - Date.parse(scan.started_at || new Date())) / 1000));
-  const progress = scan.status === 'done' || scan.status === 'stopped' ? 100 : scan.status === 'error' ? 100 : Math.min(95, Math.max(5, Math.round((elapsed / Math.max(scan.estimated_seconds || 60, 1)) * 100)));
+  const statsProgress = Number(scan.progress_percent ?? scan.stats?.percent);
+  const progress = scan.status === 'done' || scan.status === 'stopped' ? 100 : scan.status === 'error' ? 100 : Number.isFinite(statsProgress) && statsProgress > 0 ? Math.min(99, Math.max(0, Math.round(statsProgress))) : Math.min(95, Math.max(5, Math.round((elapsed / Math.max(scan.estimated_seconds || 60, 1)) * 100)));
   live.style.display = '';
   title.textContent = scan.status === 'done' ? '✅ Nuclei scan complete' : scan.status === 'error' ? '❌ Nuclei scan failed' : scan.status === 'paused' ? '⏸ Nuclei scan paused' : scan.status === 'stopping' ? '■ Stopping nuclei scan…' : '🔄 Nuclei scan running';
   sub.textContent = scan.message || scan.error || `Scanning ${fmt(scan.hosts_scanned || scan.total || 0)} targets`;
   bar.style.width = `${progress}%`;
   stats.innerHTML = `
-    <span>Targets: <b>${fmt(scan.hosts_scanned || scan.total || 0)}</b></span>
+    <span>Targets: <b>${fmt(scan.stats?.hosts || scan.hosts_scanned || scan.total || 0)}</b></span>
+    <span>Requests: <b>${fmt(scan.stats?.requests || 0)}</b></span>
     <span>Findings: <b>${fmt(scan.findings_total || nucleiFindings.length || 0)}</b></span>
-    <span>Severity: <b>medium/high/critical</b></span>
-    <span>ETA: <b>${scan.estimated_completion_at && active ? new Date(scan.estimated_completion_at).toLocaleTimeString() : '—'}</b></span>
+    <span>RPS: <b>${esc(String(scan.stats?.rps ?? '—'))}</b></span>
     <span>Status: <b>${esc(scan.status || 'unknown')}</b></span>`;
   meta.textContent = active
     ? `Nuclei scan started · expected to complete around ${scan.estimated_completion_at ? new Date(scan.estimated_completion_at).toLocaleTimeString() : 'soon'} · use Pause, Resume, or Stop while it runs.`
     : `Scanned ${fmt(scan.hosts_scanned || 0)} targets · Findings: ${fmt(scan.findings_total || nucleiFindings.length || 0)} · Status: ${scan.status || 'unknown'}`;
+  renderNucleiStatsTerminal(scan);
   renderNucleiLogEntries(scan.logs || []);
   rememberNucleiScan(scan);
   renderNucleiRows(nucleiFindings);
