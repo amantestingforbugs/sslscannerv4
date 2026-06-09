@@ -333,3 +333,37 @@ def test_query_github_code_for_root_requires_token_and_parses_text_matches(monke
     )
     found = runner._query_github_code_for_root("example.com")
     assert found == ["api.example.com", "portal.example.com"]
+
+
+def test_iter_completed_with_deadline_yields_timeout_for_pending_future():
+    from concurrent.futures import Future
+
+    pending = Future()
+    results = list(runner._iter_completed_with_deadline({pending: "slow-source"}, 1, "test phase"))
+
+    assert len(results) == 1
+    assert results[0][1] == "slow-source"
+    assert results[0][2] is True
+    assert pending.cancelled()
+
+
+def test_subfinder_ssl_scan_targets_default_to_new_hosts(monkeypatch):
+    monkeypatch.delenv("SUBFINDER_SCAN_ALL_DISCOVERED", raising=False)
+
+    targets = runner._subfinder_ssl_scan_targets(
+        ["api.example.com", "old.example.com"],
+        ["api.example.com"],
+    )
+
+    assert targets == ["api.example.com"]
+
+
+def test_subfinder_ssl_scan_targets_can_scan_all_discovered(monkeypatch):
+    monkeypatch.setenv("SUBFINDER_SCAN_ALL_DISCOVERED", "1")
+
+    targets = runner._subfinder_ssl_scan_targets(
+        ["old.example.com", "api.example.com", "api.example.com"],
+        ["api.example.com"],
+    )
+
+    assert targets == ["api.example.com", "old.example.com"]
