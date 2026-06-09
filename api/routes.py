@@ -1228,10 +1228,132 @@ def _nuclei_command(nuclei_bin: str, targets_file: str, templates_dir: str) -> l
         "-severity", "medium,high,critical",
         "-jsonl",
         "-stats",
+        "-stats-json",
         "-duc",
         "-ud", templates_dir,
         "-t", templates_dir,
     ]
+
+
+def _strip_ansi(text: str) -> str:
+    return re.sub(r"\x1b\[[0-9;?]*[A-Za-z]", "", text or "")
+
+
+def _looks_like_nuclei_finding(row: dict) -> bool:
+    if not isinstance(row, dict):
+        return False
+    return any(key in row for key in ("template-id", "template_id", "template", "matched-at", "matched_at")) and isinstance(row.get("info"), dict)
+
+
+def _coerce_nuclei_number(value):
+    if value is None or value == "":
+        return None
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return value
+    text = str(value).strip().replace(",", "")
+    if not text:
+        return None
+    if text.endswith("%"):
+        text = text[:-1].strip()
+    try:
+        number = float(text)
+    except ValueError:
+        return value
+    return int(number) if number.is_integer() else number
+
+
+def _normalise_nuclei_stats(raw: dict | None, source_line: str = "") -> dict | None:
+    if not isinstance(raw, dict):
+        return None
+    aliases = {
+        "templates": ("templates", "template", "templates_total", "total_templates"),
+        "hosts": ("hosts", "host", "targets", "target", "total_hosts"),
+        "requests": ("requests", "request", "req", "total_requests", "requests_sent"),
+        "matched": ("matched", "matches", "findings", "results"),
+        "errors": ("errors", "error", "failed", "failures"),
+        "rps": ("rps", "req_per_second", "requests_per_second"),
+        "duration": ("duration", "elapsed", "elapsed_time"),
+        "percent": ("percent", "percentage", "progress"),
+    }
+    stats = {"raw": raw.copy(), "last_line": _strip_ansi(source_line).strip()}
+    lower = {str(k).lower().replace("-", "_").replace(" ", "_"): v for k, v in raw.items()}
+    for canonical, keys in aliases.items():
+        for key in keys:
+            key = key.lower().replace("-", "_").replace(" ", "_")
+            if key in lower:
+                stats[canonical] = _coerce_nuclei_number(lower[key])
+                break
+    if "percent" in stats and isinstance(stats["percent"], (int, float)):
+        stats["percent"] = max(0, min(100, stats["percent"]))
+    return stats
+
+
+def _parse_nuclei_stats_line(line: str) -> dict | None:
+    clean = _strip_ansi(line).strip()
+    if not clean:
+        return None
+    if clean.startswith("{"):
+        try:
+            row = json.loads(clean)
+        except Exception:
+            return None
+        if _looks_like_nuclei_finding(row):
+            return None
+        stats = _normalise_nuclei_stats(row, clean)
+        return stats if stats and (len(stats.get("raw") or {}) > 0) else None
+
+    pairs = {}
+    for match in re.finditer(r"(?i)(templates?|hosts?|targets?|requests?|matched|matches|findings|errors?|failed|rps|progress|percent(?:age)?|duration|elapsed)\s*[:=]\s*([0-9][0-9.,%/a-zA-Z-]*)", clean):
+        key = match.group(1).lower()
+        value = match.group(2)
+        if "/" in value and key in {"progress", "percent"}:
+            done, total = value.split("/", 1)
+            done_num = _coerce_nuclei_number(done)
+            total_num = _coerce_nuclei_number(total)
+            if isinstance(done_num, (int, float)) and isinstance(total_num, (int, float)) and total_num:
+                pairs["percent"] = round((done_num / total_num) * 100, 1)
+            pairs["progress"] = value
+        else:
+            pairs[key] = _coerce_nuclei_number(value)
+    if pairs:
+        return _normalise_nuclei_stats(pairs, clean)
+    if "stats" in clean.lower() or "progress" in clean.lower() or "requests" in clean.lower():
+        return {"raw": {}, "last_line": clean}
+    return None
+
+
+def _merge_nuclei_stats(existing: dict | None, update: dict | None, findings_count: int | None = None) -> dict:
+    merged = dict(existing or {})
+    if update:
+        for key, value in update.items():
+            if key == "raw":
+                raw = dict(merged.get("raw") or {})
+                raw.update(value or {})
+                merged["raw"] = raw
+            elif value not in (None, ""):
+                merged[key] = value
+    if findings_count is not None:
+        matched = _coerce_nuclei_number(merged.get("matched"))
+        if not isinstance(matched, (int, float)):
+            matched = 0
+        merged["matched"] = max(int(matched), int(findings_count))
+    return merged
+
+
+def _nuclei_progress_from_stats(state: dict) -> int | None:
+    stats = state.get("stats") or {}
+    percent = stats.get("percent")
+    if isinstance(percent, (int, float)):
+        return int(max(0, min(100, round(percent))))
+    requests = stats.get("requests")
+    hosts = stats.get("hosts") or state.get("total") or state.get("hosts_scanned")
+    if isinstance(requests, (int, float)) and isinstance(hosts, (int, float)) and hosts > 0:
+        # Request counts are not a perfect proxy for nuclei progress, but they prove
+        # that the scanner is actively moving while nuclei has not emitted a percent.
+        return int(max(5, min(95, round((requests / max(hosts, 1)) * 10))))
+    return None
 
 
 def _nuclei_public_state(scan_id: str) -> dict:
@@ -1244,6 +1366,10 @@ def _nuclei_public_state(scan_id: str) -> dict:
         state["logs"] = list(state.get("logs") or [])
         state["findings"] = list(state.get("findings") or [])
         state["findings_total"] = len(state["findings"])
+        state["stats"] = _merge_nuclei_stats(state.get("stats"), None, len(state["findings"]))
+        progress = _nuclei_progress_from_stats(state)
+        if progress is not None:
+            state["progress_percent"] = progress
         return state
 
 
@@ -1272,6 +1398,10 @@ def _nuclei_public_state_locked(scan_id: str) -> dict:
     state["logs"] = list(state.get("logs") or [])
     state["findings"] = list(state.get("findings") or [])
     state["findings_total"] = len(state["findings"])
+    state["stats"] = _merge_nuclei_stats(state.get("stats"), None, len(state["findings"]))
+    progress = _nuclei_progress_from_stats(state)
+    if progress is not None:
+        state["progress_percent"] = progress
     return state
 
 
@@ -1332,13 +1462,22 @@ def _run_nuclei_sync(pid: str, project_name: str, mode: str, hosts: list[str]) -
         run = subprocess.run(cmd, text=True, capture_output=True, timeout=900)
 
         findings = []
+        stats = {}
         parse_errors = 0
         for ln in (run.stdout or "").splitlines():
             ln = ln.strip()
-            if not ln or not ln.startswith("{"):
+            if not ln:
+                continue
+            stats_update = _parse_nuclei_stats_line(ln)
+            if stats_update:
+                stats = _merge_nuclei_stats(stats, stats_update, len(findings))
+                continue
+            if not ln.startswith("{"):
                 continue
             try:
-                findings.append(_normalize_nuclei_finding(json.loads(ln)))
+                row = json.loads(ln)
+                if _looks_like_nuclei_finding(row):
+                    findings.append(_normalize_nuclei_finding(row))
             except Exception:
                 parse_errors += 1
 
@@ -1354,9 +1493,10 @@ def _run_nuclei_sync(pid: str, project_name: str, mode: str, hosts: list[str]) -
             "scan_mode": mode,
             "hosts_scanned": len(hosts),
             "severities": ["medium", "high", "critical"],
-            "command": "nuclei -l <hosts_file> -severity medium,high,critical -jsonl -stats -duc -ud <templates_dir> -t <templates_dir>",
+            "command": "nuclei -l <hosts_file> -severity medium,high,critical -jsonl -stats -stats-json -duc -ud <templates_dir> -t <templates_dir>",
             "findings": findings,
             "findings_total": len(findings),
+            "stats": _merge_nuclei_stats(stats, None, len(findings)),
             "stderr": stderr_tail,
             "exit_code": run.returncode,
             "parse_errors": parse_errors,
@@ -1410,7 +1550,7 @@ def _nuclei_worker(scan_id: str):
         _nuclei_append_log(scan_id, f"Binary: {nuclei_bin}", stream="status")
         _nuclei_append_log(scan_id, f"Templates: {templates_dir} ({templates_msg})", stream="status")
         _nuclei_append_log(scan_id, f"Targets: {len(hosts)} host(s); mode={mode}; severities=medium,high,critical", stream="status")
-        _nuclei_append_log(scan_id, "Command: nuclei -l <hosts_file> -severity medium,high,critical -jsonl -stats -duc -ud <templates_dir> -t <templates_dir>", stream="status")
+        _nuclei_append_log(scan_id, "Command: nuclei -l <hosts_file> -severity medium,high,critical -jsonl -stats -stats-json -duc -ud <templates_dir> -t <templates_dir>", stream="status")
         _nuclei_set_state(scan_id, status="running", message="Nuclei process is starting", templates_status=templates_msg, command=" ".join(cmd))
         process = subprocess.Popen(
             cmd,
@@ -1444,9 +1584,29 @@ def _nuclei_worker(scan_id: str):
             if not line:
                 continue
             parsed_finding = None
-            if line.startswith("{"):
+            stats_update = _parse_nuclei_stats_line(line)
+            if stats_update:
+                with _nuclei_lock:
+                    state = _nuclei_state.get(scan_id)
+                    if state:
+                        findings_count = len(state.get("findings") or [])
+                        state["stats"] = _merge_nuclei_stats(state.get("stats"), stats_update, findings_count)
+                        state["last_stats_at"] = db.now()
+                        state["message"] = "Nuclei stats updated"
+                        progress = _nuclei_progress_from_stats(state)
+                        if progress is not None:
+                            state["progress_percent"] = progress
+                        payload = _nuclei_public_state_locked(scan_id)
+                    else:
+                        payload = {}
+                if payload:
+                    broadcast("nuclei_stats", {"id": scan_id, "stats": payload.get("stats") or {}, "progress_percent": payload.get("progress_percent")})
+                    broadcast("nuclei_update", payload)
+            elif line.startswith("{"):
                 try:
-                    parsed_finding = _normalize_nuclei_finding(json.loads(line))
+                    row = json.loads(line)
+                    if _looks_like_nuclei_finding(row):
+                        parsed_finding = _normalize_nuclei_finding(row)
                 except Exception:
                     parse_errors += 1
             if parsed_finding:
@@ -1454,6 +1614,7 @@ def _nuclei_worker(scan_id: str):
                     state = _nuclei_state.get(scan_id)
                     if state:
                         state.setdefault("findings", []).append(parsed_finding)
+                        state["stats"] = _merge_nuclei_stats(state.get("stats"), None, len(state.get("findings") or []))
                         state["parse_errors"] = parse_errors
                         state["last_finding_at"] = db.now()
                         payload = _nuclei_public_state_locked(scan_id)
@@ -1462,7 +1623,7 @@ def _nuclei_worker(scan_id: str):
                 broadcast("nuclei_finding", {"id": scan_id, "finding": parsed_finding})
                 if payload:
                     broadcast("nuclei_update", payload)
-            _nuclei_append_log(scan_id, line)
+            _nuclei_append_log(scan_id, line, stream="stats" if stats_update else "stdout")
         heartbeat_stop.set()
         exit_code = process.wait(timeout=10)
         elapsed = max(0, int(time.time() - started))
@@ -1471,11 +1632,11 @@ def _nuclei_worker(scan_id: str):
             stopped = bool(state.get("stop_requested"))
             findings = list(state.get("findings") or [])
         if stopped:
-            _nuclei_log_status(scan_id, "Nuclei scan stopped", status="stopped", exit_code=exit_code, finished_at=db.now(), elapsed_seconds=elapsed)
+            _nuclei_log_status(scan_id, "Nuclei scan stopped", status="stopped", exit_code=exit_code, finished_at=db.now(), elapsed_seconds=elapsed, progress_percent=100)
         elif exit_code != 0 and not findings:
-            _nuclei_log_status(scan_id, f"Nuclei exited with code {exit_code} and no findings", status="error", exit_code=exit_code, finished_at=db.now(), elapsed_seconds=elapsed, error=f"nuclei exited with code {exit_code}")
+            _nuclei_log_status(scan_id, f"Nuclei exited with code {exit_code} and no findings", status="error", exit_code=exit_code, finished_at=db.now(), elapsed_seconds=elapsed, error=f"nuclei exited with code {exit_code}", progress_percent=100)
         else:
-            _nuclei_log_status(scan_id, f"Nuclei scan complete: {len(findings)} finding(s), exit code {exit_code}", status="done", exit_code=exit_code, finished_at=db.now(), elapsed_seconds=elapsed)
+            _nuclei_log_status(scan_id, f"Nuclei scan complete: {len(findings)} finding(s), exit code {exit_code}", status="done", exit_code=exit_code, finished_at=db.now(), elapsed_seconds=elapsed, progress_percent=100)
     except Exception as e:
         _nuclei_log_status(scan_id, f"Nuclei scan failed: {e}", status="error", error=f"Nuclei scan failed: {e}", finished_at=db.now())
     finally:
@@ -1515,6 +1676,8 @@ def _start_nuclei_scan(pid: str, project_name: str, mode: str, hosts: list[str])
             "started_at": now,
             "findings": [],
             "findings_total": 0,
+            "stats": {"hosts": total, "matched": 0, "errors": 0, "requests": 0},
+            "progress_percent": 0,
             "parse_errors": 0,
             "logs": [],
             "hosts": hosts,
