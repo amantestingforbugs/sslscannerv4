@@ -15,6 +15,8 @@ from urllib.parse import urlparse
 from concurrent.futures import ThreadPoolExecutor, wait, FIRST_COMPLETED
 from typing import List, Dict, Callable, Optional, Iterator
 
+from core.target_policy import is_target_allowed
+
 try:
     import tldextract
     HAS_TLDEXTRACT = True
@@ -115,6 +117,13 @@ def classify_error(e: Exception) -> str:
 
 def get_cert_info(hostname: str) -> Dict:
     """Check SSL certificate for a single hostname. Returns a result dict."""
+    if not is_target_allowed(hostname, check_dns=True):
+        return {
+            "hostname": hostname,
+            "error": "Target outside authorized scope or resolves to a disallowed network",
+            "is_ignored_error": True,
+        }
+
     context = ssl.create_default_context()
     context.check_hostname = False
     context.verify_mode = ssl.CERT_NONE

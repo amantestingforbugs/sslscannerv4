@@ -19,13 +19,20 @@ import subprocess
 import shutil
 import tempfile
 import signal
+import hmac
 from urllib.parse import urlparse
-import ipaddress
-import re
 from flask import Blueprint, request, jsonify, Response, stream_with_context
 
 import db.database as db
 from core.ssl_checker import parse_hosts_file
+from core.target_policy import (
+    allow_private_targets,
+    allowed_scope_domains,
+    is_ip_disallowed,
+    is_target_allowed,
+    normalize_hostname as normalize_target_hostname,
+    registered_domain,
+)
 from core.observability import subscribe, get_logs
 from scheduler.runner import (
     run_project_scan_async,
@@ -57,7 +64,6 @@ NUCLEI_LOG_BUFFER = 600
 QUICK_SCAN_ROWS_BUFFER = 500
 STARTED_AT_TS = time.time()
 
-_HOSTNAME_RE = re.compile(r"^(?=.{1,253}$)(?!-)[a-z0-9-]+(?:\.[a-z0-9-]+)+$", re.IGNORECASE)
 
 
 def _safe_int(value, default: int, min_value: int | None = None, max_value: int | None = None) -> int:
@@ -76,11 +82,7 @@ def _is_private_or_local_host(host: str) -> bool:
     h = (host or "").strip().lower()
     if h in {"localhost", "127.0.0.1", "::1"}:
         return True
-    try:
-        ip = ipaddress.ip_address(h)
-        return ip.is_private or ip.is_loopback or ip.is_link_local
-    except ValueError:
-        return False
+    return (not allow_private_targets()) and is_ip_disallowed(h)
 
 
 def _resolve_nuclei_binary() -> str | None:
@@ -136,18 +138,10 @@ def _ensure_nuclei_templates(nuclei_bin: str) -> tuple[bool, str]:
 
 
 def _normalize_nuclei_target(raw: str) -> str:
-    value = (raw or "").strip().lower()
-    if not value:
+    host = normalize_target_hostname(raw, allow_ip=True)
+    if not host or not is_target_allowed(host):
         return ""
-    parsed = urlparse(value if "://" in value else f"//{value}")
-    host = (parsed.hostname or value.split("/", 1)[0].split(":", 1)[0]).strip(".[]")
-    if not host or _is_private_or_local_host(host):
-        return ""
-    try:
-        ipaddress.ip_address(host)
-        return host
-    except ValueError:
-        return host if _HOSTNAME_RE.match(host) else ""
+    return host
 
 
 def _normalize_nuclei_finding(row: dict) -> dict:
@@ -203,6 +197,36 @@ def _handle_observability_event(evt: dict):
 subscribe(_handle_observability_event)
 
 
+def _api_key_required() -> bool:
+    return os.getenv("API_REQUIRE_KEY", "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _configured_api_key() -> str:
+    return os.getenv("API_KEY", "").strip() or os.getenv("SSL_SENTINEL_API_KEY", "").strip()
+
+
+@api.before_request
+def require_api_key():
+    """Optional API-key gate for company deployments.
+
+    The default stays open for local development/tests, but production can set
+    API_REQUIRE_KEY=true and API_KEY=<secret>. Mutating scanner endpoints then
+    require X-API-Key or Authorization: Bearer <secret>.
+    """
+    if not _api_key_required():
+        return None
+    expected = _configured_api_key()
+    if not expected:
+        return err("API key enforcement is enabled but API_KEY is not configured", 503)
+    supplied = (request.headers.get("X-API-Key") or "").strip()
+    auth = (request.headers.get("Authorization") or "").strip()
+    if auth.lower().startswith("bearer "):
+        supplied = auth.split(None, 1)[1].strip()
+    if hmac.compare_digest(supplied, expected):
+        return None
+    return err("Unauthorized", 401)
+
+
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
 def ok(data=None, **kw):
@@ -217,22 +241,10 @@ def err(msg, code=400):
 
 
 def _normalize_hostname(raw: str) -> str:
-    v = (raw or "").strip().lower()
-    if not v:
+    host = normalize_target_hostname(raw)
+    if not host or not is_target_allowed(host):
         return ""
-    if "://" in v:
-        try:
-            v = (urlparse(v).hostname or "").strip().lower()
-        except Exception:
-            v = ""
-    if ":" in v:
-        v = v.split(":", 1)[0]
-    v = v.strip(".")
-    if not v or _is_private_or_local_host(v):
-        return ""
-    if not _HOSTNAME_RE.match(v):
-        return ""
-    return v
+    return host
 
 
 
@@ -267,6 +279,8 @@ def _analyze_hosts_text(content: str) -> dict:
         "duplicate_count": len(duplicates),
         "invalid_samples": invalid[:25],
         "duplicate_samples": duplicates[:25],
+        "scope_domains": allowed_scope_domains(),
+        "private_targets_allowed": allow_private_targets(),
     }
 
 
@@ -617,8 +631,8 @@ def create_project():
     p = db.project_create(
         name,
         d.get("description", ""),
-        int(d.get("scan_interval", 60)),
-        int(d.get("subfinder_interval", 30)),
+        _safe_int(d.get("scan_interval", 60), 60, min_value=5, max_value=10080),
+        _safe_int(d.get("subfinder_interval", 30), 30, min_value=5, max_value=10080),
     )
     broadcast("project_created", {"id": p["id"], "name": p["name"]})
     return ok(p)
@@ -951,6 +965,15 @@ def global_stats():
     return ok(db.stats_global())
 
 
+@api.get("/security-policy")
+def security_policy():
+    return ok({
+        "api_key_required": _api_key_required(),
+        "api_key_configured": bool(_configured_api_key()),
+        "allowed_scope_domains": allowed_scope_domains(),
+        "private_targets_allowed": allow_private_targets(),
+        "scope_enforced": bool(allowed_scope_domains()),
+    })
 
 
 @api.get("/projects/<pid>/risk-intelligence")
@@ -1080,8 +1103,14 @@ def run_domain_enumeration():
     ).strip().lower()
     if not domain:
         return err("Domain is required")
+    domain = normalize_target_hostname(domain)
+    if not domain:
+        return err("Domain must be a valid public hostname", 400)
+    root_domain = registered_domain(domain)
+    if not is_target_allowed(root_domain):
+        return err("Domain is outside configured scan scope or targets a disallowed network", 403)
     try:
-        data = run_domain_enumeration_scan(domain, triggered_by="manual")
+        data = run_domain_enumeration_scan(root_domain, triggered_by="manual")
         return ok(data)
     except ValueError as ve:
         return err(str(ve))
@@ -1109,9 +1138,12 @@ def domain_enumeration_scan_create_project(scan_id):
         return err("Not found", 404)
 
     rows = db.domain_enum_results_by_scan(scan_id)
-    hosts = sorted({(r.get("hostname") or "").strip().lower() for r in rows if (r.get("hostname") or "").strip()})
+    hosts = sorted({
+        host for host in (_normalize_hostname(r.get("hostname") or "") for r in rows)
+        if host
+    })
     if not hosts:
-        return err("No hosts found in this enumeration scan", 400)
+        return err("No in-scope hosts found in this enumeration scan", 400)
 
     payload = request.get_json(silent=True) or {}
     project_name = (payload.get("name") or payload.get("project_name") or f"Enum {scan.get('domain', '')}").strip()
@@ -1123,8 +1155,8 @@ def domain_enumeration_scan_create_project(scan_id):
     p = db.project_create(
         project_name,
         payload.get("description", f"Created from enumeration scan {scan_id[:8]} for {scan.get('domain', '')}"),
-        int(payload.get("scan_interval", 60)),
-        int(payload.get("subfinder_interval", 30)),
+        _safe_int(payload.get("scan_interval", 60), 60, min_value=5, max_value=10080),
+        _safe_int(payload.get("subfinder_interval", 30), 30, min_value=5, max_value=10080),
     )
     db.project_save_hosts(p["id"], hosts)
     broadcast("project_created", {"id": p["id"], "name": p["name"]})
@@ -1632,15 +1664,10 @@ def openssl_subjects(pid):
     if not p:
         return err("Project not found", 404)
 
-    # Run a fresh subfinder pass first so newly discovered subdomains are included.
+    # Keep this endpoint side-effect free: it reports certificate subjects for
+    # already authorized inventory instead of launching hidden enumeration first.
     subfinder_job_id = None
     subfinder_error = ""
-    try:
-        from subfinder.runner import run_subfinder_for_project
-        subfinder_job_id = run_subfinder_for_project(pid, triggered_by="manual:openssl")
-    except Exception as e:
-        subfinder_error = str(e)
-
     hosts = _collect_openssl_hosts(pid)
     if not hosts:
         return err("No hosts found. Upload project hosts first.", 400)

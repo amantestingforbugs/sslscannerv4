@@ -44,6 +44,18 @@ def bootstrap_runtime() -> None:
 
 bootstrap_runtime()
 
+
+
+@app.after_request
+def add_security_headers(response):
+    """Add baseline browser hardening headers for company deployments."""
+    response.headers.setdefault("X-Content-Type-Options", "nosniff")
+    response.headers.setdefault("X-Frame-Options", "DENY")
+    response.headers.setdefault("Referrer-Policy", "no-referrer")
+    response.headers.setdefault("Permissions-Policy", "geolocation=(), microphone=(), camera=()")
+    response.headers.setdefault("Content-Security-Policy", "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; connect-src 'self'; img-src 'self' data:")
+    return response
+
 @app.get("/")
 def index():
     return render_template("index.html")

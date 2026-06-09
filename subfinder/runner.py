@@ -31,6 +31,7 @@ from urllib.parse import quote_plus, urlparse
 from urllib.request import urlopen, Request
 from urllib.error import HTTPError, URLError
 from core.observability import log_event
+from core.target_policy import is_target_allowed, registered_domain
 
 log = logging.getLogger(__name__)
 
@@ -254,12 +255,6 @@ def _run_subfinder_for_root(root_domain: str, timeout: int = 180) -> Dict[str, o
 
 
 _HOST_RE = re.compile(r"^(?:\*\.)?(?=.{1,253}$)(?!-)[a-z0-9-]+(?:\.[a-z0-9-]+)+$", re.IGNORECASE)
-_COMMON_COMPOUND_SUFFIXES = {
-    "co.uk", "org.uk", "gov.uk", "ac.uk",
-    "com.au", "net.au", "org.au",
-    "co.jp", "ne.jp", "or.jp",
-    "com.br", "com.mx", "com.tr",
-}
 _DEFAULT_BRUTE_LABELS = (
     # A compact built-in "top subdomains" list used before any custom files/URLs.
     # Operators can extend/replace this with DNS_BRUTEFORCE_LABELS,
@@ -399,22 +394,8 @@ def _normalize_host(host: str) -> str:
 
 
 def _registrable_domain(host: str) -> Optional[str]:
-    try:
-        import tldextract
-        ext = tldextract.extract(host)
-        if ext.domain and ext.suffix:
-            return f"{ext.domain}.{ext.suffix}"
-    except Exception:
-        pass
-
-    parts = host.split(".")
-    if len(parts) < 2:
-        return None
-    tail2 = ".".join(parts[-2:])
-    tail3 = ".".join(parts[-3:]) if len(parts) >= 3 else ""
-    if tail2 in _COMMON_COMPOUND_SUFFIXES and len(parts) >= 3:
-        return tail3
-    return tail2
+    root = registered_domain(host)
+    return root or None
 
 
 def _extract_project_root_domains(hosts: List[str]) -> List[str]:
@@ -426,7 +407,7 @@ def _extract_project_root_domains(hosts: List[str]) -> List[str]:
             continue
         for token in re.split(r"[\s,;]+", raw_line):
             h = _normalize_host(token)
-            if not h or "." not in h or not _HOST_RE.match(h):
+            if not h or "." not in h or not _HOST_RE.match(h) or not is_target_allowed(h):
                 continue
             normalized.append(h)
 
@@ -436,13 +417,15 @@ def _extract_project_root_domains(hosts: List[str]) -> List[str]:
     roots: Set[str] = set()
     for h in normalized:
         root = _registrable_domain(h)
-        if root:
+        if root and is_target_allowed(root):
             roots.add(root)
 
     return sorted(roots)
 
 
 def _is_host_within_root(host: str, root_domain: str) -> bool:
+    if not is_target_allowed(host):
+        return False
     if host == root_domain:
         return True
     return host.endswith(f".{root_domain}")
