@@ -474,36 +474,48 @@ def _wildcard_dns_ips(root_domain: str) -> Set[str]:
     return ips
 
 
+def _host_suffixes_under_root(host: str, root_domain: str, max_depth: int = 0) -> List[str]:
+    """Return every in-scope sub-zone from deepest to shallowest.
+
+    For ``api.dev.example.com`` this yields ``api.dev.example.com`` and
+    ``dev.example.com``.  Brute-force and permutation stages prepend labels to
+    each suffix so scans continue below already discovered multi-level hosts
+    instead of stopping at one nested label.
+    """
+    if not _is_host_within_root(host, root_domain) or host == root_domain:
+        return []
+    left = host[:-len(root_domain)].rstrip(".")
+    labels = [part for part in left.split(".") if part]
+    suffixes: List[str] = []
+    for idx in range(len(labels)):
+        suffix = ".".join(labels[idx:] + [root_domain])
+        if suffix != root_domain and _HOST_RE.match(suffix):
+            suffixes.append(suffix)
+        if max_depth > 0 and len(suffixes) >= max_depth:
+            break
+    return suffixes
+
+
 def _generate_bruteforce_candidates(root_domain: str, seed_hosts: List[str]) -> Set[str]:
     labels = _brute_labels()
     candidates: Set[str] = {f"{label}.{root_domain}" for label in labels}
+    deep_suffix_limit = _env_int("DNS_BRUTEFORCE_SUFFIXES_PER_HOST", 5, minimum=1, maximum=25)
     relevant = [h for h in seed_hosts if _is_host_within_root(h, root_domain)]
     for host in relevant:
-        left = host[:-len(root_domain)].rstrip(".")
-        if not left:
-            continue
-        host_labels = [part for part in left.split(".") if part]
-        if not host_labels:
-            continue
-        last_label = host_labels[-1]
-        for label in labels:
-            candidates.add(f"{label}.{last_label}.{root_domain}")
+        for suffix in _host_suffixes_under_root(host, root_domain, max_depth=deep_suffix_limit):
+            for label in labels:
+                candidates.add(f"{label}.{suffix}")
     return {c for c in candidates if _HOST_RE.match(c)}
 
 
 def _ordered_bruteforce_candidates(root_domain: str, seed_hosts: List[str]) -> List[str]:
     labels = _brute_labels()
     ordered: List[str] = [f"{label}.{root_domain}" for label in labels]
+    deep_suffix_limit = _env_int("DNS_BRUTEFORCE_SUFFIXES_PER_HOST", 5, minimum=1, maximum=25)
     relevant = [h for h in seed_hosts if _is_host_within_root(h, root_domain)]
     for host in sorted(relevant):
-        left = host[:-len(root_domain)].rstrip(".")
-        if not left:
-            continue
-        host_labels = [part for part in left.split(".") if part]
-        if not host_labels:
-            continue
-        last_label = host_labels[-1]
-        ordered.extend(f"{label}.{last_label}.{root_domain}" for label in labels)
+        for suffix in _host_suffixes_under_root(host, root_domain, max_depth=deep_suffix_limit):
+            ordered.extend(f"{label}.{suffix}" for label in labels)
     deduped: List[str] = []
     seen: Set[str] = set()
     for candidate in ordered:
@@ -1158,7 +1170,7 @@ def _passive_enumeration_sources() -> Dict[str, EnumerationSource]:
 
 
 def _tool_summary() -> str:
-    sources = ["subfinder(all-sources)", *_passive_enumeration_sources().keys(), "dns_bruteforce", "dns_permutation"]
+    sources = ["subfinder(all-sources)", *_passive_enumeration_sources().keys(), "deep_recursive_passive", "dns_bruteforce", "dns_permutation"]
     return ",".join(sources)
 
 
@@ -1187,6 +1199,133 @@ def _run_passive_source(source_name: str, source_fn: EnumerationSource, root_dom
         }
 
 
+def _deep_scan_enabled() -> bool:
+    return _env_bool("SUBDOMAIN_DEEP_SCAN_ENABLED", True)
+
+
+def _configured_deep_sources(all_sources: Dict[str, EnumerationSource]) -> Dict[str, EnumerationSource]:
+    """Select passive sources used for recursive sub-zone enumeration."""
+    default_names = (
+        "crtsh",
+        "certspotter",
+        "wayback",
+        "commoncrawl",
+        "urlscan",
+        "rapiddns",
+        "anubis",
+        "subdomain_center",
+        "alienvault_otx",
+        "bufferover",
+    )
+    raw = os.getenv("SUBDOMAIN_DEEP_SOURCES", "").strip()
+    if raw:
+        requested = [item.strip() for item in raw.split(",") if item.strip()]
+        if any(item.lower() == "all" for item in requested):
+            return dict(all_sources)
+        return {name: all_sources[name] for name in requested if name in all_sources}
+    return {name: all_sources[name] for name in default_names if name in all_sources}
+
+
+def _deep_scan_targets(root_domain: str, discovered: List[str], seen_targets: Set[str], limit: int) -> List[str]:
+    """Pick the deepest known in-scope zones to recurse into next."""
+    candidates: Set[str] = set()
+    for host in discovered:
+        if not _is_host_within_root(host, root_domain) or host == root_domain:
+            continue
+        candidates.update(_host_suffixes_under_root(host, root_domain))
+    ordered = sorted(
+        (target for target in candidates if target not in seen_targets),
+        key=lambda host: (-host.count("."), host),
+    )
+    return ordered[:limit] if limit > 0 else ordered
+
+
+def _run_recursive_passive_enumeration(
+    root_domains: List[str],
+    discovered: List[str],
+    all_sources: Dict[str, EnumerationSource],
+) -> Dict[str, object]:
+    """Recursively query passive sources against discovered sub-zones.
+
+    Most public sources support querying any DNS zone, not just the apex. Running
+    them again for zones like ``dev.example.com`` is what exposes deeper names
+    such as ``api.internal.dev.example.com``. Limits and phase timeouts keep this
+    aggressive mode bounded for large projects.
+    """
+    if not _deep_scan_enabled():
+        return {"found": [], "source_counts": {}, "raw_records": []}
+
+    sources = _configured_deep_sources(all_sources)
+    if not sources:
+        return {"found": [], "source_counts": {}, "raw_records": []}
+
+    max_depth = _env_int("SUBDOMAIN_DEEP_SCAN_DEPTH", 3, minimum=1, maximum=10)
+    targets_per_root = _env_int("SUBDOMAIN_DEEP_TARGETS_PER_ROOT", 40, minimum=1, maximum=500)
+    max_tasks = _env_int("SUBDOMAIN_DEEP_MAX_TASKS", 500, minimum=1, maximum=5000)
+    phase_timeout = _env_int("SUBDOMAIN_DEEP_PHASE_TIMEOUT_SECONDS", 300, minimum=30, maximum=7200)
+
+    known = sorted(set(discovered))
+    total_found: Set[str] = set()
+    raw_records: List[Dict[str, object]] = []
+    source_counts: Dict[str, int] = {}
+    seen_targets: Set[str] = set(root_domains)
+
+    for depth in range(1, max_depth + 1):
+        target_zones: List[str] = []
+        for root_domain in root_domains:
+            target_zones.extend(_deep_scan_targets(root_domain, known, seen_targets, targets_per_root))
+        if not target_zones:
+            break
+        target_zones = target_zones[: max(1, max_tasks // max(1, len(sources)))]
+        seen_targets.update(target_zones)
+
+        tasks = [
+            (f"deep:{source_name}:d{depth}", source_fn, target_zone)
+            for target_zone in target_zones
+            for source_name, source_fn in sources.items()
+        ][:max_tasks]
+        deep_workers = max(4, min(64, len(tasks)))
+        pool = ThreadPoolExecutor(max_workers=deep_workers)
+        depth_found: Set[str] = set()
+        try:
+            future_map = {
+                pool.submit(_run_passive_source, source_name, source_fn, target_zone): (source_name, target_zone)
+                for source_name, source_fn, target_zone in tasks
+            }
+            for future, source_info, timed_out in _iter_completed_with_deadline(
+                future_map,
+                phase_timeout,
+                f"deep passive enumeration depth {depth}",
+            ):
+                source_name, target_zone = source_info
+                if timed_out:
+                    run = {
+                        "source": source_name,
+                        "root_domain": target_zone,
+                        "status": "timeout",
+                        "found": [],
+                        "found_count": 0,
+                        "stderr": f"Deep passive source timed out after {phase_timeout}s",
+                    }
+                else:
+                    run = future.result()
+                found = _filter_hosts_for_root(run.get("found") or [], target_zone)
+                if found:
+                    depth_found.update(found)
+                    source_counts[source_name] = source_counts.get(source_name, 0) + len(found)
+                raw_records.append(_compact_raw_record(run, sample_size=_env_int("SUBFINDER_RAW_SAMPLE_SIZE", 50, minimum=0)))
+        finally:
+            pool.shutdown(wait=False, cancel_futures=True)
+
+        new_depth_hosts = depth_found - set(known)
+        if not new_depth_hosts:
+            continue
+        total_found.update(new_depth_hosts)
+        known = sorted(set(known) | new_depth_hosts)
+
+    return {"found": sorted(total_found), "source_counts": source_counts, "raw_records": raw_records}
+
+
 def _mutation_labels_from_hosts(root_domain: str, known_hosts: List[str], max_labels: int = 120) -> List[str]:
     labels: Set[str] = set()
     for host in known_hosts:
@@ -1208,15 +1347,20 @@ def _generate_permutation_candidates(root_domain: str, known_hosts: List[str], m
     seed_labels = _mutation_labels_from_hosts(root_domain, known_hosts)
     brute_labels = _brute_labels()
     candidates: Set[str] = set()
-    for base in seed_labels[:60]:
-        for prefix in ("dev", "staging", "prod", "internal", "edge", "api", "old", "new"):
-            candidates.add(f"{prefix}-{base}.{root_domain}")
-        for suffix in ("dev", "stg", "prod", "v2", "v3", "int"):
-            candidates.add(f"{base}-{suffix}.{root_domain}")
-    for left in seed_labels[:35]:
-        for right in brute_labels[:18]:
-            candidates.add(f"{left}.{right}.{root_domain}")
-            candidates.add(f"{right}.{left}.{root_domain}")
+    deep_suffix_limit = _env_int("DNS_PERMUTATION_SUFFIXES_PER_HOST", 5, minimum=1, maximum=25)
+    suffixes: Set[str] = {root_domain}
+    for host in known_hosts:
+        suffixes.update(_host_suffixes_under_root(host, root_domain, max_depth=deep_suffix_limit))
+    for zone in sorted(suffixes, key=lambda host: (-host.count("."), host))[:200]:
+        for base in seed_labels[:60]:
+            for prefix in ("dev", "staging", "prod", "internal", "edge", "api", "old", "new"):
+                candidates.add(f"{prefix}-{base}.{zone}")
+            for suffix in ("dev", "stg", "prod", "v2", "v3", "int"):
+                candidates.add(f"{base}-{suffix}.{zone}")
+        for left in seed_labels[:35]:
+            for right in brute_labels[:18]:
+                candidates.add(f"{left}.{right}.{zone}")
+                candidates.add(f"{right}.{left}.{zone}")
     filtered = {c for c in candidates if _HOST_RE.match(c)}
     if max_candidates > 0 and len(filtered) > max_candidates:
         return set(sorted(filtered)[:max_candidates])
@@ -1291,7 +1435,7 @@ def run_subfinder_for_project(project_id: str, triggered_by: str = "scheduler") 
         project_id=project_id,
         root_domains=root_domains,
         status="running",
-        feature_set=["subfinder", *_passive_enumeration_sources().keys(), "dns_bruteforce", "dns_permutation"],
+        feature_set=["subfinder", *_passive_enumeration_sources().keys(), "deep_recursive_passive", "dns_bruteforce", "dns_permutation"],
     )
 
     job_id = subfinder_job_create(project_id, ",".join(root_domains), triggered_by)
@@ -1412,6 +1556,14 @@ def run_subfinder_for_project(project_id: str, triggered_by: str = "scheduler") 
                     )
             finally:
                 osint_pool.shutdown(wait=False, cancel_futures=True)
+        deep_run = _run_recursive_passive_enumeration(root_domains, discovered, osint_sources)
+        deep_found = deep_run.get("found") or []
+        if deep_found:
+            discovered.extend(deep_found)
+        for source_name, count in (deep_run.get("source_counts") or {}).items():
+            source_counts[source_name] = source_counts.get(source_name, 0) + int(count or 0)
+        raw_records.extend(deep_run.get("raw_records") or [])
+
         discovered = sorted(set(discovered))
         brute_discovered: Set[str] = set()
         permutation_discovered: Set[str] = set()
