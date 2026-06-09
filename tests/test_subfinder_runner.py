@@ -367,3 +367,55 @@ def test_subfinder_ssl_scan_targets_can_scan_all_discovered(monkeypatch):
     )
 
     assert targets == ["api.example.com", "old.example.com"]
+
+
+def test_host_suffixes_under_root_yields_deepest_to_shallowest():
+    assert runner._host_suffixes_under_root("api.internal.dev.example.com", "example.com") == [
+        "api.internal.dev.example.com",
+        "internal.dev.example.com",
+        "dev.example.com",
+    ]
+
+
+def test_generate_bruteforce_candidates_prepends_to_every_known_subzone(monkeypatch):
+    monkeypatch.setenv("DNS_BRUTEFORCE_LABELS", "www,admin")
+    candidates = _generate_bruteforce_candidates(
+        "example.com",
+        ["api.internal.dev.example.com"],
+    )
+    assert "admin.api.internal.dev.example.com" in candidates
+    assert "admin.internal.dev.example.com" in candidates
+    assert "admin.dev.example.com" in candidates
+
+
+def test_deep_scan_targets_prioritizes_deepest_unseen_zones():
+    targets = runner._deep_scan_targets(
+        "example.com",
+        ["www.example.com", "api.internal.dev.example.com", "bad.net"],
+        {"api.internal.dev.example.com"},
+        limit=2,
+    )
+    assert targets == ["internal.dev.example.com", "dev.example.com"]
+
+
+def test_recursive_passive_enumeration_walks_newly_found_subzones(monkeypatch):
+    monkeypatch.setenv("SUBDOMAIN_DEEP_SCAN_DEPTH", "2")
+    monkeypatch.setenv("SUBDOMAIN_DEEP_TARGETS_PER_ROOT", "10")
+    monkeypatch.setenv("SUBDOMAIN_DEEP_SOURCES", "fake")
+
+    def fake_source(zone: str):
+        if zone == "dev.example.com":
+            return ["api.dev.example.com"]
+        if zone == "api.dev.example.com":
+            return ["admin.api.dev.example.com"]
+        return []
+
+    result = runner._run_recursive_passive_enumeration(
+        ["example.com"],
+        ["dev.example.com"],
+        {"fake": fake_source},
+    )
+
+    assert result["found"] == ["admin.api.dev.example.com", "api.dev.example.com"]
+    assert result["source_counts"]["deep:fake:d1"] == 1
+    assert result["source_counts"]["deep:fake:d2"] == 1
