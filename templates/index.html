@@ -913,7 +913,7 @@ html[data-density="comfortable"] .card-body,html[data-density="comfortable"] .mo
     <div class="logo-mark">S</div>
     <div>
       <div class="logo-text">SSL Sentinel</div>
-      <div class="logo-sub">Certificate Monitor</div>
+      <div class="logo-sub">Bug Bounty Recon</div>
     </div>
   </div>
 
@@ -948,6 +948,10 @@ html[data-density="comfortable"] .card-body,html[data-density="comfortable"] .mo
     <button class="nav-item" data-page="discoveries-latest">
       <svg fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path d="M5 12h14"/><path d="m12 5 7 7-7 7"/><path d="M5 5v14"/></svg>
       <span>Latest Discovery Batch</span>
+    </button>
+    <button class="nav-item" data-page="bounty-leads">
+      <svg fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path d="M12 3l2.6 5.3 5.9.9-4.2 4.1 1 5.8L12 16.4 6.7 19.1l1-5.8-4.2-4.1 5.9-.9L12 3z"/></svg>
+      <span>Bounty Leads</span>
     </button>
     <button class="nav-item" data-page="subfinder-raw">
       <svg fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path d="M4 4h16v16H4z"/><path d="M8 8h8M8 12h8M8 16h5"/></svg>
@@ -1007,8 +1011,8 @@ html[data-density="comfortable"] .card-body,html[data-density="comfortable"] .mo
     <div class="page active" id="page-dashboard">
       <div class="dashboard-hero">
         <div>
-          <div class="hero-title">SSL Posture Overview</div>
-          <div class="hero-sub">Track certificate health, monitor active scans, and quickly jump into critical workflows from one place.</div>
+          <div class="hero-title">Bug Bounty Recon Workspace</div>
+          <div class="hero-sub">Find fresh assets, rank high-signal bounty leads, run focused scans, and triage reportable evidence from one place.</div>
         </div>
         <div class="hero-actions">
           <button class="btn btn-primary" onclick="nav('projects')">+ Add Project</button>
@@ -1028,7 +1032,7 @@ html[data-density="comfortable"] .card-body,html[data-density="comfortable"] .mo
             <span class="hero-chip" id="missionState">Analyzing</span>
           </div>
           <div class="risk-orb" id="riskOrb"><div><div class="risk-number" id="riskNumber">—</div><div class="risk-caption" id="riskCaption">Risk</div></div></div>
-          <div class="mission-sub" id="riskNarrative" style="text-align:center;margin:auto">Loading intelligence…</div>
+          <div class="mission-sub" id="riskNarrative" style="text-align:center;margin:auto">Loading recon signals…</div>
         </section>
         <section class="mission-card" aria-label="Posture telemetry">
           <div class="mission-head">
@@ -1108,22 +1112,6 @@ html[data-density="comfortable"] .card-body,html[data-density="comfortable"] .mo
         </div>
         <div id="dash-mismatches">
           <div class="empty"><div class="empty-icon">✅</div><div class="empty-title">No mismatches detected</div></div>
-        </div>
-      </div>
-
-      <div class="card">
-        <div class="card-header">
-          <span class="card-title">Security Intelligence</span>
-          <button class="btn btn-sm" onclick="loadDashboardIntel()">Refresh</button>
-        </div>
-        <div class="card-body">
-          <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px;margin-bottom:12px">
-            <div class="panel-card"><div class="stat-title">Risk Score</div><div class="stat-value" id="intel-risk-score">—</div></div>
-            <div class="panel-card"><div class="stat-title">Coverage</div><div class="stat-value" id="intel-coverage">—</div></div>
-            <div class="panel-card"><div class="stat-title">Critical Projects</div><div class="stat-value" id="intel-critical-projects">—</div></div>
-            <div class="panel-card"><div class="stat-title">Scan Freshness</div><div class="stat-value" id="intel-freshness">—</div></div>
-          </div>
-          <div id="intel-insights" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:8px"></div>
         </div>
       </div>
 
@@ -1553,6 +1541,40 @@ html[data-density="comfortable"] .card-body,html[data-density="comfortable"] .mo
           <table>
             <thead><tr><th>Hostname</th><th>First Seen</th><th>HTTP</th><th>Redirect</th><th>Title</th><th>SSL Status</th><th>CN</th><th>Expiry</th></tr></thead>
             <tbody id="nd-latest-body"></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <div class="page" id="page-bounty-leads">
+      <div class="page-header">
+        <div>
+          <div class="page-title">Bounty Leads</div>
+          <div class="page-sub">Prioritized, authorized recon targets based on fresh subdomains, active HTTP surfaces, high-value keywords, and TLS anomalies.</div>
+        </div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap">
+          <button class="btn" onclick="exportBountyLeads()">Export CSV</button>
+          <button class="btn btn-primary" onclick="loadBountyLeads()">Refresh Leads</button>
+        </div>
+      </div>
+      <div class="table-toolbar">
+        <select class="form-input" id="bounty-project-select" style="max-width:260px" onchange="loadBountyLeads()"><option value="">All projects</option></select>
+        <div class="search-input">
+          <svg width="14" height="14" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
+          <input type="text" id="bounty-search" placeholder="Search host, e.g. admin, api, staging...">
+        </div>
+        <span id="bounty-count" style="font-size:12px;color:var(--text-muted)">0 leads</span>
+      </div>
+      <div class="card" style="margin-bottom:12px">
+        <div class="card-body" style="font-size:12.5px;color:var(--text-secondary)">
+          Scores are recon prioritization hints, not vulnerability claims. Always verify scope and program rules before testing.
+        </div>
+      </div>
+      <div class="card">
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Score</th><th>Lead</th><th>Project</th><th>HTTP</th><th>Evidence</th><th>Next Steps</th></tr></thead>
+            <tbody id="bounty-body"></tbody>
           </table>
         </div>
       </div>
@@ -2159,13 +2181,14 @@ const PAGE_INFRA = {
   subfinder: { title: 'Subfinder', onEnter: initSfPage },
   discoveries: { title: 'New Discoveries', onEnter: initDiscoveriesPage },
   'discoveries-latest': { title: 'Latest Discovery Batch', onEnter: initLatestDiscoveriesPage },
+  'bounty-leads': { title: 'Bounty Leads', onEnter: initBountyLeadsPage },
   'subfinder-raw': { title: 'Subfinder Enumeration', onEnter: initSfRawPage },
   nuclei: { title: 'Nuclei CVEs', onEnter: initNucleiPage },
   openssl: { title: 'OpenSSL', onEnter: initOpenSSLPage },
   logs: { title: 'Logs', onEnter: loadLogsPage },
   settings: { title: 'Settings', onEnter: loadAlertSettings },
 };
-const QUICK_ACTION_PAGES = ['dashboard', 'projects', 'alerts', 'subfinder', 'discoveries', 'discoveries-latest', 'subfinder-raw', 'nuclei', 'openssl', 'logs', 'settings'];
+const QUICK_ACTION_PAGES = ['dashboard', 'projects', 'alerts', 'subfinder', 'discoveries', 'discoveries-latest', 'bounty-leads', 'subfinder-raw', 'nuclei', 'openssl', 'logs', 'settings'];
 const QUICK_ACTIONS = [
   ...QUICK_ACTION_PAGES.map(page => ({
     label: PAGE_INFRA[page]?.title || page,
@@ -2175,7 +2198,7 @@ const QUICK_ACTIONS = [
     page,
   })),
   { label: 'Create project', description: 'Open the new project modal', group: 'Actions', icon: '＋', action: () => openModal('createModal'), shortcut: 'N' },
-  { label: 'Refresh dashboard intelligence', description: 'Reload stats, logs, active scans, and recommendations', group: 'Actions', icon: '↻', action: () => loadDash(), shortcut: 'R' },
+  { label: 'Refresh dashboard', description: 'Reload stats, logs, active scans, and recommendations', group: 'Actions', icon: '↻', action: () => loadDash(), shortcut: 'R' },
   { label: 'Toggle theme', description: 'Switch between dark and light mode', group: 'Workspace', icon: '◐', action: () => setTheme(document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark'), shortcut: 'T' },
   { label: 'Compact density', description: 'Use denser tables and navigation', group: 'Workspace', icon: '≋', action: () => saveUiPrefs({ density: 'compact' }) },
   { label: 'Comfortable density', description: 'Use larger spacing for presentations', group: 'Workspace', icon: '▦', action: () => saveUiPrefs({ density: 'comfortable' }) },
@@ -2561,36 +2584,6 @@ function severityLabel(score) {
   return 'Low';
 }
 
-async function loadDashboardIntel(statsOverride = null, projectsOverride = null) {
-  const insightBox = document.getElementById('intel-insights');
-  try {
-    const [statsResp, projectsResp] = await Promise.all([
-      statsOverride ? Promise.resolve({ data: statsOverride }) : apiJSON('/api/stats'),
-      projectsOverride ? Promise.resolve({ data: projectsOverride }) : (projectsCache.length ? Promise.resolve({ data: projectsCache }) : apiJSON('/api/projects')),
-    ]);
-    const projects = projectsResp.data || [];
-    const s = statsResp.data || {};
-    const total = Number(s.total_domains ?? 0);
-    const covered = Number(s.ok ?? 0) + Number(s.mismatches ?? 0) + Number(s.expired ?? 0) + Number(s.expiring ?? 0);
-    const coveragePct = total > 0 ? Math.round((covered / total) * 100) : 0;
-    const risk = calcRiskScore(s, projects);
-    const criticalProjects = projects.filter(p => (p.latest_scan?.mismatches || 0) >= 3 || (p.latest_scan?.errors || 0) >= 2).length;
-    const freshProjects = projects.filter(p => p.latest_scan?.finished_at).length;
-    document.getElementById('intel-risk-score').textContent = `${risk}/100 (${severityLabel(risk)})`;
-    document.getElementById('intel-coverage').textContent = `${coveragePct}%`;
-    document.getElementById('intel-critical-projects').textContent = `${criticalProjects}/${projects.length || 0}`;
-    document.getElementById('intel-freshness').textContent = `${freshProjects}/${projects.length || 0} scanned`;
-    const lines = [
-      `Top issue pressure: ${fmt(s.mismatches || 0)} mismatches and ${fmt(s.expired || 0)} expired certificates currently detected.`,
-      `Operational state: ${fmt(s.running_scans || 0)} active scans with ${fmt(s.unseen_alerts || 0)} unseen alerts awaiting triage.`,
-      `Program recommendation: prioritize ${criticalProjects} critical project(s) and trigger immediate rescans for stale projects.`,
-    ];
-    insightBox.innerHTML = lines.map(line => `<div class="panel-card" style="font-size:12.5px;color:var(--text-secondary)">${esc(line)}</div>`).join('');
-  } catch {
-    insightBox.innerHTML = '<div class="panel-card" style="color:var(--red)">Unable to compute intelligence right now.</div>';
-  }
-}
-
 
 function pctValue(value, total) {
   const t = Math.max(1, Number(total || 0));
@@ -2668,7 +2661,6 @@ async function loadDash() {
       loadDashMismatches(projects),
       loadLogs(),
       loadSystemOverview(),
-      loadDashboardIntel(stats, projects),
       Promise.resolve(updateMissionControl(stats, projects)),
     ]);
   } finally {
@@ -3914,6 +3906,62 @@ function renderDiscoveriesRows(data, countId, bodyId) {
   </tr>`).join('');
 }
 
+async function initBountyLeadsPage() {
+  const sel = document.getElementById('bounty-project-select');
+  const projs = projectsCache.length ? projectsCache : (await apiJSON('/api/projects')).data || [];
+  projectsCache = projs || [];
+  const prev = sel.value;
+  sel.innerHTML = '<option value="">All projects</option>' +
+    (projs || []).map(p => `<option value="${p.id}">${esc(p.name)}</option>`).join('');
+  if (prev) sel.value = prev;
+  await loadBountyLeads();
+}
+
+function bountySeverityBadge(severity) {
+  const sev = String(severity || 'low').toLowerCase();
+  const cls = sev === 'high' ? 'badge-mismatch' : sev === 'medium' ? 'badge-expiring' : 'badge-ok';
+  return `<span class="badge ${cls}">${esc(sev)}</span>`;
+}
+
+async function loadBountyLeads() {
+  const body = document.getElementById('bounty-body');
+  const count = document.getElementById('bounty-count');
+  if (!body) return;
+  body.innerHTML = '<tr><td colspan="6" style="text-align:center;padding:20px;color:var(--text-muted)">Ranking bounty leads...</td></tr>';
+  const pid = encodeURIComponent(document.getElementById('bounty-project-select')?.value || '');
+  const q = encodeURIComponent(document.getElementById('bounty-search')?.value || '');
+  const { ok, data, error } = await apiJSON(`/api/bounty/leads?project_id=${pid}&search=${q}&limit=100`);
+  if (!ok) {
+    body.innerHTML = `<tr><td colspan="6" style="text-align:center;padding:20px;color:var(--red)">${esc(error || 'Unable to load bounty leads')}</td></tr>`;
+    return;
+  }
+  const rows = data?.rows || [];
+  count.textContent = `${fmt(data?.total || 0)} leads`;
+  if (!rows.length) {
+    body.innerHTML = '<tr><td colspan="6" style="text-align:center;padding:20px;color:var(--text-muted)">No leads yet. Run Subfinder and HTTP enrichment to populate prioritized bounty targets.</td></tr>';
+    return;
+  }
+  body.innerHTML = rows.map(r => {
+    const url = r.http_final_url || (r.http_scheme ? `${r.http_scheme}://${r.hostname}` : `https://${r.hostname}`);
+    const evidence = (r.evidence || []).map(e => `<li>${esc(e)}</li>`).join('');
+    const steps = (r.next_steps || []).slice(0, 3).map(e => `<li>${esc(e)}</li>`).join('');
+    return `<tr>
+      <td data-sort-value="${Number(r.score || 0)}"><div style="font-size:22px;font-weight:800">${fmt(r.score || 0)}</div>${bountySeverityBadge(r.severity)}</td>
+      <td><div style="font-family:var(--mono);font-size:12px;font-weight:700">${esc(r.hostname)}</div><div style="font-size:12px;color:var(--text-secondary)">${esc(r.lead_type || 'Recon candidate')}</div></td>
+      <td>${esc(r.project_name || '—')}</td>
+      <td><div>${r.http_status_code ?? '—'}</div><a href="${esc(url)}" target="_blank" rel="noopener" style="font-size:11px;color:var(--accent)">${esc((r.http_page_title || r.http_final_url || 'open target').slice(0, 80))}</a></td>
+      <td><ul style="margin-left:16px;color:var(--text-secondary);font-size:12px">${evidence}</ul></td>
+      <td><ul style="margin-left:16px;color:var(--text-secondary);font-size:12px">${steps}</ul></td>
+    </tr>`;
+  }).join('');
+}
+
+function exportBountyLeads() {
+  const pid = encodeURIComponent(document.getElementById('bounty-project-select')?.value || '');
+  const q = encodeURIComponent(document.getElementById('bounty-search')?.value || '');
+  window.location.href = `/api/bounty/leads/export?project_id=${pid}&search=${q}&limit=500`;
+}
+
 // Poll live sections with visibility-aware scheduling to keep UI responsive.
 let liveRefreshTimer = null;
 const LIVE_REFRESH_MS = 12000;
@@ -4200,6 +4248,7 @@ document.getElementById('alerts-search')?.addEventListener('input', debounce(() 
 }, 250));
 document.getElementById('nd-search')?.addEventListener('input', debounce(loadDiscoveries, 300));
 document.getElementById('nd-latest-search')?.addEventListener('input', debounce(loadLatestDiscoveries, 300));
+document.getElementById('bounty-search')?.addEventListener('input', debounce(loadBountyLeads, 300));
 scheduleLiveRefresh();
 document.addEventListener('visibilitychange', () => {
   if (document.hidden) {

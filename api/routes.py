@@ -286,67 +286,191 @@ def _analyze_hosts_text(content: str) -> dict:
 
 
 
-def _compute_risk_intelligence(total_hosts: int, latest: dict, previous: dict | None = None) -> dict:
-    """Compute normalized risk score, grade, trend, and prioritized actions."""
-    total = max(1, int(total_hosts or 0))
-    mismatches = int((latest or {}).get("mismatches") or 0)
-    expired = int((latest or {}).get("expired") or 0)
-    expiring = int((latest or {}).get("expiring") or 0)
-    errors = int((latest or {}).get("errors") or 0)
 
-    weighted = (expired * 45) + (mismatches * 30) + (expiring * 15) + (errors * 10)
-    max_weight = total * 45
-    score = min(100, round((weighted / max_weight) * 100, 2)) if max_weight > 0 else 0
+BOUNTY_KEYWORD_RULES = [
+    ("admin", 20, "Admin surface"),
+    ("administrator", 20, "Admin surface"),
+    ("login", 14, "Login surface"),
+    ("auth", 16, "Authentication surface"),
+    ("sso", 18, "SSO surface"),
+    ("api", 14, "API surface"),
+    ("swagger", 24, "API documentation"),
+    ("openapi", 24, "API documentation"),
+    ("graphql", 24, "GraphQL surface"),
+    ("dev", 16, "Development host"),
+    ("test", 14, "Test host"),
+    ("stage", 16, "Staging host"),
+    ("staging", 16, "Staging host"),
+    ("uat", 16, "UAT host"),
+    ("internal", 22, "Internal-looking host"),
+    ("vpn", 18, "Remote access surface"),
+    ("jenkins", 26, "CI/CD surface"),
+    ("git", 18, "Source control surface"),
+    ("grafana", 24, "Monitoring dashboard"),
+    ("kibana", 24, "Logging dashboard"),
+    ("prometheus", 22, "Metrics surface"),
+    ("metrics", 18, "Metrics surface"),
+    ("jira", 18, "Issue tracker"),
+    ("confluence", 18, "Knowledge base"),
+    ("phpmyadmin", 28, "Database admin surface"),
+    ("db", 16, "Database-looking host"),
+    ("redis", 18, "Cache/database host"),
+    ("elastic", 18, "Search/database host"),
+    ("solr", 18, "Search/database host"),
+]
 
+
+def _bounty_lead_severity(score: int) -> str:
     if score >= 75:
-        grade = "critical"
-    elif score >= 50:
-        grade = "high"
-    elif score >= 25:
-        grade = "medium"
-    else:
-        grade = "low"
+        return "high"
+    if score >= 45:
+        return "medium"
+    return "low"
 
-    prev_score = None
-    trend = "stable"
-    if previous:
-        prev = _compute_risk_intelligence(total, previous, None)
-        prev_score = prev["score"]
-        delta = round(score - prev_score, 2)
-        trend = "up" if delta > 0.5 else ("down" if delta < -0.5 else "stable")
 
-    actions = []
-    if expired:
-        actions.append({"priority": 1, "title": "Rotate expired certificates", "count": expired})
-    if mismatches:
-        actions.append({"priority": 2, "title": "Fix certificate hostname mismatches", "count": mismatches})
-    if expiring:
-        actions.append({"priority": 3, "title": "Renew certificates expiring soon", "count": expiring})
-    if errors:
-        actions.append({"priority": 4, "title": "Investigate persistent TLS scan errors", "count": errors})
+def _bounty_lead_next_steps(row: dict, evidence: list[str]) -> list[str]:
+    steps = [
+        "Confirm this asset is in your authorized bug-bounty scope before testing.",
+        "Open the host in a browser and capture status, title, redirects, and screenshots.",
+    ]
+    joined = " ".join(evidence).lower()
+    if "api" in joined or "swagger" in joined or "graphql" in joined:
+        steps.append("Check API docs, authentication boundaries, IDOR patterns, and sensitive schema exposure.")
+    if "admin" in joined or "dashboard" in joined or "login" in joined:
+        steps.append("Test access-control expectations, default credentials only where permitted, and exposed debug panels.")
+    if row.get("is_mismatch"):
+        steps.append("Investigate whether the certificate mismatch reveals a shared tenant, stale takeover path, or misrouted service.")
+    if row.get("http_status_code") in (401, 403):
+        steps.append("Look for bypasses, alternate methods, path normalization, and misconfigured reverse-proxy routes.")
+    return steps
 
-    exposure = {
-        "expired_pct": round((expired / total) * 100, 2),
-        "mismatch_pct": round((mismatches / total) * 100, 2),
-        "expiring_pct": round((expiring / total) * 100, 2),
-        "error_pct": round((errors / total) * 100, 2),
-    }
+
+def _score_bounty_lead(row: dict) -> dict:
+    hostname = (row.get("hostname") or "").lower()
+    title = (row.get("http_page_title") or "").lower()
+    final_url = (row.get("http_final_url") or "").lower()
+    score = 0
+    evidence: list[str] = []
+    lead_types: list[str] = []
+
+    for keyword, points, label in BOUNTY_KEYWORD_RULES:
+        if re.search(rf"(^|[.\-_]){re.escape(keyword)}([.\-_]|$)", hostname) or keyword in title or keyword in final_url:
+            score += points
+            if label not in lead_types:
+                lead_types.append(label)
+            evidence.append(f"{label}: matched '{keyword}'")
+
+    status = row.get("http_status_code")
+    if row.get("http_is_active"):
+        score += 20
+        evidence.append("HTTP probe marked the host active")
+    if status in (200, 204, 301, 302, 307, 308):
+        score += 10
+        evidence.append(f"Reachable HTTP status {status}")
+    elif status in (401, 403):
+        score += 18
+        evidence.append(f"Protected surface returned HTTP {status}")
+    elif isinstance(status, int) and status >= 500:
+        score += 12
+        evidence.append(f"Server error surface returned HTTP {status}")
+
+    if row.get("is_latest_discovery"):
+        score += 15
+        evidence.append("New in the latest discovery feed")
+        lead_types.append("Fresh discovery")
+    if row.get("is_mismatch"):
+        score += 22
+        evidence.append("TLS hostname mismatch detected")
+        lead_types.append("TLS misconfiguration")
+    if row.get("is_expired"):
+        score += 8
+        evidence.append("Expired certificate detected")
+    if row.get("error"):
+        score += 5
+        evidence.append(f"TLS scan error: {row.get('error')}")
+
+    score = max(0, min(100, score))
+    if not evidence:
+        evidence.append("Discovered subdomain with no high-signal bounty markers yet")
+        lead_types.append("Recon candidate")
 
     return {
+        **row,
         "score": score,
-        "grade": grade,
-        "trend": trend,
-        "previous_score": prev_score,
-        "total_hosts": total_hosts,
-        "latest": {
-            "mismatches": mismatches,
-            "expired": expired,
-            "expiring": expiring,
-            "errors": errors,
-        },
-        "exposure": exposure,
-        "recommended_actions": actions,
+        "severity": _bounty_lead_severity(score),
+        "lead_type": ", ".join(dict.fromkeys(lead_types)) or "Recon candidate",
+        "evidence": evidence[:10],
+        "next_steps": _bounty_lead_next_steps(row, evidence),
     }
+
+
+def _collect_bounty_leads(project_id: str = "", search: str = "", limit: int = 100) -> dict:
+    where = ["p.enabled=1"]
+    params: list = []
+    if project_id:
+        where.append("p.id=?")
+        params.append(project_id)
+    if search:
+        where.append("LOWER(h.hostname) LIKE ?")
+        params.append(f"%{search.lower()}%")
+    where_sql = " AND ".join(where)
+    rows = db.x(
+        f"""
+        WITH latest_result AS (
+          SELECT r.*
+          FROM results r
+          JOIN (
+            SELECT project_id, hostname, MAX(checked_at) AS checked_at
+            FROM results
+            GROUP BY project_id, hostname
+          ) lr ON lr.project_id=r.project_id AND lr.hostname=r.hostname AND lr.checked_at=r.checked_at
+        )
+        SELECT
+          p.id AS project_id,
+          p.name AS project_name,
+          h.hostname,
+          h.first_seen,
+          h.last_seen,
+          CASE WHEN EXISTS (
+            SELECT 1 FROM subfinder_new_discoveries n
+            WHERE n.project_id=h.project_id AND n.hostname=h.hostname
+          ) THEN 1 ELSE 0 END AS is_latest_discovery,
+          hx.status_code AS http_status_code,
+          hx.page_title AS http_page_title,
+          hx.redirect_location AS http_redirect_location,
+          hx.final_url AS http_final_url,
+          hx.scheme AS http_scheme,
+          hx.is_active AS http_is_active,
+          r.cn,
+          r.expiry,
+          r.days_left,
+          r.is_mismatch,
+          r.is_expired,
+          r.is_expiring,
+          r.error,
+          r.checked_at
+        FROM subfinder_hosts h
+        JOIN projects p ON p.id=h.project_id
+        LEFT JOIN subfinder_httpx_results hx ON hx.project_id=h.project_id AND hx.hostname=h.hostname
+        LEFT JOIN latest_result r ON r.project_id=h.project_id AND r.hostname=h.hostname
+        WHERE {where_sql}
+        ORDER BY h.first_seen DESC
+        LIMIT ?
+        """,
+        params + [max(1, min(500, limit * 4))],
+    ).fetchall()
+    leads = [_score_bounty_lead(dict(r)) for r in rows]
+    leads.sort(key=lambda r: (r.get("score") or 0, r.get("is_latest_discovery") or 0, r.get("first_seen") or ""), reverse=True)
+    selected = leads[:limit]
+    return {
+        "rows": selected,
+        "total": len(leads),
+        "returned": len(selected),
+        "project_id": project_id,
+        "search": search,
+        "method": "Ranks authorized Subfinder discoveries by active HTTP exposure, high-value host keywords, fresh-discovery status, and TLS anomalies.",
+    }
+
 def _run_openssl_subject(hostname: str, timeout: int = 20) -> dict:
     cmd = ["openssl", "s_client", "-connect", f"{hostname}:443"]
     try:
@@ -966,6 +1090,43 @@ def global_stats():
     return ok(db.stats_global())
 
 
+@api.get("/bounty/leads")
+def bounty_leads():
+    project_id = (request.args.get("project_id") or "").strip()
+    search = (request.args.get("search") or "").strip()
+    limit = _safe_int(request.args.get("limit", 100), 100, min_value=1, max_value=500)
+    return ok(_collect_bounty_leads(project_id=project_id, search=search, limit=limit))
+
+
+@api.get("/bounty/leads/export")
+def bounty_leads_export():
+    project_id = (request.args.get("project_id") or "").strip()
+    search = (request.args.get("search") or "").strip()
+    limit = _safe_int(request.args.get("limit", 500), 500, min_value=1, max_value=500)
+    data = _collect_bounty_leads(project_id=project_id, search=search, limit=limit)
+    out = io.StringIO()
+    writer = csv.writer(out)
+    writer.writerow(["score", "severity", "project", "hostname", "lead_type", "http_status", "title", "final_url", "evidence", "next_steps"])
+    for row in data.get("rows", []):
+        writer.writerow([
+            row.get("score", ""),
+            row.get("severity", ""),
+            row.get("project_name", ""),
+            row.get("hostname", ""),
+            row.get("lead_type", ""),
+            row.get("http_status_code", ""),
+            row.get("http_page_title", ""),
+            row.get("http_final_url", ""),
+            " | ".join(row.get("evidence") or []),
+            " | ".join(row.get("next_steps") or []),
+        ])
+    return Response(
+        out.getvalue(),
+        content_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition": "attachment; filename=bounty-leads.csv"},
+    )
+
+
 @api.get("/security-policy")
 def security_policy():
     return ok({
@@ -976,41 +1137,6 @@ def security_policy():
         "scope_enforced": bool(allowed_scope_domains()),
     })
 
-
-@api.get("/projects/<pid>/risk-intelligence")
-def project_risk_intelligence(pid):
-    p = db.project_get(pid)
-    if not p:
-        return err("Project not found", 404)
-
-    latest = db.x(
-        """
-        SELECT id, created_at, finished_at, total, mismatches, expired, expiring, errors, ok
-        FROM scans
-        WHERE project_id=?
-        ORDER BY created_at DESC
-        LIMIT 2
-        """,
-        (pid,),
-    ).fetchall()
-    if not latest:
-        return ok({
-            "score": 0,
-            "grade": "unknown",
-            "trend": "stable",
-            "message": "No scans available yet",
-            "total_hosts": p.get("host_count", 0),
-        })
-
-    current = dict(latest[0])
-    previous = dict(latest[1]) if len(latest) > 1 else None
-    model = _compute_risk_intelligence(p.get("host_count") or current.get("total") or 0, current, previous)
-    model["scan"] = {
-        "id": current.get("id"),
-        "created_at": current.get("created_at"),
-        "finished_at": current.get("finished_at"),
-    }
-    return ok(model)
 
 
 @api.get("/system-overview")
