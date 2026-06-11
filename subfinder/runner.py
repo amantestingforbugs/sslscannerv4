@@ -24,7 +24,7 @@ import shutil
 import subprocess
 import threading
 import time
-from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, as_completed, wait
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from pathlib import Path
 from typing import Callable, Dict, Iterable, List, Optional, Set
 from urllib.parse import quote_plus, urlparse
@@ -432,28 +432,63 @@ def _is_host_within_root(host: str, root_domain: str) -> bool:
 
 
 def _resolve_host_ips(host: str, timeout: float = 1.5) -> Set[str]:
-    """Resolve a host to IP strings without mutating process-wide socket defaults."""
+    """Resolve a host to IP strings.
 
-    def _resolve() -> Set[str]:
+    ``socket.getaddrinfo`` does not expose a per-call timeout on every platform.
+    Callers that fan out many DNS lookups must therefore enforce their own phase
+    deadline around this function instead of depending on one lookup to return.
+    The ``timeout`` argument is kept for tests/backward compatibility with older
+    monkeypatches.
+    """
+    try:
         return {str(row[4][0]) for row in socket.getaddrinfo(host, None) if row and row[4]}
-
-    with ThreadPoolExecutor(max_workers=1) as resolver:
-        future = resolver.submit(_resolve)
-        try:
-            return future.result(timeout=timeout)
-        except Exception:
-            return set()
+    except Exception:
+        return set()
 
 
 def _host_resolves(host: str, timeout: float = 1.5) -> bool:
     return bool(_resolve_host_ips(host, timeout=timeout))
 
 
+def _resolve_hosts_with_deadline(
+    hosts: List[str],
+    workers: int,
+    timeout: int,
+    phase_name: str,
+) -> Dict[str, Set[str]]:
+    """Resolve many hosts with a hard phase deadline.
+
+    DNS resolver calls can wedge below Python's socket timeout controls.  This
+    helper lets the scan continue with partial results and abandons unresolved
+    futures instead of blocking the subdomain job indefinitely.
+    """
+    if not hosts:
+        return {}
+    resolved: Dict[str, Set[str]] = {}
+    pool = ThreadPoolExecutor(max_workers=max(1, workers))
+    try:
+        future_map = {pool.submit(_resolve_host_ips, host): host for host in hosts}
+        for future, host, timed_out in _iter_completed_with_deadline(future_map, timeout, phase_name):
+            if timed_out:
+                continue
+            try:
+                ips = set(future.result() or [])
+            except Exception:
+                ips = set()
+            resolved[host] = ips
+    finally:
+        pool.shutdown(wait=False, cancel_futures=True)
+    return resolved
+
+
 def _wildcard_dns_ips(root_domain: str) -> Set[str]:
     labels = ("ssl-sentinel-nohit-a", "ssl-sentinel-nohit-b")
+    hosts = [f"{label}-{int(time.time())}.{root_domain}" for label in labels]
+    timeout = _env_int("DNS_WILDCARD_TIMEOUT_SECONDS", 5, minimum=1, maximum=60)
+    rows = _resolve_hosts_with_deadline(hosts, workers=len(hosts), timeout=timeout, phase_name="wildcard DNS detection")
     ips: Set[str] = set()
-    for label in labels:
-        ips.update(_resolve_host_ips(f"{label}-{int(time.time())}.{root_domain}"))
+    for host_ips in rows.values():
+        ips.update(host_ips)
     return ips
 
 
@@ -521,16 +556,11 @@ def _bruteforce_dns_hosts(root_domain: str, seed_hosts: List[str], max_candidate
     if not keep_wildcards:
         wildcard_ips = _wildcard_dns_ips(root_domain)
     workers = max(8, min(128, len(candidates) or 1))
-    with ThreadPoolExecutor(max_workers=workers) as pool:
-        futures = {pool.submit(_resolve_host_ips, host): host for host in candidates}
-        for future in as_completed(futures):
-            host = futures[future]
-            try:
-                ips = set(future.result() or [])
-                if ips and (keep_wildcards or not wildcard_ips or not ips.issubset(wildcard_ips)):
-                    resolved.append(host)
-            except Exception:
-                continue
+    phase_timeout = _env_int("DNS_BRUTEFORCE_RESOLVE_TIMEOUT_SECONDS", 120, minimum=1, maximum=3600)
+    rows = _resolve_hosts_with_deadline(candidates, workers=workers, timeout=phase_timeout, phase_name="DNS brute-force resolution")
+    for host, ips in rows.items():
+        if ips and (keep_wildcards or not wildcard_ips or not ips.issubset(wildcard_ips)):
+            resolved.append(host)
     return sorted(set(resolved))
 
 
@@ -1358,15 +1388,11 @@ def _permutation_dns_hosts(root_domain: str, known_hosts: List[str], max_candida
         return []
     resolved: List[str] = []
     workers = max(8, min(96, len(candidates)))
-    with ThreadPoolExecutor(max_workers=workers) as pool:
-        futures = {pool.submit(_host_resolves, host): host for host in candidates}
-        for future in as_completed(futures):
-            host = futures[future]
-            try:
-                if future.result():
-                    resolved.append(host)
-            except Exception:
-                continue
+    phase_timeout = _env_int("DNS_PERMUTATION_RESOLVE_TIMEOUT_SECONDS", 120, minimum=1, maximum=3600)
+    rows = _resolve_hosts_with_deadline(candidates, workers=workers, timeout=phase_timeout, phase_name="DNS permutation resolution")
+    for host, ips in rows.items():
+        if ips:
+            resolved.append(host)
     return sorted(set(resolved))
 
 

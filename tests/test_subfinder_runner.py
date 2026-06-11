@@ -419,3 +419,51 @@ def test_recursive_passive_enumeration_walks_newly_found_subzones(monkeypatch):
     assert result["found"] == ["admin.api.dev.example.com", "api.dev.example.com"]
     assert result["source_counts"]["deep:fake:d1"] == 1
     assert result["source_counts"]["deep:fake:d2"] == 1
+
+
+def test_bruteforce_dns_hosts_returns_partial_results_when_resolver_wedges(monkeypatch):
+    import time
+
+    monkeypatch.setenv("DNS_BRUTEFORCE_LABELS", "www,slow")
+    monkeypatch.setenv("DNS_BRUTEFORCE_KEEP_WILDCARD", "1")
+    monkeypatch.setenv("DNS_BRUTEFORCE_RESOLVE_TIMEOUT_SECONDS", "1")
+
+    def fake_resolve(host: str, timeout: float = 1.5):
+        if host == "www.example.com":
+            return {"203.0.113.20"}
+        time.sleep(2)
+        return {"203.0.113.30"}
+
+    monkeypatch.setattr(runner, "_resolve_host_ips", fake_resolve)
+    started = time.monotonic()
+    found = _bruteforce_dns_hosts("example.com", [], max_candidates=2)
+    elapsed = time.monotonic() - started
+
+    assert found == ["www.example.com"]
+    assert elapsed < 1.8
+
+
+def test_permutation_dns_hosts_returns_partial_results_when_resolver_wedges(monkeypatch):
+    import time
+
+    monkeypatch.setenv("DNS_BRUTEFORCE_LABELS", "api")
+    monkeypatch.setenv("DNS_PERMUTATION_RESOLVE_TIMEOUT_SECONDS", "1")
+    monkeypatch.setattr(
+        runner,
+        "_generate_permutation_candidates",
+        lambda *_args, **_kwargs: {"api-old.example.com", "api-new.example.com"},
+    )
+
+    def fake_resolve(host: str, timeout: float = 1.5):
+        if host == "api-new.example.com":
+            return {"203.0.113.20"}
+        time.sleep(2)
+        return {"203.0.113.30"}
+
+    monkeypatch.setattr(runner, "_resolve_host_ips", fake_resolve)
+    started = time.monotonic()
+    found = runner._permutation_dns_hosts("example.com", ["api.example.com"], max_candidates=2)
+    elapsed = time.monotonic() - started
+
+    assert found == ["api-new.example.com"]
+    assert elapsed < 1.8

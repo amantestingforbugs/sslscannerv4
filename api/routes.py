@@ -20,6 +20,7 @@ import shutil
 import tempfile
 import signal
 import hmac
+import re
 from urllib.parse import urlparse
 from flask import Blueprint, request, jsonify, Response, stream_with_context
 
