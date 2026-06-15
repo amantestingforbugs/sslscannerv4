@@ -153,18 +153,18 @@ def classify_error(e: Exception) -> str:
 
 def get_cert_info(hostname: str) -> Dict:
     """Check SSL certificate for a single hostname. Returns a result dict."""
-    if not is_target_allowed(hostname, check_dns=True):
-        return {
-            "hostname": hostname,
-            "error": "Target outside authorized scope or resolves to a disallowed network",
-            "is_ignored_error": True,
-        }
-
-    context = ssl.create_default_context()
-    context.check_hostname = False
-    context.verify_mode = ssl.CERT_NONE
-
     try:
+        if not is_target_allowed(hostname, check_dns=True):
+            return {
+                "hostname": hostname,
+                "error": "Target outside authorized scope or resolves to a disallowed network",
+                "is_ignored_error": True,
+            }
+
+        context = ssl.create_default_context()
+        context.check_hostname = False
+        context.verify_mode = ssl.CERT_NONE
+
         host_idna = idna.encode(hostname).decode() if HAS_IDNA else hostname
 
         with socket.create_connection((host_idna, 443), timeout=5) as sock:
@@ -281,7 +281,11 @@ def run_checker(
     progress_callback(done, total, result) is called after each completed check.
     """
     # Keep worker count sane for very large host lists to avoid thread thrash.
-    env_workers = int(os.getenv("SSL_MAX_WORKERS", str(max_workers or 50)))
+    try:
+        env_workers = int(os.getenv("SSL_MAX_WORKERS", str(max_workers or 50)) or (max_workers or 50))
+    except (TypeError, ValueError):
+        logger.warning("Invalid SSL_MAX_WORKERS value; falling back to %s", max_workers or 50)
+        env_workers = max_workers or 50
     workers = max(1, min(env_workers, 256))
     total = len(hostnames)
     results = [] if collect_results else None
@@ -316,7 +320,15 @@ def run_checker(
                 if stop_event and stop_event.is_set():
                     break
                 done += 1
-                result = future.result()
+                try:
+                    result = future.result()
+                except Exception as e:
+                    err = classify_error(e)
+                    result = {
+                        "hostname": "",
+                        "error": err,
+                        "is_ignored_error": err in IGNORED_ERRORS,
+                    }
                 if collect_results:
                     results.append(result)
                 if progress_callback:
