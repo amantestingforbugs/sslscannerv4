@@ -2002,6 +2002,12 @@ let pendingLogEntries = [];
 let logFlushTimer = null;
 let opensslRenderTimer = null;
 let dashboardLoadInFlight = false;
+let sseConnection = null;
+let sseReconnectTimer = null;
+let sseReconnectDelay = 1000;
+let nucleiRowsRenderTimer = null;
+let nucleiStatsRenderTimer = null;
+let nucleiPendingStats = null;
 const apiMemo = new Map();
 const API_MEMO_TTL = 3500;
 
@@ -2055,6 +2061,19 @@ function debounce(fn, wait=250) {
   return (...args) => {
     clearTimeout(t);
     t = setTimeout(() => fn(...args), wait);
+  };
+}
+
+function rafThrottle(fn) {
+  let raf = null;
+  let lastArgs = null;
+  return (...args) => {
+    lastArgs = args;
+    if (raf) return;
+    raf = requestAnimationFrame(() => {
+      raf = null;
+      fn(...lastArgs);
+    });
   };
 }
 
@@ -2448,9 +2467,16 @@ window.addEventListener('click', e => {
 // SSE — Real-time updates (fixes alert counter stale bug)
 // ════════════════════════════════════════════════════════════
 function connectSSE() {
+  if (sseConnection || document.hidden) return;
+  clearTimeout(sseReconnectTimer);
+  sseReconnectTimer = null;
   const es = new EventSource('/api/sse');
+  sseConnection = es;
 
-  es.addEventListener('connected', () => console.log('SSE connected'));
+  es.addEventListener('connected', () => {
+    sseReconnectDelay = 1000;
+    console.log('SSE connected');
+  });
 
   es.addEventListener('alert_update', e => {
     const d = JSON.parse(e.data);
@@ -2521,7 +2547,7 @@ function connectSSE() {
     const d = JSON.parse(e.data || '{}');
     if (!nucleiCurrentScanId || d.id !== nucleiCurrentScanId || !d.finding) return;
     nucleiFindings.push(d.finding);
-    renderNucleiRows(nucleiFindings);
+    scheduleNucleiRowsRender();
   });
   es.addEventListener('nuclei_log', e => {
     const d = JSON.parse(e.data || '{}');
@@ -2531,7 +2557,7 @@ function connectSSE() {
   es.addEventListener('nuclei_stats', e => {
     const d = JSON.parse(e.data || '{}');
     if (!nucleiCurrentScanId || d.id !== nucleiCurrentScanId) return;
-    renderNucleiStatsTerminal({ id: d.id, status: 'running', stats: d.stats || {}, progress_percent: d.progress_percent, findings_total: nucleiFindings.length });
+    scheduleNucleiStatsRender({ id: d.id, status: 'running', stats: d.stats || {}, progress_percent: d.progress_percent, findings_total: nucleiFindings.length });
   });
   es.addEventListener('nuclei_update', e => {
     const d = JSON.parse(e.data || '{}');
@@ -2542,9 +2568,14 @@ function connectSSE() {
   });
 
   es.onerror = () => {
-    // Reconnect after 3s
-    setTimeout(connectSSE, 3000);
+    if (sseConnection !== es) return;
+    sseConnection = null;
     es.close();
+    if (document.hidden) return;
+    clearTimeout(sseReconnectTimer);
+    const delay = sseReconnectDelay;
+    sseReconnectDelay = Math.min(sseReconnectDelay * 1.6, 15000);
+    sseReconnectTimer = setTimeout(connectSSE, delay);
   };
 }
 connectSSE();
@@ -4184,6 +4215,7 @@ function scheduleLiveRefresh() {
 document.addEventListener('visibilitychange', () => {
   if (!document.hidden) {
     scheduleLiveRefresh();
+    connectSSE();
   }
 });
 
@@ -4327,13 +4359,32 @@ function renderNucleiStatsTerminal(scan) {
   line.textContent = statsLine;
 }
 
+function scheduleNucleiRowsRender() {
+  if (nucleiRowsRenderTimer) return;
+  nucleiRowsRenderTimer = requestAnimationFrame(() => {
+    nucleiRowsRenderTimer = null;
+    renderNucleiRows(nucleiFindings);
+  });
+}
+
+function scheduleNucleiStatsRender(scan) {
+  nucleiPendingStats = scan;
+  if (nucleiStatsRenderTimer) return;
+  nucleiStatsRenderTimer = requestAnimationFrame(() => {
+    nucleiStatsRenderTimer = null;
+    renderNucleiStatsTerminal(nucleiPendingStats);
+  });
+}
+
 function renderNucleiRows(rows) {
   const body = document.getElementById('nuclei-body');
+  if (!body) return;
   if (!rows.length) {
     body.innerHTML = '<tr><td colspan="5" style="text-align:center;padding:16px;color:var(--text-muted)">No findings.</td></tr>';
     return;
   }
-  body.innerHTML = rows.map(r => `<tr>
+  const visibleRows = rows.slice(-500);
+  body.innerHTML = visibleRows.map(r => `<tr>
     <td style="font-family:var(--mono);font-size:12px">${esc(r.host || r.matched_at || '—')}</td>
     <td><span class="badge ${r.info?.severity==='critical'?'badge-expired':r.info?.severity==='high'?'badge-mismatch':'badge-expiring'}">${esc(r.info?.severity || 'unknown')}</span></td>
     <td style="font-family:var(--mono);font-size:11px">${esc(r.template_id || '—')}</td>
@@ -4457,6 +4508,9 @@ document.addEventListener('visibilitychange', () => {
     dashboardRefreshTimer = null;
     opensslRefreshTimer = null;
     if (scanPollTimer) { clearInterval(scanPollTimer); scanPollTimer = null; }
+    clearTimeout(sseReconnectTimer);
+    sseReconnectTimer = null;
+    if (sseConnection) { sseConnection.close(); sseConnection = null; }
     return;
   }
   if (!clockTimer) clockTimer = setInterval(tick, 1000);
@@ -4467,6 +4521,7 @@ document.addEventListener('visibilitychange', () => {
   if (!opensslRefreshTimer) opensslRefreshTimer = setInterval(() => {
     if (document.getElementById('page-openssl').classList.contains('active') && opensslPid) loadOpenSSLRows();
   }, 12000);
+  connectSSE();
   tick();
   pollBadge();
 });
