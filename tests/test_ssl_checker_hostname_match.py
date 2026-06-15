@@ -26,3 +26,25 @@ def test_invalid_wildcards_do_not_hide_mismatches():
 def test_ip_certificate_names_match_only_exact_ip():
     assert is_hostname_match("192.0.2.10", ["192.0.2.10"])
     assert not is_hostname_match("192.0.2.10", ["*.0.2.10", "192.0.2.11"])
+
+
+def test_run_checker_ignores_invalid_worker_env(monkeypatch):
+    from core import ssl_checker
+
+    monkeypatch.setenv("SSL_MAX_WORKERS", "not-a-number")
+    monkeypatch.setattr(ssl_checker, "get_cert_info", lambda host: {"hostname": host, "error": None})
+
+    assert ssl_checker.run_checker(["example.com"], max_workers=2) == [{"hostname": "example.com", "error": None}]
+
+
+def test_run_checker_converts_unexpected_worker_exception_to_result(monkeypatch):
+    from core import ssl_checker
+
+    def boom(host):
+        raise RuntimeError("unexpected worker failure")
+
+    monkeypatch.setattr(ssl_checker, "get_cert_info", boom)
+
+    [result] = ssl_checker.run_checker(["example.com"], max_workers=1)
+    assert result["error"] == "unexpected worker failure"
+    assert result["is_ignored_error"] is False
