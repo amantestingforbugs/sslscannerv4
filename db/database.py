@@ -1193,7 +1193,17 @@ def domain_enum_results_add_batch(scan_id, domain, hostnames, source="mixed"):
     ts = now()
     rows = [(uid(), scan_id, domain, h, source, ts) for h in clean]
     xm(
-        "INSERT OR IGNORE INTO domain_enum_results(id,scan_id,domain,hostname,source,discovered_at) VALUES(?,?,?,?,?,?)",
+        """
+        INSERT INTO domain_enum_results(id,scan_id,domain,hostname,source,discovered_at)
+        VALUES(?,?,?,?,?,?)
+        ON CONFLICT(scan_id, hostname) DO UPDATE SET
+          source = CASE
+            WHEN domain_enum_results.source IS NULL OR domain_enum_results.source = '' THEN excluded.source
+            WHEN excluded.source IS NULL OR excluded.source = '' THEN domain_enum_results.source
+            WHEN instr(',' || domain_enum_results.source || ',', ',' || excluded.source || ',') > 0 THEN domain_enum_results.source
+            ELSE domain_enum_results.source || ',' || excluded.source
+          END
+        """,
         rows,
     )
     commit()

@@ -3704,7 +3704,7 @@ let enumCurrentRows = [];
 let enumCurrentScan = null;
 
 function updateEnumStats(rows, scan) {
-  const uniqueSources = new Set((rows||[]).map(r => r.source || 'mixed')).size;
+  const uniqueSources = new Set((rows||[]).flatMap(r => String(r.source || 'mixed').split(',').map(s => s.trim()).filter(Boolean))).size;
   document.getElementById('enum-stat-total').textContent = fmt((rows||[]).length);
   document.getElementById('enum-stat-sources').textContent = fmt(uniqueSources);
   document.getElementById('enum-stat-domain').textContent = scan?.domain || '—';
@@ -3736,7 +3736,7 @@ function renderEnumResults() {
   const rows = (enumCurrentRows || []).filter(r => {
     const host = (r.hostname || '').toLowerCase();
     const source = (r.source || 'mixed');
-    return (!q || host.includes(q)) && (src === 'all' || src === source);
+    return (!q || host.includes(q)) && (src === 'all' || String(source).split(',').map(s => s.trim()).includes(src));
   });
   document.getElementById('sf-enum-results-count').textContent = `${fmt(rows.length)} rows`;
   body.innerHTML = rows.length ? rows.map(r => `<tr><td style="font-family:var(--mono)">${esc(r.hostname)}</td><td>${esc(r.source||'mixed')}</td><td style="font-size:12px;color:var(--text-secondary)">${new Date(r.discovered_at).toLocaleString()}</td></tr>`).join('')
@@ -3799,7 +3799,7 @@ async function openEnumScan(scanId) {
   const { data } = await apiJSON(`/api/subfinder/enumeration/scans/${scanId}`);
   enumCurrentScan = data?.scan || null;
   enumCurrentRows = data?.results || [];
-  const sources = [...new Set(enumCurrentRows.map(r => r.source || 'mixed'))].sort();
+  const sources = [...new Set(enumCurrentRows.flatMap(r => String(r.source || 'mixed').split(',').map(s => s.trim()).filter(Boolean)))].sort();
   const filter = document.getElementById('sf-enum-source-filter');
   filter.innerHTML = '<option value="all">All sources</option>' + sources.map(s => `<option value="${esc(s)}">${esc(s)}</option>`).join('');
   document.getElementById('sf-enum-search').value = '';
