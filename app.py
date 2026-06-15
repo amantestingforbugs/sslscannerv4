@@ -26,6 +26,12 @@ logging.basicConfig(
 )
 
 app = Flask(__name__, template_folder="templates", static_folder="static")
+app.config.update(
+    MAX_CONTENT_LENGTH=int(os.getenv("MAX_CONTENT_LENGTH", str(2 * 1024 * 1024))),
+    SESSION_COOKIE_HTTPONLY=True,
+    SESSION_COOKIE_SAMESITE="Lax",
+    SESSION_COOKIE_SECURE=os.getenv("SESSION_COOKIE_SECURE", "true").strip().lower() not in {"0", "false", "no", "off"},
+)
 app.register_blueprint(api)
 
 _BOOTSTRAPPED = False

@@ -231,7 +231,7 @@ def _ensure_nuclei_templates(nuclei_bin: str) -> tuple[bool, str]:
 
 def _normalize_nuclei_target(raw: str) -> str:
     host = normalize_target_hostname(raw, allow_ip=True)
-    if not host or not is_target_allowed(host):
+    if not host or not is_target_allowed(host, check_dns=True):
         return ""
     return host
 
@@ -341,7 +341,7 @@ def err(msg, code=400):
 
 def _normalize_hostname(raw: str) -> str:
     host = normalize_target_hostname(raw)
-    if not host or not is_target_allowed(host):
+    if not host or not is_target_allowed(host, check_dns=True):
         return ""
     return host
 
@@ -970,7 +970,7 @@ def _attack_chains_for_leads(leads: list[dict]) -> list[dict]:
     return sorted(chains, key=lambda c: (c.get("confidence") or 0, len(c.get("matched_assets") or [])), reverse=True)[:6]
 
 def _run_openssl_subject(hostname: str, timeout: int = 20) -> dict:
-    cmd = ["openssl", "s_client", "-connect", f"{hostname}:443"]
+    cmd = ["openssl", "s_client", "-connect", f"{hostname}:443", "-servername", hostname]
     try:
         run = subprocess.run(
             cmd,
@@ -1253,7 +1253,7 @@ def list_projects():
 
 @api.post("/projects")
 def create_project():
-    d = request.json or {}
+    d = request.get_json(silent=True) or {}
     name = (d.get("name") or "").strip()
     if not name:
         return err("name is required")
@@ -1279,10 +1279,21 @@ def get_project(pid):
 
 @api.put("/projects/<pid>")
 def update_project(pid):
-    d = request.json or {}
+    if not db.project_get(pid):
+        return err("Project not found", 404)
+    d = request.get_json(silent=True) or {}
     allowed = {"name","description","scan_interval_minutes","subfinder_interval_minutes",
                "subfinder_enabled","enabled"}
     kw = {k: v for k, v in d.items() if k in allowed}
+    if "name" in kw:
+        kw["name"] = str(kw.get("name") or "").strip()
+        if not kw["name"]:
+            return err("name is required", 400)
+        existing = db.project_get_by_name(kw["name"])
+        if existing and existing.get("id") != pid:
+            return err("A project with that name already exists", 400)
+    if not kw:
+        return ok(db.project_get(pid))
     db.project_update(pid, **kw)
     return ok(db.project_get(pid))
 
@@ -1487,7 +1498,7 @@ def stop_scan_route(sid):
 
 @api.post("/quick-scan")
 def start_quick_scan():
-    d = request.json or {}
+    d = request.get_json(silent=True) or {}
     hosts_raw = d.get("hosts", "") or ""
     hosts = parse_hosts_file(hosts_raw)
     hosts = sorted({_normalize_hostname(h) for h in hosts if _normalize_hostname(h)})
@@ -1557,7 +1568,7 @@ def get_alert_settings():
 
 @api.put("/alert-settings")
 def update_alert_settings():
-    d = request.json or {}
+    d = request.get_json(silent=True) or {}
     previous = db.alert_settings_get()
     try:
         slack_webhook_url = _validate_webhook_url((d.get("slack_webhook_url") or "").strip())
