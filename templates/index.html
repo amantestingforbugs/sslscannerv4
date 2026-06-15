@@ -1097,6 +1097,28 @@ html[data-density="comfortable"] .card-body,html[data-density="comfortable"] .mo
           </div>
         </section>
       </div>
+
+      <div class="card" style="margin-bottom:14px">
+        <div class="card-header">
+          <span class="card-title">Asset Risk Scoring</span>
+          <button class="btn btn-sm" onclick="loadAssetRiskPanel()">Refresh Risk</button>
+        </div>
+        <div class="card-body">
+          <div class="stats-grid" style="margin-bottom:12px">
+            <div class="stat-card"><div class="stat-label">Avg Score</div><div class="stat-value" id="risk-avg-score">—</div><div class="stat-sub">Weighted engine</div></div>
+            <div class="stat-card"><div class="stat-label">Critical/High</div><div class="stat-value" id="risk-critical-high">—</div><div class="stat-sub">Prioritize first</div></div>
+            <div class="stat-card"><div class="stat-label">Scored Assets</div><div class="stat-value" id="risk-asset-count">—</div><div class="stat-sub">Stored in DB</div></div>
+            <div class="stat-card"><div class="stat-label">Trend</div><div class="stat-value" id="risk-trend-score">—</div><div class="stat-sub">Current snapshot</div></div>
+          </div>
+          <div id="risk-severity-dist" style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px"></div>
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>Score</th><th>Asset</th><th>HTTP/TLS</th><th>Why this is risky</th></tr></thead>
+              <tbody id="risk-assets-body"><tr><td colspan="4" style="text-align:center;color:var(--text-muted);padding:16px">Risk scores load with the dashboard.</td></tr></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
       <div class="card" style="margin-bottom:14px">
         <div class="card-header"><span class="card-title">System Health</span></div>
         <div class="card-body" id="system-health" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px;font-size:12px;color:var(--text-secondary)">
@@ -2563,6 +2585,35 @@ function applyStat(s) {
   document.getElementById('s-expg').textContent = fmt(s.unseen_alerts ?? s.mismatches);
 }
 
+async function loadAssetRiskPanel() {
+  const body = document.getElementById('risk-assets-body');
+  if (body) body.innerHTML = '<tr><td colspan="4" style="text-align:center;color:var(--text-muted);padding:16px">Computing weighted asset risk...</td></tr>';
+  const { ok, data, error } = await apiJSON('/api/risk/summary');
+  if (!ok) {
+    if (body) body.innerHTML = `<tr><td colspan="4" style="text-align:center;color:var(--red);padding:16px">${esc(error || 'Unable to load risk scores')}</td></tr>`;
+    return;
+  }
+  const dist = data?.severity_distribution || {};
+  const top = data?.top_assets || [];
+  const set = (id, val) => { const el = document.getElementById(id); if (el) el.textContent = val; };
+  set('risk-avg-score', fmt(data?.average_score || 0));
+  set('risk-critical-high', fmt((dist.critical || 0) + (dist.high || 0)));
+  set('risk-asset-count', fmt(data?.asset_count || 0));
+  set('risk-trend-score', fmt(data?.trend?.[0]?.average_score || data?.average_score || 0));
+  const distEl = document.getElementById('risk-severity-dist');
+  if (distEl) distEl.innerHTML = ['critical','high','medium','low'].map(k => `<span class="pill">${esc(k)}: ${fmt(dist[k] || 0)}</span>`).join('');
+  if (!body) return;
+  body.innerHTML = top.length ? top.map(r => {
+    const evidence = (r.evidence || []).slice(0,4).map(e => `<li>${esc(e)}</li>`).join('');
+    return `<tr>
+      <td data-sort-value="${Number(r.score || 0)}"><div style="font-size:22px;font-weight:800">${fmt(r.score || 0)}</div><span class="pill">${esc(r.severity || 'low')}</span></td>
+      <td><strong>${esc(r.hostname || '')}</strong><div style="font-size:12px;color:var(--text-muted)">${esc(r.project_name || r.project_id || '')}</div></td>
+      <td>${r.http_status_code ? `HTTP ${esc(r.http_status_code)}` : '—'}<div style="font-size:12px;color:var(--text-muted)">${esc(r.tls_version || r.cipher_suite || '')}</div></td>
+      <td><ul style="margin:0;padding-left:18px">${evidence}</ul></td>
+    </tr>`;
+  }).join('') : '<tr><td colspan="4" style="text-align:center;color:var(--text-muted);padding:16px">No Subfinder assets have enough observations to score yet.</td></tr>';
+}
+
 function calcRiskScore(stats = {}, projects = []) {
   const total = Math.max(1, Number(stats.total_domains ?? 0));
   const mismatchRate = Number(stats.mismatches ?? 0) / total;
@@ -2714,6 +2765,7 @@ async function loadDash() {
       loadLogs(),
       loadSystemOverview(),
       Promise.resolve(updateMissionControl(stats, projects, riskIntel)),
+      Promise.resolve(loadAssetRiskPanel()),
     ]);
   } finally {
     dashboardLoadInFlight = false;

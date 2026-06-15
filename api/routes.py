@@ -26,6 +26,7 @@ from flask import Blueprint, request, jsonify, Response, stream_with_context
 
 import db.database as db
 from core.ssl_checker import parse_hosts_file
+from core.risk_engine import score_asset
 from core.target_policy import (
     allow_private_targets,
     allowed_scope_domains,
@@ -635,6 +636,61 @@ def _collect_bounty_brief(project_id: str = "", search: str = "", limit: int = 2
         },
         "method": "Transforms ranked authorized leads into a manual validation plan, hypotheses, and report-ready evidence checklist.",
     }
+
+
+def _risk_score_rows(project_id: str = "", limit: int = 100) -> list[dict]:
+    where = ["p.enabled=1"]
+    params: list = []
+    if project_id:
+        where.append("p.id=?")
+        params.append(project_id)
+    rows = db.x(
+        f"""
+        WITH latest_result AS (
+          SELECT r.* FROM results r
+          JOIN (SELECT project_id, hostname, MAX(checked_at) AS checked_at FROM results GROUP BY project_id, hostname) lr
+            ON lr.project_id=r.project_id AND lr.hostname=r.hostname AND lr.checked_at=r.checked_at
+        )
+        SELECT p.id AS project_id, p.name AS project_name, h.hostname, h.first_seen, h.last_seen,
+          CASE WHEN EXISTS (SELECT 1 FROM subfinder_new_discoveries n WHERE n.project_id=h.project_id AND n.hostname=h.hostname) THEN 1 ELSE 0 END AS is_latest_discovery,
+          hx.status_code AS http_status_code, hx.page_title AS http_page_title, hx.final_url AS http_final_url, hx.scheme AS http_scheme, hx.is_active AS http_is_active,
+          r.cn, r.expiry, r.days_left, r.tls_version, r.cipher_suite, r.cipher_bits, r.key_algorithm, r.key_bits, r.is_mismatch, r.is_expired, r.is_expiring, r.error, r.checked_at
+        FROM subfinder_hosts h
+        JOIN projects p ON p.id=h.project_id
+        LEFT JOIN subfinder_httpx_results hx ON hx.project_id=h.project_id AND hx.hostname=h.hostname
+        LEFT JOIN latest_result r ON r.project_id=h.project_id AND r.hostname=h.hostname
+        WHERE {' AND '.join(where)}
+        ORDER BY h.last_seen DESC
+        LIMIT ?
+        """,
+        params + [max(1, min(2000, limit * 5))],
+    ).fetchall()
+    scored = []
+    for row in rows:
+        d = dict(row)
+        asset = {"hostname": d.get("hostname"), "internet_exposed": bool(d.get("http_is_active") or d.get("http_status_code")), "is_latest_discovery": d.get("is_latest_discovery")}
+        context = {"owner": "project:" + (d.get("project_name") or ""), "criticality": "high" if re.search(r"(^|[.\-_])(admin|api|auth|sso|login)([.\-_]|$)", d.get("hostname") or "") else "medium"}
+        scored_row = {**d, **score_asset(asset, findings=[], observations=d, context=context)}
+        scored.append(scored_row)
+    scored.sort(key=lambda r: (r.get("score") or 0, r.get("is_latest_discovery") or 0), reverse=True)
+    db.asset_risk_scores_upsert(scored)
+    return scored[:limit]
+
+
+def _collect_asset_risk(project_id: str = "", limit: int = 100) -> dict:
+    rows = _risk_score_rows(project_id=project_id, limit=limit)
+    return {"rows": rows, "total": len(rows), "project_id": project_id, "method": "Reusable core.risk_engine scoring across exposure, Nuclei severity, TLS, HTTP, freshness, and ownership/criticality signals."}
+
+
+def _collect_asset_risk_summary(project_id: str = "") -> dict:
+    rows = _risk_score_rows(project_id=project_id, limit=500)
+    dist = {"critical": 0, "high": 0, "medium": 0, "low": 0}
+    for row in rows:
+        dist[row.get("severity") or "low"] = dist.get(row.get("severity") or "low", 0) + 1
+    top = rows[:10]
+    avg = round(sum(r.get("score") or 0 for r in rows) / max(1, len(rows)))
+    trend = [{"label": "current", "average_score": avg, "asset_count": len(rows)}]
+    return {"asset_count": len(rows), "average_score": avg, "severity_distribution": dist, "top_assets": top, "trend": trend, "stored_scores": db.asset_risk_scores_list(project_id=project_id, limit=10)}
 
 def _run_openssl_subject(hostname: str, timeout: int = 20) -> dict:
     cmd = ["openssl", "s_client", "-connect", f"{hostname}:443"]
@@ -1346,6 +1402,19 @@ def bounty_leads_export():
         headers={"Content-Disposition": "attachment; filename=bounty-leads.csv"},
     )
 
+
+
+@api.get("/risk/assets")
+def risk_assets():
+    project_id = (request.args.get("project_id") or "").strip()
+    limit = _safe_int(request.args.get("limit", 100), 100, min_value=1, max_value=500)
+    return ok(_collect_asset_risk(project_id=project_id, limit=limit))
+
+
+@api.get("/risk/summary")
+def risk_summary():
+    project_id = (request.args.get("project_id") or "").strip()
+    return ok(_collect_asset_risk_summary(project_id=project_id))
 
 @api.get("/security-policy")
 def security_policy():

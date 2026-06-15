@@ -227,6 +227,17 @@ def init_db():
         last_checked TEXT NOT NULL,
         UNIQUE(project_id, hostname)
     );
+    CREATE TABLE IF NOT EXISTS asset_risk_scores (
+        id TEXT PRIMARY KEY,
+        project_id TEXT NOT NULL,
+        hostname TEXT NOT NULL,
+        score INTEGER NOT NULL,
+        severity TEXT NOT NULL,
+        factors_json TEXT DEFAULT '[]',
+        evidence_json TEXT DEFAULT '[]',
+        computed_at TEXT NOT NULL,
+        UNIQUE(project_id, hostname)
+    );
     CREATE INDEX IF NOT EXISTS idx_res_scan  ON results(scan_id);
     CREATE INDEX IF NOT EXISTS idx_res_proj  ON results(project_id);
     CREATE INDEX IF NOT EXISTS idx_res_mis   ON results(scan_id, is_mismatch);
@@ -244,6 +255,7 @@ def init_db():
     CREATE INDEX IF NOT EXISTS idx_sfnew_proj_job_host ON subfinder_new_discoveries(project_id, job_id, hostname);
     CREATE INDEX IF NOT EXISTS idx_sfhttpx_proj_checked ON subfinder_httpx_results(project_id, last_checked DESC);
     CREATE INDEX IF NOT EXISTS idx_openssl_proj_checked ON openssl_results(project_id, last_checked DESC);
+    CREATE INDEX IF NOT EXISTS idx_asset_risk_score ON asset_risk_scores(score DESC, computed_at DESC);
     CREATE INDEX IF NOT EXISTS idx_den_scans_domain_started ON domain_enum_scans(domain, started_at DESC);
     CREATE INDEX IF NOT EXISTS idx_den_results_scan ON domain_enum_results(scan_id);
     CREATE INDEX IF NOT EXISTS idx_den_results_domain_host ON domain_enum_results(domain, hostname);
@@ -1285,6 +1297,50 @@ def openssl_results_list(pid, search="", limit=2000):
     ).fetchall()
     return [dict(r) for r in rows]
 
+
+
+def asset_risk_scores_upsert(rows):
+    clean = []
+    ts = now()
+    for row in rows or []:
+        project_id = (row.get("project_id") or "").strip()
+        hostname = (row.get("hostname") or "").strip().lower()
+        if not project_id or not hostname:
+            continue
+        clean.append((
+            uid(), project_id, hostname, int(row.get("score") or 0),
+            (row.get("severity") or "low"),
+            json.dumps(row.get("factors") or []),
+            json.dumps(row.get("evidence") or []), ts,
+        ))
+    if not clean:
+        return 0
+    xm("""
+        INSERT INTO asset_risk_scores(id,project_id,hostname,score,severity,factors_json,evidence_json,computed_at)
+        VALUES(?,?,?,?,?,?,?,?)
+        ON CONFLICT(project_id, hostname) DO UPDATE SET
+          score=excluded.score, severity=excluded.severity, factors_json=excluded.factors_json,
+          evidence_json=excluded.evidence_json, computed_at=excluded.computed_at
+    """, clean)
+    commit()
+    return len(clean)
+
+
+def asset_risk_scores_list(project_id="", limit=100):
+    where = []
+    params = []
+    if project_id:
+        where.append("project_id=?")
+        params.append(project_id)
+    sql_where = ("WHERE " + " AND ".join(where)) if where else ""
+    rows = x(f"SELECT * FROM asset_risk_scores {sql_where} ORDER BY score DESC, computed_at DESC LIMIT ?", params + [max(1, min(500, int(limit or 100)))]).fetchall()
+    out = []
+    for r in rows:
+        d = dict(r)
+        d["factors"] = json.loads(d.pop("factors_json") or "[]")
+        d["evidence"] = json.loads(d.pop("evidence_json") or "[]")
+        out.append(d)
+    return out
 
 # ── Global stats ──────────────────────────────────────────────────────────────
 
