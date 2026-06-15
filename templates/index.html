@@ -533,6 +533,7 @@ tbody tr:last-child td{border-bottom:none}
 .badge-paused{background:var(--amber-dim);color:var(--amber)}
 .badge-stopped{background:var(--bg-raised);color:var(--text-muted);border:1px solid var(--border)}
 .badge-sf{background:var(--purple-dim);color:var(--purple)}
+.badge-info{background:var(--accent-dim);color:var(--accent)}
 @keyframes blink{0%,100%{opacity:1}50%{opacity:.45}}
 
 /* ════════════════════════════════════════════════════════════
@@ -1565,9 +1566,17 @@ html[data-density="comfortable"] .card-body,html[data-density="comfortable"] .mo
         </div>
         <span id="bounty-count" style="font-size:12px;color:var(--text-muted)">0 leads</span>
       </div>
+      <div class="stats-grid" id="bounty-summary-grid" style="margin-bottom:12px">
+        <div class="stat-card"><div class="stat-label">High Priority</div><div class="stat-value" id="bounty-stat-high">—</div><div class="stat-sub">Validate first</div></div>
+        <div class="stat-card"><div class="stat-label">Active HTTP</div><div class="stat-value" id="bounty-stat-active">—</div><div class="stat-sub">Reachable surfaces</div></div>
+        <div class="stat-card"><div class="stat-label">Protected Surfaces</div><div class="stat-value" id="bounty-stat-protected">—</div><div class="stat-sub">401/403 auth boundaries</div></div>
+        <div class="stat-card"><div class="stat-label">TLS Anomalies</div><div class="stat-value" id="bounty-stat-tls">—</div><div class="stat-sub">Mismatch/expired/expiring</div></div>
+      </div>
       <div class="card" style="margin-bottom:12px">
         <div class="card-body" style="font-size:12.5px;color:var(--text-secondary)">
-          Scores are recon prioritization hints, not vulnerability claims. Always verify scope and program rules before testing.
+          <b>Company/Bounty workflow:</b> <span id="bounty-exec-summary">Scores are recon prioritization hints, not vulnerability claims.</span>
+          <div id="bounty-surface-breakdown" style="margin-top:8px;display:flex;gap:6px;flex-wrap:wrap"></div>
+          Always verify scope and program rules before testing.
         </div>
       </div>
       <div class="card">
@@ -3917,6 +3926,21 @@ async function initBountyLeadsPage() {
   await loadBountyLeads();
 }
 
+function renderBountySummary(summary) {
+  const set = (id, val) => { const el = document.getElementById(id); if (el) el.textContent = fmt(val || 0); };
+  set('bounty-stat-high', summary.high);
+  set('bounty-stat-active', summary.active_http);
+  set('bounty-stat-protected', summary.protected_http);
+  set('bounty-stat-tls', summary.tls_anomalies);
+  const exec = document.getElementById('bounty-exec-summary');
+  if (exec) exec.textContent = summary.executive_summary || 'Scores are recon prioritization hints, not vulnerability claims.';
+  const breakdown = document.getElementById('bounty-surface-breakdown');
+  if (breakdown) {
+    const chips = (summary.top_surface_types || []).map(s => `<span class="badge badge-info">${esc(s.name)} · ${fmt(s.count)}</span>`);
+    breakdown.innerHTML = chips.length ? chips.join('') : '<span style="color:var(--text-muted)">Run Subfinder/HTTP enrichment to build an attack-surface breakdown.</span>';
+  }
+}
+
 function bountySeverityBadge(severity) {
   const sev = String(severity || 'low').toLowerCase();
   const cls = sev === 'high' ? 'badge-mismatch' : sev === 'medium' ? 'badge-expiring' : 'badge-ok';
@@ -3930,7 +3954,12 @@ async function loadBountyLeads() {
   body.innerHTML = '<tr><td colspan="6" style="text-align:center;padding:20px;color:var(--text-muted)">Ranking bounty leads...</td></tr>';
   const pid = encodeURIComponent(document.getElementById('bounty-project-select')?.value || '');
   const q = encodeURIComponent(document.getElementById('bounty-search')?.value || '');
-  const { ok, data, error } = await apiJSON(`/api/bounty/leads?project_id=${pid}&search=${q}&limit=100`);
+  const [summaryResp, leadsResp] = await Promise.all([
+    apiJSON(`/api/bounty/summary?project_id=${pid}&search=${q}`),
+    apiJSON(`/api/bounty/leads?project_id=${pid}&search=${q}&limit=100`)
+  ]);
+  renderBountySummary(summaryResp?.data || {});
+  const { ok, data, error } = leadsResp;
   if (!ok) {
     body.innerHTML = `<tr><td colspan="6" style="text-align:center;padding:20px;color:var(--red)">${esc(error || 'Unable to load bounty leads')}</td></tr>`;
     return;
