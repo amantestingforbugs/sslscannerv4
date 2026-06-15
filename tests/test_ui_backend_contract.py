@@ -51,3 +51,5 @@ def test_dashboard_replaces_hunter_mission_board_with_ai_copilot():
     assert "AI Bounty Copilot" in TEMPLATE
     assert "Prompt workbench" in TEMPLATE
     assert "AI prompt pack" in TEMPLATE
+    assert "Actionable bounty copilot" in TEMPLATE
+    assert "/api/bounty/copilot" in TEMPLATE

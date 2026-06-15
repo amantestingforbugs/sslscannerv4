@@ -1675,6 +1675,13 @@ html[data-experience="beginner"] .nav-section.advanced-nav{display:none}
 
       <div class="card" style="margin-bottom:12px">
         <div class="card-body" style="font-size:12.5px;color:var(--text-secondary)">
+          <div style="display:flex;justify-content:space-between;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:8px"><div><b>Actionable bounty copilot:</b> copy-ready validation playbooks, safe commands, and report drafts from ranked evidence.</div><button class="btn btn-primary btn-sm" onclick="loadBountyCopilot()">Build Playbooks</button></div>
+          <div id="bounty-copilot-playbooks" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:8px"><div class="xbow-empty">Click Build Playbooks after leads load to generate actionable bug-bounty workflows.</div></div>
+        </div>
+      </div>
+
+      <div class="card" style="margin-bottom:12px">
+        <div class="card-body" style="font-size:12.5px;color:var(--text-secondary)">
           <b>Company/Bounty workflow:</b> <span id="bounty-exec-summary">Scores are recon prioritization hints, not vulnerability claims.</span>
           <div id="bounty-surface-breakdown" style="margin-top:8px;display:flex;gap:6px;flex-wrap:wrap"></div>
           Always verify scope and program rules before testing.
@@ -2519,6 +2526,7 @@ window.addEventListener('keydown', e => {
 // UTILS
 // ════════════════════════════════════════════════════════════
 const esc = s => String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+const escAttr = s => esc(s).replace(/"/g,'&quot;').replace(/'/g,'&#39;');
 const fmt = n => (n||0).toLocaleString();
 
 function rel(iso) {
@@ -4213,8 +4221,57 @@ async function initBountyLeadsPage() {
   if (prev) sel.value = prev;
   await loadBountyLeads();
   await loadXbowBrief();
+  await loadBountyCopilot();
 }
 
+
+function copyText(value, label = 'Copied') {
+  if (!value) return toast('Nothing to copy', 'err');
+  if (navigator.clipboard?.writeText) {
+    navigator.clipboard.writeText(value).then(() => toast(label)).catch(() => toast('Copy failed', 'err'));
+  } else {
+    const ta = document.createElement('textarea');
+    ta.value = value; document.body.appendChild(ta); ta.select(); document.execCommand('copy'); ta.remove(); toast(label);
+  }
+}
+
+function renderBountyCopilot(copilot) {
+  const el = document.getElementById('bounty-copilot-playbooks');
+  if (!el) return;
+  const rows = copilot.playbooks || [];
+  if (!rows.length) {
+    el.innerHTML = '<div class="xbow-empty">No playbooks yet. Run Subfinder plus HTTP enrichment first.</div>';
+    return;
+  }
+  el.innerHTML = rows.slice(0, 6).map(p => {
+    const checklist = (p.validation_checklist || []).slice(0, 4).map(x => `<li>${esc(x)}</li>`).join('');
+    const cmd = (p.commands || [])[0]?.command || '';
+    const prompt = escAttr(p.copy_prompt || '');
+    const allCommands = escAttr((p.commands || []).map(c => `${c.label}: ${c.command}`).join('\n'));
+    const report = escAttr(JSON.stringify(p.report_draft || {}, null, 2));
+    return `<div class="xbow-path">
+      <div class="xbow-path-host">#${fmt(p.rank)} ${esc(p.hostname || '—')}</div>
+      <div class="xbow-path-meta">${fmt(p.score || 0)} pts · ${esc(p.severity || 'low')} · ${esc(p.lead_type || 'Recon')}</div>
+      <ul class="xbow-list">${checklist}</ul>
+      <div class="hunter-prompt-snippet">${esc(cmd || 'No command generated')}</div>
+      <div class="hunter-actions">
+        <button class="btn btn-primary btn-sm" onclick="copyText(this.dataset.copy, 'Prompt copied')" data-copy="${prompt}">Copy prompt</button>
+        <button class="btn btn-sm" onclick="copyText(this.dataset.copy, 'Commands copied')" data-copy="${allCommands}">Copy commands</button>
+        <button class="btn btn-sm" onclick="copyText(this.dataset.copy, 'Report draft copied')" data-copy="${report}">Copy report</button>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+async function loadBountyCopilot() {
+  const el = document.getElementById('bounty-copilot-playbooks');
+  if (el) el.innerHTML = '<div class="xbow-empty">Building actionable validation playbooks…</div>';
+  const pid = encodeURIComponent(document.getElementById('bounty-project-select')?.value || '');
+  const q = encodeURIComponent(document.getElementById('bounty-search')?.value || '');
+  const { ok, data, error } = await apiJSON(`/api/bounty/copilot?project_id=${pid}&search=${q}&limit=10`);
+  if (!ok) return toast(error || 'Unable to build copilot playbooks', 'err');
+  renderBountyCopilot(data || {});
+}
 
 function renderXbowBrief(brief) {
   const exec = document.getElementById('xbow-exec-summary');
