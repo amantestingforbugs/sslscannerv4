@@ -35,7 +35,7 @@ from core.target_policy import is_target_allowed, registered_domain
 
 log = logging.getLogger(__name__)
 
-SUBFINDER_BIN = shutil.which("subfinder") or "/usr/local/bin/subfinder"
+SUBFINDER_BIN = shutil.which("subfinder") or os.getenv("SUBFINDER_BIN") or "/usr/local/bin/subfinder"
 _sf_lock = threading.Lock()
 _sf_state = {}  # project_id -> {status, job_id, new_count}
 _subfinder_flag_support: Dict[str, bool] = {}
@@ -112,11 +112,21 @@ def _compact_raw_record(record: Dict[str, object], sample_size: int = 50) -> Dic
     return compact
 
 def _resolve_subfinder_bin() -> Optional[str]:
+    """Return the first usable subfinder binary from PATH, config, or common Go install paths."""
     path = shutil.which("subfinder")
     if path:
         return path
-    fallback = "/usr/local/bin/subfinder"
-    return fallback if Path(fallback).exists() else None
+
+    candidates = [
+        os.getenv("SUBFINDER_BIN", "").strip(),
+        "/usr/local/bin/subfinder",
+        "/root/go/bin/subfinder",
+        str(Path.home() / "go" / "bin" / "subfinder"),
+    ]
+    for candidate in candidates:
+        if candidate and Path(candidate).is_file():
+            return candidate
+    return None
 
 
 def subfinder_available() -> bool:
@@ -193,7 +203,7 @@ def _run_subfinder_for_root(root_domain: str, timeout: int = 180) -> Dict[str, o
             "status": "error",
             "exit_code": None,
             "stdout": "",
-            "stderr": "subfinder binary not found in PATH or /usr/local/bin/subfinder",
+            "stderr": "subfinder binary not found in PATH, SUBFINDER_BIN, /usr/local/bin/subfinder, or Go bin directories",
             "found": [],
         }
     cmd = _build_subfinder_cmd(subfinder_bin, root_domain)
@@ -1633,7 +1643,7 @@ def run_subfinder_for_project(project_id: str, triggered_by: str = "scheduler") 
         return None
 
     if not subfinder_available():
-        log.warning("Subfinder binary not found. Checked PATH and /usr/local/bin/subfinder")
+        log.warning("Subfinder binary not found. Checked PATH, SUBFINDER_BIN, /usr/local/bin/subfinder, and Go bin directories")
         log_event("subfinder", "error", "Subfinder binary not found", project_id=project_id, status="failed")
 
     log.info("Subfinder starting for '%s' — root domains: %s", project["name"], ", ".join(root_domains))
