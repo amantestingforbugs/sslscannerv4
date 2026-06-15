@@ -9,6 +9,7 @@ from api.routes import (  # noqa: E402
     _normalize_nuclei_target,
     _nuclei_command,
     _nuclei_exit_error,
+    _nuclei_supported_flags,
     _parse_nuclei_stats_line,
     _resolve_nuclei_binary,
 )
@@ -26,6 +27,39 @@ def test_nuclei_command_uses_conservative_resource_limits(monkeypatch):
     assert cmd[cmd.index("-c") + 1] == "10"
     assert cmd[cmd.index("-bs") + 1] == "10"
     assert cmd[cmd.index("-timeout") + 1] == "5"
+
+
+def test_nuclei_command_omits_unsupported_optional_flags(monkeypatch):
+    _nuclei_supported_flags.cache_clear()
+
+    class FakeRun:
+        stdout = "Usage of nuclei:\n  -l string\n  -jsonl\n  -stats\n  -t string\n  -rl int\n  -c int\n  -bs int\n  -timeout int\n"
+        stderr = ""
+
+    import api.routes as routes
+
+    monkeypatch.setattr(routes.subprocess, "run", lambda *a, **k: FakeRun())
+
+    cmd = _nuclei_command("/bin/nuclei", "/tmp/targets", "/tmp/templates")
+
+    assert "-stats-json" not in cmd
+    assert "-duc" not in cmd
+    assert "-ud" not in cmd
+    assert "-t" in cmd
+    _nuclei_supported_flags.cache_clear()
+
+
+def test_resolve_nuclei_binary_accepts_command_name_from_env(tmp_path, monkeypatch):
+    import api.routes as routes
+
+    nuclei = tmp_path / "nuclei"
+    nuclei.write_text("#!/bin/sh\nexit 0\n")
+    nuclei.chmod(0o755)
+
+    monkeypatch.setenv("NUCLEI_BIN", "nuclei")
+    monkeypatch.setenv("PATH", str(tmp_path))
+
+    assert routes._resolve_nuclei_binary() == str(nuclei)
 
 
 def test_nuclei_exit_error_explains_sigkill_oom():
