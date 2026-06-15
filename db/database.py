@@ -449,8 +449,21 @@ def init_db():
 
 # ── Projects ──────────────────────────────────────────────────────────────────
 
+PROJECT_INTERVAL_MINUTES_MIN = 5
+PROJECT_INTERVAL_MINUTES_MAX = 10080
+
+
+def _clamp_project_interval(value, default=60):
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        parsed = int(default)
+    return max(PROJECT_INTERVAL_MINUTES_MIN, min(PROJECT_INTERVAL_MINUTES_MAX, parsed))
+
+
 def project_create(name, description="", scan_interval=60, subfinder_interval=30):
-    subfinder_interval = max(10, min(30, int(subfinder_interval or 30)))
+    scan_interval = _clamp_project_interval(scan_interval, 60)
+    subfinder_interval = _clamp_project_interval(subfinder_interval, 30)
     pid, n = uid(), now()
     x("INSERT INTO projects(id,name,description,scan_interval_minutes,subfinder_interval_minutes,created_at,updated_at)"
       " VALUES(?,?,?,?,?,?,?)", (pid, name, description, scan_interval, subfinder_interval, n, n))
@@ -481,8 +494,10 @@ def project_list():
     ]
 
 def project_update(pid, **kw):
+    if "scan_interval_minutes" in kw:
+        kw["scan_interval_minutes"] = _clamp_project_interval(kw["scan_interval_minutes"], 60)
     if "subfinder_interval_minutes" in kw:
-        kw["subfinder_interval_minutes"] = max(10, min(30, int(kw["subfinder_interval_minutes"] or 30)))
+        kw["subfinder_interval_minutes"] = _clamp_project_interval(kw["subfinder_interval_minutes"], 30)
     kw["updated_at"] = now()
     sets = ",".join(f"{k}=?" for k in kw)
     x(f"UPDATE projects SET {sets} WHERE id=?", [*kw.values(), pid])
