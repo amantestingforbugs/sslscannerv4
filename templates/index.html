@@ -908,6 +908,20 @@ html[data-density="comfortable"] .card-body,html[data-density="comfortable"] .mo
 .skeleton{position:relative;overflow:hidden;background:var(--bg-raised);border-radius:12px;min-height:44px}.skeleton::after{content:'';position:absolute;inset:0;transform:translateX(-100%);background:linear-gradient(90deg,transparent,color-mix(in srgb,var(--accent) 12%,transparent),transparent);animation:shimmer 1.25s infinite}@keyframes shimmer{100%{transform:translateX(100%)}}
 @media (max-width:1180px){.mission-grid{grid-template-columns:1fr 1fr}.mission-grid .mission-card:first-child{grid-column:1/-1}.risk-orb{width:128px;height:128px}}@media (max-width:760px){.mission-grid{grid-template-columns:1fr}.metric-row{grid-template-columns:96px 1fr 42px}.shortcuts-fab{display:none}}
 
+/* Advanced command deck: fast triage actions directly under the hero */
+.command-deck{display:grid;grid-template-columns:1.15fr repeat(3,minmax(190px,.9fr));gap:var(--grid-gap);margin:-4px 0 18px}
+.deck-card{position:relative;display:grid;grid-template-columns:auto 1fr auto;align-items:center;gap:12px;min-height:92px;padding:14px;border:1px solid color-mix(in srgb,var(--border) 68%,var(--accent));border-radius:18px;background:linear-gradient(135deg,color-mix(in srgb,var(--bg-surface) 92%,transparent),color-mix(in srgb,var(--bg-raised) 82%,transparent));box-shadow:var(--shadow-sm);overflow:hidden;text-align:left;color:inherit}
+.deck-card::after{content:'';position:absolute;inset:auto -28px -42px auto;width:116px;height:116px;border-radius:999px;background:radial-gradient(circle,rgba(var(--accent-rgb)/.18),transparent 68%);pointer-events:none;transition:transform var(--transition),opacity var(--transition)}
+.deck-button{cursor:pointer;transition:transform var(--transition),border-color var(--transition),box-shadow var(--transition)}
+.deck-button:hover{transform:translateY(-2px);border-color:var(--accent);box-shadow:var(--soft-glow)}
+.deck-button:hover::after{transform:scale(1.25);opacity:.85}
+.deck-icon{width:38px;height:38px;border-radius:14px;display:grid;place-items:center;background:var(--accent-dim);color:var(--accent);font-weight:900;box-shadow:inset 0 0 0 1px color-mix(in srgb,currentColor 16%,transparent)}
+.deck-icon.danger{background:var(--red-dim);color:var(--red)}.deck-icon.warn{background:var(--amber-dim);color:var(--amber)}.deck-icon.good{background:var(--green-dim);color:var(--green)}
+.deck-kicker{font-size:10px;font-weight:900;letter-spacing:.11em;text-transform:uppercase;color:var(--text-muted)}
+.deck-title{font-size:14px;font-weight:850;letter-spacing:-.02em;color:var(--text-primary);margin-top:2px}.deck-copy{font-size:11.5px;color:var(--text-secondary);line-height:1.35;margin-top:2px}.deck-arrow{position:relative;z-index:1;font-family:var(--mono);font-size:11px;color:var(--accent);background:var(--accent-dim);border-radius:999px;padding:4px 7px;white-space:nowrap}
+.deck-focus{border-color:color-mix(in srgb,var(--accent) 45%,var(--border));background:linear-gradient(135deg,color-mix(in srgb,var(--accent) 16%,var(--bg-surface)),color-mix(in srgb,var(--bg-raised) 88%,transparent))}
+@media (max-width:1180px){.command-deck{grid-template-columns:1fr 1fr}.deck-focus{grid-column:1/-1}}@media (max-width:760px){.command-deck{grid-template-columns:1fr}.deck-card{min-height:82px}}
+
 </style>
 </head>
 <body>
@@ -1026,6 +1040,33 @@ html[data-density="comfortable"] .card-body,html[data-density="comfortable"] .mo
           <button class="btn" onclick="nav('alerts')">View Alerts</button>
           <span class="hero-chip">🛰️ Monitoring: Live</span>
         </div>
+      </div>
+
+
+      <div class="command-deck" aria-label="Recon command deck">
+        <div class="deck-card deck-focus">
+          <div class="deck-icon">⌁</div>
+          <div>
+            <div class="deck-kicker">Focus Mode</div>
+            <div class="deck-title" id="deckFocusTitle">All-scope mission control</div>
+            <div class="deck-copy" id="deckFocusCopy">Pick a project above to filter high-signal actions and telemetry.</div>
+          </div>
+        </div>
+        <button class="deck-card deck-button" type="button" onclick="nav('bounty-leads')">
+          <div class="deck-icon danger">★</div>
+          <div><div class="deck-kicker">Next best action</div><div class="deck-title">Review bounty leads</div><div class="deck-copy">Prioritize reportable hosts with evidence chains.</div></div>
+          <span class="deck-arrow">→</span>
+        </button>
+        <button class="deck-card deck-button" type="button" onclick="nav('nuclei')">
+          <div class="deck-icon warn">⌬</div>
+          <div><div class="deck-kicker">Validation</div><div class="deck-title">Run Nuclei checks</div><div class="deck-copy">Confirm exploitability from scoped targets.</div></div>
+          <span class="deck-arrow">→</span>
+        </button>
+        <button class="deck-card deck-button" type="button" onclick="openCommandPalette()">
+          <div class="deck-icon good">⌘</div>
+          <div><div class="deck-kicker">Power workflow</div><div class="deck-title">Open Command Center</div><div class="deck-copy">Jump, create, refresh, and tune the workspace.</div></div>
+          <span class="deck-arrow">⌘K</span>
+        </button>
       </div>
 
       <div class="mission-grid" id="missionControl">
@@ -1959,6 +2000,7 @@ let pendingLogEntries = [];
 let logFlushTimer = null;
 let opensslRenderTimer = null;
 let dashboardLoadInFlight = false;
+let dashboardStatsCache = {};
 const apiMemo = new Map();
 const API_MEMO_TTL = 3500;
 
@@ -2336,6 +2378,7 @@ document.addEventListener('click', (e) => {
   if (accentBtn) saveUiPrefs({ accent: accentBtn.dataset.accentChoice });
 });
 document.getElementById('motionCalmToggle')?.addEventListener('change', (e) => saveUiPrefs({ motion: e.target.checked ? 'calm' : 'full' }));
+document.getElementById('topProjectSelect')?.addEventListener('change', () => updateCommandDeck(dashboardStatsCache, projectsCache));
 document.getElementById('shortcutsFab')?.addEventListener('click', openCommandPalette);
 window.addEventListener('keydown', e => {
   const k = e.key.toLowerCase();
@@ -2576,6 +2619,7 @@ async function loadSystemOverview(){
 // ════════════════════════════════════════════════════════════
 function applyStat(s) {
   if (!s) return;
+  dashboardStatsCache = s;
   const totalDomains = s.total_domains ?? s.domains ?? s.total ?? s.projects;
   document.getElementById('s-projects').textContent = fmt(totalDomains);
   document.getElementById('s-ok').textContent = fmt(s.ok);
@@ -2617,6 +2661,27 @@ function actionChip(icon, title, desc, label, fn) {
   requestAnimationFrame(() => { window[id] = fn; });
   return `<div class="action-chip"><span class="emoji">${esc(icon)}</span><span><strong>${esc(title)}</strong>${esc(desc)}</span><button type="button" onclick="${id}()">${esc(label)}</button></div>`;
 }
+
+function updateCommandDeck(stats = {}, projects = []) {
+  const selectedId = document.getElementById('topProjectSelect')?.value || '';
+  const selected = projects.find(p => String(p.id) === String(selectedId));
+  const title = document.getElementById('deckFocusTitle');
+  const copy = document.getElementById('deckFocusCopy');
+  if (!title || !copy) return;
+  const total = Number(stats.total_domains ?? stats.domains ?? stats.total ?? 0);
+  const anomalies = Number(stats.mismatches || 0) + Number(stats.expired || 0) + Number(stats.errors || 0);
+  if (selected) {
+    title.textContent = `${selected.name || 'Selected project'} focus`;
+    copy.textContent = `${selected.enabled ? 'Active' : 'Paused'} scope · latest scan ${selected.latest_scan?.status || 'not started'} · open project detail for target-level triage.`;
+  } else if (total) {
+    title.textContent = `${fmt(total)} hosts under observation`;
+    copy.textContent = `${fmt(anomalies)} anomaly signals are feeding the exploit path builder across ${fmt(projects.length)} project${projects.length === 1 ? '' : 's'}.`;
+  } else {
+    title.textContent = 'All-scope mission control';
+    copy.textContent = 'Create a project or import targets to activate ranked recon actions, validation prompts, and evidence workflows.';
+  }
+}
+
 function updateMissionControl(stats = {}, projects = []) {
   const risk = calcRiskScore(stats, projects);
   const total = Number(stats.total_domains ?? stats.domains ?? stats.total ?? 0);
@@ -2640,6 +2705,7 @@ function updateMissionControl(stats = {}, projects = []) {
   if (state) state.textContent = runningProjects ? `${runningProjects} scan${runningProjects>1?'s':''} feeding chains` : alerts ? `${alerts} alert${alerts>1?'s':''} to validate` : 'Chain-ready';
   const narrative = document.getElementById('riskNarrative');
   if (narrative) narrative.textContent = total ? `${fmt(total)} hosts profiled · ${fmt(mismatches + expired + errors)} chainable anomaly signals · ${fmt(scannedProjects)}/${fmt(projects.length)} projects feeding evidence.` : 'Create or import a project to activate exploit-signal correlation.';
+  updateCommandDeck(stats, projects);
   updateHunterDashboard(stats, projects, { total, mismatches, expired, expiring, errors, alerts, scannedProjects, staleProjects });
 }
 
