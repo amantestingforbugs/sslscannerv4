@@ -1829,10 +1829,13 @@ def _ssl_scan_subfinder_hosts(project_id: str, hostnames: List[str], job_id: str
     if unsent:
         project = project_get(project_id) or {}
         settings = alert_settings_get()
-        delivered = AlertManager(settings).dispatch(project.get("name", "Unknown Project"), unsent)
+        manager = AlertManager(settings)
+        delivered = manager.dispatch(project.get("name", "Unknown Project"), unsent)
         if delivered:
+            delivered_ids = set(manager.dispatchable_alert_ids(unsent))
             for a in unsent:
-                alert_mark_sent(a["id"])
+                if a["id"] in delivered_ids:
+                    alert_mark_sent(a["id"])
 
     with _scan_lock:
         if scan_id in _scan_state:
