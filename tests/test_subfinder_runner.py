@@ -629,3 +629,42 @@ def test_domain_enumeration_and_project_subfinder_share_same_pipeline(monkeypatc
     ]
     assert inserted["hosts"] == ("api.example.com", "www.example.com")
     assert job_id == "job1"
+
+
+def test_shared_enumeration_runs_deep_passive_before_dns(monkeypatch):
+    monkeypatch.setattr(
+        runner,
+        "_passive_enumeration_sources",
+        lambda: {"passive": lambda root: ["dev.example.com"]},
+    )
+    monkeypatch.setattr(
+        runner,
+        "_run_subfinder_for_root",
+        lambda root, timeout=180: {"root_domain": root, "status": "done", "found": [], "found_count": 0, "stderr": ""},
+    )
+    monkeypatch.setattr(
+        runner,
+        "_run_recursive_passive_enumeration",
+        lambda roots, discovered, sources: {
+            "found": ["api.internal.dev.example.com"],
+            "source_counts": {"deep:passive:d1": 1},
+            "raw_records": [{"source": "deep:passive:d1", "root_domain": "dev.example.com", "status": "done", "found_count": 1}],
+        },
+    )
+
+    def fake_bruteforce(root, seed, max_candidates=0):
+        assert "api.internal.dev.example.com" in seed
+        return ["admin.api.internal.dev.example.com"]
+
+    monkeypatch.setattr(runner, "_bruteforce_dns_hosts", fake_bruteforce)
+    monkeypatch.setattr(runner, "_permutation_dns_hosts", lambda root, seed, max_candidates=0: [])
+
+    result = runner._run_subdomain_enumeration(["example.com"])
+
+    assert result["found"] == [
+        "admin.api.internal.dev.example.com",
+        "api.internal.dev.example.com",
+        "dev.example.com",
+    ]
+    assert result["source_map"]["deep_recursive_passive"] == ["api.internal.dev.example.com"]
+    assert result["source_map"]["dns_bruteforce"] == ["admin.api.internal.dev.example.com"]

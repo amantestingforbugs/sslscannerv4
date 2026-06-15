@@ -1283,7 +1283,7 @@ def _passive_enumeration_sources() -> Dict[str, EnumerationSource]:
 
 
 def _tool_summary() -> str:
-    sources = ["subfinder(all-sources)", *_passive_enumeration_sources().keys(), "dns_bruteforce", "dns_permutation"]
+    sources = ["subfinder(all-sources)", *_passive_enumeration_sources().keys(), "deep_recursive_passive", "dns_bruteforce", "dns_permutation"]
     return ",".join(sources)
 
 
@@ -1575,13 +1575,31 @@ def _run_subdomain_enumeration(root_domains: List[str]) -> Dict[str, object]:
     finally:
         enum_pool.shutdown(wait=False, cancel_futures=True)
 
+    # Recursive passive enumeration is the deep-scan stage: after the apex
+    # pass discovers zones like ``dev.example.com`` or ``corp.example.com``,
+    # query capable OSINT sources again for those sub-zones to uncover hosts
+    # several labels below the root.
+    deep_result = _run_recursive_passive_enumeration(root_domains, sorted(all_found), passive_sources)
+    for record in deep_result.get("raw_records") or []:
+        raw_records.append(record)
+    for source_name, count in (deep_result.get("source_counts") or {}).items():
+        source_counts[source_name] = source_counts.get(source_name, 0) + int(count or 0)
+    for deep_host in deep_result.get("found") or []:
+        for root_domain in root_domains:
+            if _is_host_within_root(deep_host, root_domain):
+                add_hosts("deep_recursive_passive", root_domain, [deep_host])
+                break
+
+    # DNS brute-force and permutation run after deep passive recursion so their
+    # candidate generator can prepend labels to every newly discovered sub-zone,
+    # not only apex-level names.
     seed_hosts = sorted(all_found) or root_domains
     dns_pool = ThreadPoolExecutor(max_workers=max(2, min(8, 2 * max(1, len(root_domains)))))
     try:
         future_map = {}
         for root_domain in root_domains:
-            future_map[dns_pool.submit(_bruteforce_dns_hosts, root_domain, seed_hosts, 2500)] = ("dns_bruteforce", root_domain)
-            future_map[dns_pool.submit(_permutation_dns_hosts, root_domain, seed_hosts, 2500)] = ("dns_permutation", root_domain)
+            future_map[dns_pool.submit(_bruteforce_dns_hosts, root_domain, seed_hosts, 0)] = ("dns_bruteforce", root_domain)
+            future_map[dns_pool.submit(_permutation_dns_hosts, root_domain, seed_hosts, 0)] = ("dns_permutation", root_domain)
         phase_timeout = _env_int("DOMAIN_DNS_ENUM_PHASE_TIMEOUT_SECONDS", 180, minimum=15, maximum=3600)
         for fut, source_info, timed_out in _iter_completed_with_deadline(future_map, phase_timeout, "subdomain DNS enumeration"):
             source_name, root_domain = source_info
@@ -1675,7 +1693,7 @@ def run_subfinder_for_project(project_id: str, triggered_by: str = "scheduler") 
         project_id=project_id,
         root_domains=root_domains,
         status="running",
-        feature_set=["subfinder", *_passive_enumeration_sources().keys(), "dns_bruteforce", "dns_permutation"],
+        feature_set=["subfinder", *_passive_enumeration_sources().keys(), "deep_recursive_passive", "dns_bruteforce", "dns_permutation"],
     )
 
     job_id = subfinder_job_create(project_id, ",".join(root_domains), triggered_by)
