@@ -907,6 +907,16 @@ html[data-density="comfortable"] .card-body,html[data-density="comfortable"] .mo
 .shortcuts-fab{position:fixed;right:20px;bottom:20px;z-index:1200;border:1px solid var(--border);background:var(--bg-surface);color:var(--text-secondary);border-radius:999px;padding:9px 12px;box-shadow:var(--shadow-sm);font-size:12px;display:flex;gap:8px;align-items:center}.shortcuts-fab:hover{color:var(--text-primary);border-color:var(--accent)}
 .skeleton{position:relative;overflow:hidden;background:var(--bg-raised);border-radius:12px;min-height:44px}.skeleton::after{content:'';position:absolute;inset:0;transform:translateX(-100%);background:linear-gradient(90deg,transparent,color-mix(in srgb,var(--accent) 12%,transparent),transparent);animation:shimmer 1.25s infinite}@keyframes shimmer{100%{transform:translateX(100%)}}
 
+
+/* Beginner-first customer experience */
+.beginner-toggle{display:flex;align-items:center;justify-content:space-between;gap:8px;margin:8px 10px 10px;padding:10px;border:1px solid color-mix(in srgb,var(--accent) 28%,var(--border));border-radius:14px;background:var(--accent-dim)}
+.beginner-toggle-copy{min-width:0}.beginner-toggle-title{font-size:12px;font-weight:800;color:var(--text-primary)}.beginner-toggle-sub{font-size:10.5px;color:var(--text-muted);line-height:1.25;margin-top:2px}
+.beginner-switch{position:relative;width:42px;height:24px;flex:0 0 auto}.beginner-switch input{position:absolute;opacity:0}.beginner-switch span{position:absolute;inset:0;border-radius:999px;background:var(--border);transition:background var(--transition)}.beginner-switch span::after{content:'';position:absolute;top:3px;left:3px;width:18px;height:18px;border-radius:50%;background:#fff;transition:transform var(--transition);box-shadow:var(--shadow-sm)}.beginner-switch input:checked + span{background:var(--accent)}.beginner-switch input:checked + span::after{transform:translateX(18px)}
+html[data-experience="beginner"] .advanced-nav{display:none}
+html[data-experience="beginner"] .nav-section.advanced-nav{display:none}
+.customer-start-grid{display:grid;grid-template-columns:1.2fr repeat(3,minmax(170px,1fr));gap:12px;margin-bottom:18px}.customer-start-card{border:1px solid color-mix(in srgb,var(--accent) 34%,var(--border));border-radius:20px;background:linear-gradient(145deg,color-mix(in srgb,var(--bg-surface) 94%,transparent),color-mix(in srgb,var(--accent) 8%,var(--bg-raised)));padding:18px;box-shadow:var(--shadow-sm)}.customer-start-card.primary{background:linear-gradient(135deg,color-mix(in srgb,var(--accent) 18%,var(--bg-surface)),var(--bg-surface))}.customer-step{width:34px;height:34px;border-radius:13px;display:grid;place-items:center;background:var(--accent-dim);color:var(--accent);font-weight:900;margin-bottom:10px}.customer-start-card h2,.customer-start-card h3{letter-spacing:-.03em}.customer-start-card h2{font-size:20px;margin-bottom:6px}.customer-start-card h3{font-size:14px;margin-bottom:5px}.customer-start-card p{color:var(--text-secondary);font-size:12.5px;line-height:1.45}.customer-start-actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:14px}.plain-language-note{display:flex;gap:10px;align-items:flex-start;border:1px dashed color-mix(in srgb,var(--green) 40%,var(--border));background:var(--green-dim);border-radius:16px;padding:12px 14px;margin-bottom:18px;color:var(--text-secondary);font-size:12.5px}.plain-language-note strong{color:var(--text-primary)}
+@media (max-width:1100px){.customer-start-grid{grid-template-columns:1fr 1fr}.customer-start-card.primary{grid-column:1/-1}}@media (max-width:700px){.customer-start-grid{grid-template-columns:1fr}}
+
 /* Friendly onboarding and guided workflow helpers */
 .onboarding-strip{display:grid;grid-template-columns:1.1fr repeat(3,minmax(170px,1fr));gap:12px;margin:0 0 16px}
 .onboarding-card{position:relative;overflow:hidden;border:1px solid var(--border);background:linear-gradient(145deg,color-mix(in srgb,var(--bg-surface) 88%,transparent),color-mix(in srgb,var(--accent) 7%,var(--bg-raised)));border-radius:18px;padding:16px;box-shadow:var(--shadow-sm)}
@@ -1010,14 +1020,24 @@ html[data-density="comfortable"] .card-body,html[data-density="comfortable"] .mo
       <span>🔎</span>
       <input id="navFilterInput" type="text" placeholder="Find a page...">
     </div>
+    <div class="beginner-toggle" role="group" aria-label="Customer friendly mode">
+      <div class="beginner-toggle-copy">
+        <div class="beginner-toggle-title">Simple mode</div>
+        <div class="beginner-toggle-sub">Shows only the pages most new customers need.</div>
+      </div>
+      <label class="beginner-switch">
+        <input id="beginnerModeToggle" type="checkbox" checked>
+        <span aria-hidden="true"></span>
+      </label>
+    </div>
     <div class="nav-section">Overview</div>
     <button class="nav-item active" data-page="dashboard">
       <svg fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>
-      <span>Dashboard</span>
+      <span>Home</span>
     </button>
     <button class="nav-item" data-page="projects">
       <svg fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path d="M3 7a2 2 0 012-2h4l2 2h8a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2V7z"/></svg>
-      <span>Projects</span>
+      <span>Domains</span>
     </button>
     <button class="nav-item" data-page="alerts">
       <svg fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path d="M15 17h5l-1.4-1.4A2 2 0 0118 14V11a6 6 0 10-12 0v3a2 2 0 01-.6 1.4L4 17h5m6 0a3 3 0 01-6 0"/></svg>
@@ -1027,40 +1047,40 @@ html[data-density="comfortable"] .card-body,html[data-density="comfortable"] .mo
     <div class="nav-section">Discovery</div>
     <button class="nav-item" data-page="subfinder">
       <svg fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/><path d="M11 8v6M8 11h6"/></svg>
-      <span>Subfinder</span>
+      <span>Find Subdomains</span>
     </button>
     <button class="nav-item" data-page="discoveries">
       <svg fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path d="M3 7h18M3 12h18M3 17h18"/><circle cx="7" cy="7" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="17" cy="17" r="1"/></svg>
-      <span>Discoveries</span>
+      <span>New Hosts</span>
     </button>
     <button class="nav-item" data-page="assets">
       <svg fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path d="M4 7h16M4 12h16M4 17h16"/><path d="M8 5v14M16 5v14"/></svg>
-      <span>Assets</span>
+      <span>Inventory</span>
     </button>
     <button class="nav-item" data-page="bounty-leads">
       <svg fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path d="M12 3l2.6 5.3 5.9.9-4.2 4.1 1 5.8L12 16.4 6.7 19.1l1-5.8-4.2-4.1 5.9-.9L12 3z"/></svg>
-      <span>Bounty Leads</span>
+      <span>High-Priority Leads</span>
     </button>
-    <button class="nav-item" data-page="subfinder-raw">
+    <button class="nav-item advanced-nav" data-page="subfinder-raw">
       <svg fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path d="M4 4h16v16H4z"/><path d="M8 8h8M8 12h8M8 16h5"/></svg>
       <span>Subfinder Enumeration</span>
     </button>
-    <button class="nav-item" data-page="nuclei">
+    <button class="nav-item advanced-nav" data-page="nuclei">
       <svg fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path d="M4 4h16v16H4z"/><path d="M8 8h8M8 12h8M8 16h6"/></svg>
       <span>Nuclei CVEs</span>
     </button>
-    <button class="nav-item" data-page="openssl">
+    <button class="nav-item advanced-nav" data-page="openssl">
       <svg fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path d="M12 2v20"/><path d="M5 7h14"/><path d="M5 17h14"/><circle cx="12" cy="12" r="3"/></svg>
       <span>OpenSSL</span>
     </button>
-    <div class="nav-section">System</div>
-    <button class="nav-item" data-page="logs">
+    <div class="nav-section advanced-nav">Advanced</div>
+    <button class="nav-item advanced-nav" data-page="logs">
       <svg fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path d="M4 6h16M4 12h16M4 18h10"/></svg>
       <span>Logs</span>
     </button>
     <button class="nav-item" data-page="settings">
       <svg fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06A1.65 1.65 0 0 0 15 19.4a1.65 1.65 0 0 0-1 .6 1.65 1.65 0 0 0-.33 1V21a2 2 0 1 1-4 0v-.09a1.65 1.65 0 0 0-.33-1A1.65 1.65 0 0 0 8 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06A2 2 0 1 1 3.3 17l.06-.06A1.65 1.65 0 0 0 3.6 15a1.65 1.65 0 0 0-.6-1 1.65 1.65 0 0 0-1-.33H2a2 2 0 1 1 0-4h.09a1.65 1.65 0 0 0 1-.33A1.65 1.65 0 0 0 3.6 8a1.65 1.65 0 0 0-.33-1.82L3.2 6.1A2 2 0 1 1 6 3.3l.06.06A1.65 1.65 0 0 0 8 3.6a1.65 1.65 0 0 0 1-.6 1.65 1.65 0 0 0 .33-1V2a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 .33 1 1.65 1.65 0 0 0 1 .6 1.65 1.65 0 0 0 1.82-.33l.06-.06A2 2 0 1 1 20.7 6l-.06.06A1.65 1.65 0 0 0 20.4 8c0 .39.14.76.4 1 .26.24.61.37 1 .37H22a2 2 0 1 1 0 4h-.09c-.39 0-.76.14-1 .4-.24.26-.37.61-.37 1z"/></svg>
-      <span>Alert Routing</span>
+      <span>Notifications</span>
     </button>
   </nav>
 
@@ -1074,7 +1094,7 @@ html[data-density="comfortable"] .card-body,html[data-density="comfortable"] .mo
 <div class="main">
   <div class="topbar">
     <button class="mobile-menu-btn" id="mobileMenuBtn" aria-label="Open menu">☰</button>
-    <div class="topbar-title" id="topTitle">Dashboard</div>
+    <div class="topbar-title" id="topTitle">Home</div>
     <div class="topbar-meta">
       <span class="topbar-health"><span class="topbar-health-dot"></span>Live updates</span>
       <span class="topbar-meta-sep">•</span>
@@ -1096,6 +1116,21 @@ html[data-density="comfortable"] .card-body,html[data-density="comfortable"] .mo
 
     <!-- ══════ DASHBOARD ══════ -->
     <div class="page active dashboard-redesign" id="page-dashboard">
+      <section class="customer-start-grid" aria-label="Getting started guide">
+        <article class="customer-start-card primary">
+          <div class="dash-eyebrow">New customer guide</div>
+          <h2>Start with one domain, then follow the alerts.</h2>
+          <p>This home page now highlights the safest path: add domains, run discovery, review plain-language alerts, then save notification settings when you are ready.</p>
+          <div class="customer-start-actions">
+            <button class="btn btn-primary" onclick="openModal('createModal')">Add your first domain</button>
+            <button class="btn" onclick="nav('projects')">Run a quick scan</button>
+          </div>
+        </article>
+        <article class="customer-start-card"><div class="customer-step">1</div><h3>Add domains</h3><p>Create a saved domain list or paste hosts into Quick Scan without setting up a project.</p></article>
+        <article class="customer-start-card"><div class="customer-step">2</div><h3>Check risk</h3><p>Use the score, alerts, and mismatch cards to understand what needs attention first.</p></article>
+        <article class="customer-start-card"><div class="customer-step">3</div><h3>Get notified</h3><p>Connect Slack, Discord, or Telegram only after the first scan is working.</p></article>
+      </section>
+      <div class="plain-language-note"><span>✨</span><div><strong>Simple mode is on by default.</strong> Advanced tools like raw enumeration, Nuclei CVEs, OpenSSL, and logs are still available from the sidebar toggle.</div></div>
       <section class="dash-command-center" aria-label="Dashboard overview">
         <div class="dash-hero-copy">
           <div class="dash-eyebrow">SSL Sentinel v5 Command Center</div>
@@ -1221,7 +1256,7 @@ html[data-density="comfortable"] .card-body,html[data-density="comfortable"] .mo
     <div class="page" id="page-settings">
       <div class="page-header">
         <div>
-          <div class="page-title">Alert Routing</div>
+          <div class="page-title">Notifications</div>
           <div class="page-sub">Notification integrations and signal rules for actionable TLS findings</div>
         </div>
       </div>
@@ -1300,7 +1335,7 @@ html[data-density="comfortable"] .card-body,html[data-density="comfortable"] .mo
     <div class="page" id="page-projects">
       <div class="page-header">
         <div>
-          <div class="page-title">Projects</div>
+          <div class="page-title">Domains</div>
           <div class="page-sub">Each project monitors a separate list of hosts</div>
         </div>
         <button class="btn btn-primary" onclick="openModal('createModal')">+ New Project</button>
@@ -1498,7 +1533,7 @@ html[data-density="comfortable"] .card-body,html[data-density="comfortable"] .mo
     <div class="page" id="page-assets">
       <div class="page-header">
         <div>
-          <div class="page-title">Assets</div>
+          <div class="page-title">Inventory</div>
           <div class="page-sub">Normalized inventory from projects, Subfinder, HTTP probes, TLS scans, and Nuclei findings.</div>
         </div>
         <button class="btn btn-primary" onclick="loadAssets()">Refresh Assets</button>
@@ -1561,7 +1596,7 @@ html[data-density="comfortable"] .card-body,html[data-density="comfortable"] .mo
     <div class="page" id="page-discoveries">
       <div class="page-header">
         <div>
-          <div class="page-title">Discoveries</div>
+          <div class="page-title">New Hosts</div>
           <div class="page-sub">View fresh subdomains or only the most recent Subfinder batch from one place.</div>
         </div>
       </div>
@@ -1598,7 +1633,7 @@ html[data-density="comfortable"] .card-body,html[data-density="comfortable"] .mo
     <div class="page" id="page-bounty-leads">
       <div class="page-header">
         <div>
-          <div class="page-title">Bounty Leads</div>
+          <div class="page-title">High-Priority Leads</div>
           <div class="page-sub">v5 bug-bounty hunter intelligence: OWASP 2025 web, OWASP API 2023, DevOps exposure, takeover-routing clues, Nuclei validation strategy, and TLS anomalies.</div>
         </div>
         <div style="display:flex;gap:8px;flex-wrap:wrap">
@@ -2218,6 +2253,7 @@ function setTheme(t) {
   if (themeSel) themeSel.value = t;
 }
 const UI_PREFS_KEY = 'sentinel-ui-prefs';
+const EXPERIENCE_KEY = 'sentinel-experience';
 function getUiPrefs() {
   try { return JSON.parse(localStorage.getItem(UI_PREFS_KEY) || '{}') || {}; }
   catch { return {}; }
@@ -2240,6 +2276,18 @@ function applyUiPrefs(prefs = getUiPrefs()) {
 document.getElementById('themeToggle')?.addEventListener('click', () => {
   setTheme(document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark');
 });
+
+function setExperienceMode(mode) {
+  const normalized = mode === 'advanced' ? 'advanced' : 'beginner';
+  document.documentElement.dataset.experience = normalized;
+  localStorage.setItem(EXPERIENCE_KEY, normalized);
+  const toggle = document.getElementById('beginnerModeToggle');
+  if (toggle) toggle.checked = normalized === 'beginner';
+}
+document.getElementById('beginnerModeToggle')?.addEventListener('change', (event) => {
+  setExperienceMode(event.target.checked ? 'beginner' : 'advanced');
+});
+setExperienceMode(localStorage.getItem(EXPERIENCE_KEY) || 'beginner');
 setTheme(localStorage.getItem(THEME_KEY) || 'dark');
 applyUiPrefs();
 setLastSyncStamp();
