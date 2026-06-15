@@ -888,6 +888,9 @@ html[data-density="comfortable"] .card-body,html[data-density="comfortable"] .mo
 .risk-orb::after{content:'';position:absolute;inset:13px;border-radius:inherit;background:var(--bg-surface);box-shadow:inset 0 0 0 1px var(--border)}
 .risk-number{position:relative;z-index:1;font-size:34px;font-weight:900;letter-spacing:-.06em;line-height:1}
 .risk-caption{position:relative;z-index:1;font-size:11px;color:var(--text-muted);text-transform:uppercase;letter-spacing:.08em;margin-top:4px}
+.exploit-engine-card{border-color:color-mix(in srgb,var(--red) 34%,var(--accent));background:linear-gradient(145deg,color-mix(in srgb,var(--bg-surface) 88%,#020617),color-mix(in srgb,var(--red) 10%,var(--bg-raised)))}
+.exploit-orb{background:conic-gradient(var(--red) calc(var(--risk)*1%),var(--orange) 0 48%,var(--amber) 0 76%,var(--green) 0 100%)}
+.exploit-signal-strip{position:relative;z-index:1;display:flex;flex-wrap:wrap;justify-content:center;gap:6px;margin-top:10px}.exploit-signal-strip span{font-family:var(--mono);font-size:10px;text-transform:uppercase;letter-spacing:.08em;color:var(--text-secondary);border:1px solid color-mix(in srgb,var(--border) 75%,var(--red));background:color-mix(in srgb,var(--red-dim) 58%,transparent);border-radius:999px;padding:5px 8px}.exploit-signal-strip span::before{content:'⛓ ';color:var(--red)}
 .metric-bars{display:grid;gap:12px;position:relative;z-index:1}
 .metric-row{display:grid;grid-template-columns:118px 1fr 48px;gap:10px;align-items:center;font-size:12px;color:var(--text-secondary)}
 .metric-track{height:9px;border-radius:999px;background:var(--bg-raised);overflow:hidden;border:1px solid var(--border)}
@@ -1024,17 +1027,20 @@ html[data-density="comfortable"] .card-body,html[data-density="comfortable"] .mo
       </div>
 
       <div class="mission-grid" id="missionControl">
-        <section class="mission-card" aria-label="Risk command center">
+        <section class="mission-card exploit-engine-card" aria-label="Exploit signal engineering workbench">
           <div class="mission-head">
             <div>
-              <div class="mission-eyebrow">Mission Control</div>
-              <div class="mission-title">Risk cockpit</div>
-              <div class="mission-sub">Weighted SSL posture, alert pressure, and project freshness in one operator-first view.</div>
+              <div class="mission-eyebrow">Exploit Signal Engine</div>
+              <div class="mission-title">Vulnerability chaining lab</div>
+              <div class="mission-sub">Technical bounty tooling that converts TLS drift, scan errors, stale scope, and alert bursts into validated exploit-chain hypotheses.</div>
             </div>
-            <span class="hero-chip" id="missionState">Analyzing</span>
+            <span class="hero-chip" id="missionState">Correlating</span>
           </div>
-          <div class="risk-orb" id="riskOrb"><div><div class="risk-number" id="riskNumber">—</div><div class="risk-caption" id="riskCaption">Risk</div></div></div>
-          <div class="mission-sub" id="riskNarrative" style="text-align:center;margin:auto">Loading recon signals…</div>
+          <div class="risk-orb exploit-orb" id="riskOrb"><div><div class="risk-number" id="riskNumber">—</div><div class="risk-caption" id="riskCaption">Signal</div></div></div>
+          <div class="mission-sub" id="riskNarrative" style="text-align:center;margin:auto">Correlating takeover, misroute, stale-asset, and certificate anomaly signals…</div>
+          <div class="exploit-signal-strip" aria-label="Exploit-chain signal categories">
+            <span> takeover</span><span> misroute</span><span> stale scope</span><span> evidence</span>
+          </div>
         </section>
         <section class="mission-card hunter-card" aria-label="Bug bounty attack surface intelligence">
           <div class="mission-head">
@@ -2627,11 +2633,11 @@ function updateMissionControl(stats = {}, projects = []) {
   if (riskNumber) riskNumber.textContent = risk;
   const severity = severityLabel(risk);
   const caption = document.getElementById('riskCaption');
-  if (caption) caption.textContent = `${severity} risk`;
+  if (caption) caption.textContent = `${severity} signal`;
   const state = document.getElementById('missionState');
-  if (state) state.textContent = runningProjects ? `${runningProjects} scan${runningProjects>1?'s':''} running` : alerts ? `${alerts} alert${alerts>1?'s':''} pending` : 'Stable';
+  if (state) state.textContent = runningProjects ? `${runningProjects} scan${runningProjects>1?'s':''} feeding chains` : alerts ? `${alerts} alert${alerts>1?'s':''} to validate` : 'Chain-ready';
   const narrative = document.getElementById('riskNarrative');
-  if (narrative) narrative.textContent = total ? `${fmt(total)} hosts tracked · ${fmt(mismatches + expired + errors)} need review · ${fmt(scannedProjects)}/${fmt(projects.length)} projects have scan data.` : 'Create or import a project to activate the full SSL command cockpit.';
+  if (narrative) narrative.textContent = total ? `${fmt(total)} hosts profiled · ${fmt(mismatches + expired + errors)} chainable anomaly signals · ${fmt(scannedProjects)}/${fmt(projects.length)} projects feeding evidence.` : 'Create or import a project to activate exploit-signal correlation.';
   updateHunterDashboard(stats, projects, { total, mismatches, expired, expiring, errors, alerts, scannedProjects, staleProjects });
 }
 
