@@ -43,3 +43,11 @@ def test_project_interval_persistence_matches_ui_contract(tmp_path, monkeypatch)
     updated = database.project_get(project["id"])
     assert updated["scan_interval_minutes"] == 10080
     assert updated["subfinder_interval_minutes"] == 5
+
+
+def test_dashboard_replaces_hunter_mission_board_with_ai_copilot():
+    assert "Bug Bounty Launchpad" not in TEMPLATE
+    assert "Hunter mission board" not in TEMPLATE
+    assert "AI Bounty Copilot" in TEMPLATE
+    assert "Prompt workbench" in TEMPLATE
+    assert "AI prompt pack" in TEMPLATE
