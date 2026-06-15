@@ -1944,7 +1944,7 @@ class SubfinderScheduler:
             if not p.get("enabled") or not p.get("subfinder_enabled"):
                 continue
             pid = p["id"]
-            interval_min = max(10, min(30, int(p.get("subfinder_interval_minutes", 30) or 30)))
+            interval_min = max(5, min(10080, int(p.get("subfinder_interval_minutes", 30) or 30)))
             interval_s = interval_min * 60
             if now_ts - self._last_run.get(pid, 0) >= interval_s:
                 self._last_run[pid] = now_ts
