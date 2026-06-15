@@ -162,6 +162,10 @@ class AlertManager:
             ConsoleNotifier(),
         ]
 
+    def dispatchable_alert_ids(self, alerts: List[Dict]) -> List[str]:
+        """Return IDs for alerts that pass the current routing rules."""
+        return [a.get("id") for a in filter_alerts(alerts, self.settings) if a.get("id")]
+
     def dispatch(self, project_name: str, alerts: List[Dict]) -> bool:
         scoped = filter_alerts(alerts, self.settings)
         if not scoped:

@@ -196,15 +196,18 @@ def run_project_scan(project_id: str, triggered_by: str = "manual") -> Optional[
             log_event("ssl_scan", "info", "Scan finished", project_id=project_id, scan_id=sid, total=total, status="idle")
             jobs.update_state(sid, status="done", progress=total, done=total, finished_at=_now())
 
-        # Send Telegram
+        # Send remote alerts
         unsent = [a for a in alerts_unsent() if a["project_id"] == project_id]
         if unsent:
-            delivered = AlertManager(alert_settings_get()).dispatch(project["name"], unsent)
+            manager = AlertManager(alert_settings_get())
+            delivered = manager.dispatch(project["name"], unsent)
             if not delivered:
                 log.warning("No remote alert channel accepted alerts for project '%s'; keeping alerts unsent for retry.", project["name"])
                 return sid
+            delivered_ids = set(manager.dispatchable_alert_ids(unsent))
             for a in unsent:
-                alert_mark_sent(a["id"])
+                if a["id"] in delivered_ids:
+                    alert_mark_sent(a["id"])
 
         log.info("Scan done: '%s'", project["name"])
         return sid
