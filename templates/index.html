@@ -923,6 +923,12 @@ html[data-density="comfortable"] .card-body,html[data-density="comfortable"] .mo
 @media (max-width:1100px){.onboarding-strip{grid-template-columns:1fr 1fr}.onboarding-card.primary{grid-column:1/-1}}
 @media (max-width:700px){.onboarding-strip{grid-template-columns:1fr}}
 
+
+.xbow-brief-grid{display:grid;grid-template-columns:minmax(260px,.85fr) minmax(320px,1.15fr) minmax(280px,1fr);gap:12px;margin-bottom:12px}
+.xbow-panel{border:1px solid color-mix(in srgb,var(--accent) 38%,var(--border));border-radius:16px;background:linear-gradient(145deg,color-mix(in srgb,var(--bg-surface) 88%,transparent),color-mix(in srgb,var(--accent) 8%,var(--bg-raised)));padding:14px;box-shadow:var(--shadow-sm)}
+.xbow-kicker{font-size:10px;font-weight:900;letter-spacing:.12em;text-transform:uppercase;color:var(--accent);margin-bottom:5px}.xbow-title{font-size:15px;font-weight:850;color:var(--text-primary);letter-spacing:-.02em}.xbow-copy{font-size:12px;color:var(--text-secondary);line-height:1.45;margin-top:5px}.xbow-list{margin:10px 0 0 16px;color:var(--text-secondary);font-size:12px;line-height:1.45}.xbow-path{padding:9px 0;border-top:1px solid var(--border-subtle)}.xbow-path:first-child{border-top:none}.xbow-path-host{font-family:var(--mono);font-weight:800;color:var(--text-primary);font-size:12px}.xbow-path-meta{font-size:11px;color:var(--text-muted);margin-top:3px}.xbow-empty{border:1px dashed var(--border);border-radius:12px;padding:12px;color:var(--text-muted);font-size:12px;background:var(--bg-raised)}
+@media(max-width:1100px){.xbow-brief-grid{grid-template-columns:1fr}.xbow-panel{min-height:auto}}
+
 @media (max-width:1180px){.mission-grid{grid-template-columns:1fr 1fr}.mission-grid .mission-card:first-child{grid-column:1/-1}.risk-orb{width:128px;height:128px}}@media (max-width:760px){.mission-grid{grid-template-columns:1fr}.metric-row{grid-template-columns:96px 1fr 42px}.shortcuts-fab{display:none}}
 
 </style>
@@ -1559,6 +1565,29 @@ html[data-density="comfortable"] .card-body,html[data-density="comfortable"] .mo
         <div class="stat-card"><div class="stat-label">Protected Surfaces</div><div class="stat-value" id="bounty-stat-protected">—</div><div class="stat-sub">401/403 auth boundaries</div></div>
         <div class="stat-card"><div class="stat-label">TLS Anomalies</div><div class="stat-value" id="bounty-stat-tls">—</div><div class="stat-sub">Mismatch/expired/expiring</div></div>
       </div>
+
+      <div class="xbow-brief-grid" aria-label="XBOW-style autonomous triage brief">
+        <section class="xbow-panel">
+          <div class="xbow-kicker">XBOW-style copilot</div>
+          <div class="xbow-title">Autonomous triage brief</div>
+          <div class="xbow-copy" id="xbow-exec-summary">Generate a scope-first validation plan from ranked recon signals. This is a safe planning copilot, not an exploit runner.</div>
+          <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:12px">
+            <button class="btn btn-primary btn-sm" onclick="loadXbowBrief()">Generate Brief</button>
+            <button class="btn btn-sm" onclick="nav('nuclei')">Validate with Nuclei</button>
+          </div>
+        </section>
+        <section class="xbow-panel">
+          <div class="xbow-kicker">Critical path</div>
+          <div class="xbow-title">Top assets to validate next</div>
+          <div id="xbow-critical-path" style="margin-top:10px"><div class="xbow-empty">Refresh the brief to build a ranked operator queue.</div></div>
+        </section>
+        <section class="xbow-panel">
+          <div class="xbow-kicker">Hypotheses</div>
+          <div class="xbow-title">Safe test playbooks</div>
+          <div id="xbow-hypotheses" style="margin-top:10px"><div class="xbow-empty">Playbooks will appear after the brief is generated.</div></div>
+        </section>
+      </div>
+
       <div class="card" style="margin-bottom:12px">
         <div class="card-body" style="font-size:12.5px;color:var(--text-secondary)">
           <b>Company/Bounty workflow:</b> <span id="bounty-exec-summary">Scores are recon prioritization hints, not vulnerability claims.</span>
@@ -3958,6 +3987,33 @@ async function initBountyLeadsPage() {
     (projs || []).map(p => `<option value="${p.id}">${esc(p.name)}</option>`).join('');
   if (prev) sel.value = prev;
   await loadBountyLeads();
+  await loadXbowBrief();
+}
+
+
+function renderXbowBrief(brief) {
+  const exec = document.getElementById('xbow-exec-summary');
+  if (exec) exec.textContent = brief.executive_summary || 'No ranked leads yet. Run Subfinder and HTTP enrichment first.';
+  const path = document.getElementById('xbow-critical-path');
+  if (path) {
+    const rows = brief.critical_path || [];
+    path.innerHTML = rows.length ? rows.slice(0, 5).map(r => `<div class="xbow-path"><div class="xbow-path-host">#${fmt(r.rank)} ${esc(r.hostname || '—')}</div><div class="xbow-path-meta">${fmt(r.score || 0)} pts · ${esc(r.severity || 'low')} · ${(r.why || []).slice(0,2).map(esc).join(' • ')}</div></div>`).join('') : '<div class="xbow-empty">No critical path yet. Run discovery and enrichment to seed the queue.</div>';
+  }
+  const hyp = document.getElementById('xbow-hypotheses');
+  if (hyp) {
+    const rows = brief.hypotheses || [];
+    hyp.innerHTML = rows.length ? rows.slice(0, 3).map(h => `<div class="xbow-path"><div class="xbow-path-host">${esc(h.title || 'Validation playbook')}</div><ul class="xbow-list">${(h.tests || []).slice(0,3).map(t => `<li>${esc(t)}</li>`).join('')}</ul></div>`).join('') : '<div class="xbow-empty">No hypotheses yet.</div>';
+  }
+}
+
+async function loadXbowBrief() {
+  const pid = encodeURIComponent(document.getElementById('bounty-project-select')?.value || '');
+  const q = encodeURIComponent(document.getElementById('bounty-search')?.value || '');
+  const path = document.getElementById('xbow-critical-path');
+  if (path) path.innerHTML = '<div class="xbow-empty">Building autonomous triage brief…</div>';
+  const { ok, data, error } = await apiJSON(`/api/bounty/brief?project_id=${pid}&search=${q}&limit=25`);
+  if (!ok) return toast(error || 'Unable to generate brief', 'err');
+  renderXbowBrief(data || {});
 }
 
 function renderBountySummary(summary) {
