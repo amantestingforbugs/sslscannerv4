@@ -471,6 +471,45 @@ def _collect_bounty_leads(project_id: str = "", search: str = "", limit: int = 1
         "method": "Ranks authorized Subfinder discoveries by active HTTP exposure, high-value host keywords, fresh-discovery status, and TLS anomalies.",
     }
 
+
+def _collect_bounty_summary(project_id: str = "", search: str = "") -> dict:
+    """Build company/program-level attack-surface KPIs from ranked bounty leads."""
+    data = _collect_bounty_leads(project_id=project_id, search=search, limit=500)
+    rows = data.get("rows", [])
+    total = data.get("total", len(rows))
+    high = sum(1 for r in rows if r.get("severity") == "high")
+    medium = sum(1 for r in rows if r.get("severity") == "medium")
+    active = sum(1 for r in rows if r.get("http_is_active"))
+    protected = sum(1 for r in rows if r.get("http_status_code") in (401, 403))
+    tls_anomalies = sum(1 for r in rows if r.get("is_mismatch") or r.get("is_expired") or r.get("is_expiring"))
+    fresh = sum(1 for r in rows if r.get("is_latest_discovery"))
+
+    keyword_counts: dict[str, int] = {}
+    project_counts: dict[str, int] = {}
+    for r in rows:
+        project = r.get("project_name") or "Unassigned"
+        project_counts[project] = project_counts.get(project, 0) + 1
+        for label in (r.get("lead_type") or "Recon candidate").split(","):
+            label = label.strip() or "Recon candidate"
+            keyword_counts[label] = keyword_counts.get(label, 0) + 1
+
+    return {
+        "total_leads": total,
+        "returned": len(rows),
+        "high": high,
+        "medium": medium,
+        "active_http": active,
+        "protected_http": protected,
+        "tls_anomalies": tls_anomalies,
+        "fresh_discoveries": fresh,
+        "top_projects": [{"name": k, "count": v} for k, v in sorted(project_counts.items(), key=lambda item: item[1], reverse=True)[:6]],
+        "top_surface_types": [{"name": k, "count": v} for k, v in sorted(keyword_counts.items(), key=lambda item: item[1], reverse=True)[:8]],
+        "executive_summary": (
+            f"{high} high-priority and {medium} medium-priority leads across {total} ranked assets; "
+            f"{active} active HTTP surfaces, {protected} protected login/API surfaces, and {tls_anomalies} TLS anomalies need validation."
+        ),
+    }
+
 def _run_openssl_subject(hostname: str, timeout: int = 20) -> dict:
     cmd = ["openssl", "s_client", "-connect", f"{hostname}:443"]
     try:
@@ -1088,6 +1127,13 @@ def update_alert_settings():
 @api.get("/stats")
 def global_stats():
     return ok(db.stats_global())
+
+
+@api.get("/bounty/summary")
+def bounty_summary():
+    project_id = (request.args.get("project_id") or "").strip()
+    search = (request.args.get("search") or "").strip()
+    return ok(_collect_bounty_summary(project_id=project_id, search=search))
 
 
 @api.get("/bounty/leads")

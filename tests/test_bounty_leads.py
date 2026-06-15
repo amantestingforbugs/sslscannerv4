@@ -74,3 +74,28 @@ def test_collect_bounty_leads_returns_ranked_authorized_discoveries(tmp_path, mo
     assert data["rows"][0]["hostname"] == "admin-api.dev.example.com"
     assert data["rows"][0]["score"] > data["rows"][1]["score"]
     assert "TLS hostname mismatch" in " ".join(data["rows"][0]["evidence"])
+
+
+def test_bounty_summary_rolls_up_company_attack_surface(tmp_path, monkeypatch):
+    reset_db(tmp_path, monkeypatch)
+    project = db.project_create("enterprise-program")
+    job_id = db.subfinder_job_create(project["id"], "example.com", by="manual")
+    db.subfinder_hosts_add_batch(project["id"], ["admin.example.com", "api.example.com", "www.example.com"])
+    db.subfinder_new_discoveries_add_batch(job_id, project["id"], ["admin.example.com"])
+    db.subfinder_httpx_results_upsert_batch(project["id"], job_id, [
+        {"hostname": "admin.example.com", "status_code": 403, "page_title": "Admin Login", "final_url": "https://admin.example.com", "scheme": "https", "is_active": True},
+        {"hostname": "api.example.com", "status_code": 200, "page_title": "OpenAPI Docs", "final_url": "https://api.example.com/docs", "scheme": "https", "is_active": True},
+        {"hostname": "www.example.com", "status_code": 200, "page_title": "Home", "final_url": "https://www.example.com", "scheme": "https", "is_active": True},
+    ])
+    scan = db.scan_create(project["id"], 1, "manual")
+    db.results_batch_save(scan["id"], project["id"], [{"hostname": "admin.example.com", "cn": "wrong.example.net", "is_mismatch": True}])
+
+    from api.routes import _collect_bounty_summary
+    summary = _collect_bounty_summary(project_id=project["id"])
+
+    assert summary["total_leads"] == 3
+    assert summary["active_http"] == 3
+    assert summary["protected_http"] == 1
+    assert summary["tls_anomalies"] == 1
+    assert summary["top_surface_types"]
+    assert "high-priority" in summary["executive_summary"]
