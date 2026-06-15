@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>SSL Sentinel</title>
+<title>SSL Sentinel v5</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
 <style>
@@ -1001,7 +1001,7 @@ html[data-density="comfortable"] .card-body,html[data-density="comfortable"] .mo
     <div class="logo-mark">S</div>
     <div>
       <div class="logo-text">SSL Sentinel</div>
-      <div class="logo-sub">Bug Bounty Recon</div>
+      <div class="logo-sub">Bug Bounty Recon v5</div>
     </div>
   </div>
 
@@ -1098,7 +1098,7 @@ html[data-density="comfortable"] .card-body,html[data-density="comfortable"] .mo
     <div class="page active dashboard-redesign" id="page-dashboard">
       <section class="dash-command-center" aria-label="Dashboard overview">
         <div class="dash-hero-copy">
-          <div class="dash-eyebrow">SSL Sentinel Command Center</div>
+          <div class="dash-eyebrow">SSL Sentinel v5 Command Center</div>
           <h1>Clean certificate recon, prioritized.</h1>
           <p>Monitor project coverage, catch certificate drift, and move from fresh discoveries to validated evidence without digging through clutter.</p>
           <div class="dash-cta-row">
@@ -1599,7 +1599,7 @@ html[data-density="comfortable"] .card-body,html[data-density="comfortable"] .mo
       <div class="page-header">
         <div>
           <div class="page-title">Bounty Leads</div>
-          <div class="page-sub">Prioritized, authorized recon targets based on fresh subdomains, active HTTP surfaces, high-value keywords, and TLS anomalies.</div>
+          <div class="page-sub">v5 bug-bounty hunter intelligence: OWASP 2025 web, OWASP API 2023, DevOps exposure, takeover-routing clues, Nuclei validation strategy, and TLS anomalies.</div>
         </div>
         <div style="display:flex;gap:8px;flex-wrap:wrap">
           <button class="btn" onclick="exportBountyLeads()">Export CSV</button>
@@ -1612,13 +1612,20 @@ html[data-density="comfortable"] .card-body,html[data-density="comfortable"] .mo
           <svg width="14" height="14" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
           <input type="text" id="bounty-search" placeholder="Search host, e.g. admin, api, staging...">
         </div>
-        <span id="bounty-count" style="font-size:12px;color:var(--text-muted)">0 leads</span>
+        <span id="bounty-count" style="font-size:12px;color:var(--text-muted)">0 leads</span><span id="bounty-v5-count" class="badge badge-info">v5 packs loading</span>
       </div>
       <div class="stats-grid" id="bounty-summary-grid" style="margin-bottom:12px">
         <div class="stat-card"><div class="stat-label">High Priority</div><div class="stat-value" id="bounty-stat-high">—</div><div class="stat-sub">Validate first</div></div>
         <div class="stat-card"><div class="stat-label">Active HTTP</div><div class="stat-value" id="bounty-stat-active">—</div><div class="stat-sub">Reachable surfaces</div></div>
         <div class="stat-card"><div class="stat-label">Protected Surfaces</div><div class="stat-value" id="bounty-stat-protected">—</div><div class="stat-sub">401/403 auth boundaries</div></div>
         <div class="stat-card"><div class="stat-label">TLS Anomalies</div><div class="stat-value" id="bounty-stat-tls">—</div><div class="stat-sub">Mismatch/expired/expiring</div></div>
+      </div>
+
+      <div class="card" style="margin-bottom:12px">
+        <div class="card-body" style="font-size:12.5px;color:var(--text-secondary)">
+          <b>v5 Hunter Packs:</b> <span id="bounty-v5-capabilities">Loading current web/API/DevOps/takeover lenses…</span>
+          <div id="bounty-v5-packs" style="margin-top:8px;display:flex;gap:6px;flex-wrap:wrap"></div>
+        </div>
       </div>
 
       <div class="xbow-brief-grid" aria-label="XBOW-style autonomous triage brief">
@@ -4199,6 +4206,19 @@ function renderBountySummary(summary) {
   }
 }
 
+function renderBountyV5(v5) {
+  const cap = document.getElementById('bounty-v5-capabilities');
+  if (cap) cap.textContent = (v5.capabilities || []).join(' • ') || 'Run Subfinder and HTTP enrichment to activate v5 hunter packs.';
+  const count = document.getElementById('bounty-v5-count');
+  if (count) count.textContent = `${fmt(v5.returned || 0)} v5 enriched`;
+  const packs = document.getElementById('bounty-v5-packs');
+  if (!packs) return;
+  const rows = v5.signal_pack_counts || [];
+  packs.innerHTML = rows.length
+    ? rows.map(p => `<span class="badge badge-info">${esc(p.name)} · ${fmt(p.count)}</span>`).join('')
+    : '<span style="color:var(--text-muted)">No v5 signal packs matched yet.</span>';
+}
+
 function bountySeverityBadge(severity) {
   const sev = String(severity || 'low').toLowerCase();
   const cls = sev === 'high' ? 'badge-mismatch' : sev === 'medium' ? 'badge-expiring' : 'badge-ok';
@@ -4212,11 +4232,13 @@ async function loadBountyLeads() {
   body.innerHTML = '<tr><td colspan="6" style="text-align:center;padding:20px;color:var(--text-muted)">Ranking bounty leads...</td></tr>';
   const pid = encodeURIComponent(document.getElementById('bounty-project-select')?.value || '');
   const q = encodeURIComponent(document.getElementById('bounty-search')?.value || '');
-  const [summaryResp, leadsResp] = await Promise.all([
+  const [summaryResp, leadsResp, v5Resp] = await Promise.all([
     apiJSON(`/api/bounty/summary?project_id=${pid}&search=${q}`),
-    apiJSON(`/api/bounty/leads?project_id=${pid}&search=${q}&limit=100`)
+    apiJSON(`/api/bounty/leads?project_id=${pid}&search=${q}&limit=100`),
+    apiJSON(`/api/bounty/v5?project_id=${pid}&search=${q}&limit=100`)
   ]);
   renderBountySummary(summaryResp?.data || {});
+  renderBountyV5(v5Resp?.data || {});
   const { ok, data, error } = leadsResp;
   if (!ok) {
     body.innerHTML = `<tr><td colspan="6" style="text-align:center;padding:20px;color:var(--red)">${esc(error || 'Unable to load bounty leads')}</td></tr>`;
@@ -4234,7 +4256,7 @@ async function loadBountyLeads() {
     const steps = (r.next_steps || []).slice(0, 3).map(e => `<li>${esc(e)}</li>`).join('');
     return `<tr>
       <td data-sort-value="${Number(r.score || 0)}"><div style="font-size:22px;font-weight:800">${fmt(r.score || 0)}</div>${bountySeverityBadge(r.severity)}</td>
-      <td><div style="font-family:var(--mono);font-size:12px;font-weight:700">${esc(r.hostname)}</div><div style="font-size:12px;color:var(--text-secondary)">${esc(r.lead_type || 'Recon candidate')}</div></td>
+      <td><div style="font-family:var(--mono);font-size:12px;font-weight:700">${esc(r.hostname)}</div><div style="font-size:12px;color:var(--text-secondary)">${esc(r.lead_type || 'Recon candidate')}</div><div style="margin-top:5px;display:flex;gap:4px;flex-wrap:wrap">${(r.v5_signal_packs || []).slice(0,2).map(p => `<span class="badge badge-info">v5 ${esc(p.id || p.name)}</span>`).join('')}</div></td>
       <td>${esc(r.project_name || '—')}</td>
       <td><div>${r.http_status_code ?? '—'}</div><a href="${esc(url)}" target="_blank" rel="noopener" style="font-size:11px;color:var(--accent)">${esc((r.http_page_title || r.http_final_url || 'open target').slice(0, 80))}</a></td>
       <td><ul style="margin-left:16px;color:var(--text-secondary);font-size:12px">${evidence}</ul></td>

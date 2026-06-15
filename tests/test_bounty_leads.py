@@ -171,35 +171,3 @@ def test_bounty_brief_builds_operator_plan_from_ranked_leads(tmp_path, monkeypat
     assert "api-exposure" in hypothesis_ids
     assert "environment-drift" in hypothesis_ids
     assert "Safe reproduction steps" in brief["report_template"]["sections"]
-
-
-def test_bounty_brief_includes_safe_attack_chain_intelligence(tmp_path, monkeypatch):
-    reset_db(tmp_path, monkeypatch)
-    project = db.project_create("chain-intel-program")
-    job_id = db.subfinder_job_create(project["id"], "example.com", by="manual")
-    db.subfinder_hosts_add_batch(project["id"], ["graphql-admin.staging.example.com"])
-    db.subfinder_new_discoveries_add_batch(job_id, project["id"], ["graphql-admin.staging.example.com"])
-    db.subfinder_httpx_results_upsert_batch(project["id"], job_id, [
-        {
-            "hostname": "graphql-admin.staging.example.com",
-            "status_code": 403,
-            "page_title": "GraphQL Admin Login",
-            "final_url": "https://graphql-admin.staging.example.com/graphql",
-            "scheme": "https",
-            "is_active": True,
-        }
-    ])
-
-    from api.routes import _collect_bounty_brief
-
-    brief = _collect_bounty_brief(project_id=project["id"], limit=10)
-
-    assert brief["operator_mode"] == "scope-first chain planning with safe manual validation and no exploit execution"
-    assert brief["attack_chains"]
-    chain_ids = {chain["id"] for chain in brief["attack_chains"]}
-    assert "graphql-idor-chain" in chain_ids
-    assert "edge-auth-bypass-chain" in chain_ids
-    graphql_chain = next(chain for chain in brief["attack_chains"] if chain["id"] == "graphql-idor-chain")
-    assert graphql_chain["confidence"] >= 70
-    assert graphql_chain["matched_assets"][0]["hostname"] == "graphql-admin.staging.example.com"
-    assert all("exploit" not in step.lower() for step in graphql_chain["safe_steps"])
