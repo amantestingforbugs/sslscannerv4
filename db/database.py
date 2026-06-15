@@ -227,6 +227,53 @@ def init_db():
         last_checked TEXT NOT NULL,
         UNIQUE(project_id, hostname)
     );
+    CREATE TABLE IF NOT EXISTS assets (
+        id TEXT PRIMARY KEY,
+        project_id TEXT NOT NULL,
+        asset_type TEXT NOT NULL,
+        value TEXT NOT NULL,
+        exposure TEXT DEFAULT 'unknown',
+        source TEXT DEFAULT '',
+        first_seen TEXT NOT NULL,
+        last_seen TEXT NOT NULL,
+        metadata TEXT DEFAULT '{}',
+        UNIQUE(project_id, asset_type, value)
+    );
+    CREATE TABLE IF NOT EXISTS asset_relationships (
+        id TEXT PRIMARY KEY,
+        project_id TEXT NOT NULL,
+        source_asset_id TEXT NOT NULL,
+        target_asset_id TEXT DEFAULT '',
+        relationship_type TEXT NOT NULL,
+        target_value TEXT DEFAULT '',
+        metadata TEXT DEFAULT '{}',
+        first_seen TEXT NOT NULL,
+        last_seen TEXT NOT NULL,
+        UNIQUE(project_id, source_asset_id, relationship_type, target_asset_id, target_value)
+    );
+    CREATE TABLE IF NOT EXISTS asset_observations (
+        id TEXT PRIMARY KEY,
+        asset_id TEXT NOT NULL,
+        project_id TEXT NOT NULL,
+        source TEXT NOT NULL,
+        observed_at TEXT NOT NULL,
+        port INTEGER,
+        protocol TEXT DEFAULT '',
+        data TEXT DEFAULT '{}'
+    );
+    CREATE TABLE IF NOT EXISTS asset_findings (
+        id TEXT PRIMARY KEY,
+        asset_id TEXT NOT NULL,
+        project_id TEXT NOT NULL,
+        source TEXT NOT NULL,
+        severity TEXT DEFAULT '',
+        title TEXT DEFAULT '',
+        finding_key TEXT NOT NULL,
+        details TEXT DEFAULT '{}',
+        first_seen TEXT NOT NULL,
+        last_seen TEXT NOT NULL,
+        UNIQUE(project_id, asset_id, source, finding_key)
+    );
     CREATE INDEX IF NOT EXISTS idx_res_scan  ON results(scan_id);
     CREATE INDEX IF NOT EXISTS idx_res_proj  ON results(project_id);
     CREATE INDEX IF NOT EXISTS idx_res_mis   ON results(scan_id, is_mismatch);
@@ -244,6 +291,11 @@ def init_db():
     CREATE INDEX IF NOT EXISTS idx_sfnew_proj_job_host ON subfinder_new_discoveries(project_id, job_id, hostname);
     CREATE INDEX IF NOT EXISTS idx_sfhttpx_proj_checked ON subfinder_httpx_results(project_id, last_checked DESC);
     CREATE INDEX IF NOT EXISTS idx_openssl_proj_checked ON openssl_results(project_id, last_checked DESC);
+    CREATE INDEX IF NOT EXISTS idx_assets_proj_seen ON assets(project_id, last_seen DESC);
+    CREATE INDEX IF NOT EXISTS idx_assets_value ON assets(value);
+    CREATE INDEX IF NOT EXISTS idx_asset_rel_source ON asset_relationships(source_asset_id, relationship_type);
+    CREATE INDEX IF NOT EXISTS idx_asset_obs_asset_seen ON asset_observations(asset_id, observed_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_asset_findings_asset_seen ON asset_findings(asset_id, last_seen DESC);
     CREATE INDEX IF NOT EXISTS idx_den_scans_domain_started ON domain_enum_scans(domain, started_at DESC);
     CREATE INDEX IF NOT EXISTS idx_den_results_scan ON domain_enum_results(scan_id);
     CREATE INDEX IF NOT EXISTS idx_den_results_domain_host ON domain_enum_results(domain, hostname);
@@ -400,7 +452,7 @@ def project_update(pid, **kw):
     commit()
 
 def project_delete(pid):
-    for t in ("results","alerts","scans","subfinder_jobs","subfinder_hosts","subfinder_new_discoveries","openssl_results"):
+    for t in ("asset_findings","asset_observations","asset_relationships","assets","results","alerts","scans","subfinder_jobs","subfinder_hosts","subfinder_new_discoveries","openssl_results"):
         x(f"DELETE FROM {t} WHERE project_id=?", (pid,))
     x("DELETE FROM projects WHERE id=?", (pid,))
     commit()
@@ -615,6 +667,7 @@ def results_batch_save(sid, pid, batch):
        "signature_algorithm,key_algorithm,key_bits,san_count,match_found,same_base,"
        "is_mismatch,is_expired,is_expiring,is_ok,error,checked_at)"
        " VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", rows)
+    asset_backfill_project(pid)
     commit()
 
 def results_get(sid, flt="all", page=1, per_page=500):
@@ -927,6 +980,7 @@ def subfinder_hosts_add_batch(pid, hostnames):
     xm("INSERT OR IGNORE INTO subfinder_hosts(id,project_id,hostname,source,first_seen,last_seen)"
        " VALUES(?,?,?,?,?,?)", rows)
     xm("UPDATE subfinder_hosts SET last_seen=? WHERE project_id=? AND hostname=?", [(n, pid, h) for h in deduped])
+    asset_backfill_project(pid)
     commit()
     return len(new_hosts), new_hosts
 
@@ -1100,6 +1154,7 @@ def subfinder_httpx_results_upsert_batch(project_id, job_id, rows):
         """,
         clean_rows,
     )
+    asset_backfill_project(project_id)
     commit()
     return len(clean_rows)
 
@@ -1283,6 +1338,166 @@ def openssl_results_list(pid, search="", limit=2000):
         f"FROM openssl_results {where} ORDER BY hostname ASC LIMIT ?",
         params,
     ).fetchall()
+    return [dict(r) for r in rows]
+
+
+# ── Normalized asset inventory ───────────────────────────────────────────────
+
+def _asset_value(value: str) -> str:
+    return (value or "").strip().lower().rstrip(".")
+
+def _json_dump(data) -> str:
+    try:
+        return json.dumps(data or {}, sort_keys=True)
+    except Exception:
+        return "{}"
+
+def asset_upsert(project_id: str, asset_type: str, value: str, source: str = "", exposure: str = "unknown", metadata=None, seen_at: str | None = None):
+    value = _asset_value(value)
+    if not project_id or not value:
+        return None
+    ts = seen_at or now()
+    aid = uid()
+    x("""
+        INSERT INTO assets(id,project_id,asset_type,value,exposure,source,first_seen,last_seen,metadata)
+        VALUES(?,?,?,?,?,?,?,?,?)
+        ON CONFLICT(project_id, asset_type, value) DO UPDATE SET
+          exposure=CASE WHEN excluded.exposure!='unknown' THEN excluded.exposure ELSE assets.exposure END,
+          source=CASE WHEN instr(',' || assets.source || ',', ',' || excluded.source || ',') > 0 OR excluded.source='' THEN assets.source WHEN assets.source='' THEN excluded.source ELSE assets.source || ',' || excluded.source END,
+          last_seen=excluded.last_seen,
+          metadata=CASE WHEN excluded.metadata!='{}' THEN excluded.metadata ELSE assets.metadata END
+    """, (aid, project_id, asset_type, value, exposure or "unknown", source or "", ts, ts, _json_dump(metadata)))
+    row = x("SELECT * FROM assets WHERE project_id=? AND asset_type=? AND value=?", (project_id, asset_type, value)).fetchone()
+    return dict(row) if row else None
+
+def asset_relationship_upsert(project_id: str, source_asset_id: str, relationship_type: str, target_asset_id: str | None = None, target_value: str = "", metadata=None):
+    if not project_id or not source_asset_id or not relationship_type:
+        return
+    ts = now()
+    x("""
+        INSERT INTO asset_relationships(id,project_id,source_asset_id,target_asset_id,relationship_type,target_value,metadata,first_seen,last_seen)
+        VALUES(?,?,?,?,?,?,?,?,?)
+        ON CONFLICT(project_id, source_asset_id, relationship_type, target_asset_id, target_value) DO UPDATE SET
+          metadata=excluded.metadata,last_seen=excluded.last_seen
+    """, (uid(), project_id, source_asset_id, target_asset_id or "", relationship_type, target_value or "", _json_dump(metadata), ts, ts))
+
+def asset_observation_add(asset_id: str, project_id: str, source: str, port=None, protocol: str = "", data=None, observed_at: str | None = None):
+    if not asset_id or not project_id:
+        return
+    x("INSERT INTO asset_observations(id,asset_id,project_id,source,observed_at,port,protocol,data) VALUES(?,?,?,?,?,?,?,?)",
+      (uid(), asset_id, project_id, source, observed_at or now(), port, protocol or "", _json_dump(data)))
+
+def asset_finding_upsert(project_id: str, asset_id: str, source: str, finding_key: str, severity: str = "", title: str = "", details=None):
+    if not project_id or not asset_id or not finding_key:
+        return
+    ts = now()
+    x("""
+        INSERT INTO asset_findings(id,asset_id,project_id,source,severity,title,finding_key,details,first_seen,last_seen)
+        VALUES(?,?,?,?,?,?,?,?,?,?)
+        ON CONFLICT(project_id, asset_id, source, finding_key) DO UPDATE SET
+          severity=excluded.severity,title=excluded.title,details=excluded.details,last_seen=excluded.last_seen
+    """, (uid(), asset_id, project_id, source, severity or "", title or "", finding_key, _json_dump(details), ts, ts))
+    asset_relationship_upsert(project_id, asset_id, "has_finding", None, finding_key, {"source": source, "severity": severity, "title": title})
+
+def asset_backfill_project(project_id: str):
+    if not project_id:
+        return {"assets": 0}
+    count = 0
+    for h in project_hosts(project_id):
+        a = asset_upsert(project_id, "host", h, "project_hosts", "configured")
+        if a:
+            asset_relationship_upsert(project_id, a["id"], "belongs_to_project", None, project_id)
+            count += 1
+    for r in x("SELECT hostname,source,first_seen,last_seen FROM subfinder_hosts WHERE project_id=?", (project_id,)).fetchall():
+        a = asset_upsert(project_id, "host", r["hostname"], r["source"] or "subfinder", "discovered", seen_at=r["last_seen"])
+        if a:
+            asset_relationship_upsert(project_id, a["id"], "belongs_to_project", None, project_id)
+            asset_observation_add(a["id"], project_id, "subfinder", data=dict(r), observed_at=r["last_seen"])
+            count += 1
+    for r in x("SELECT * FROM subfinder_httpx_results WHERE project_id=?", (project_id,)).fetchall():
+        a = asset_upsert(project_id, "host", r["hostname"], "httpx", "internet" if r["is_active"] else "observed", seen_at=r["last_checked"], metadata={"status_code": r["status_code"], "title": r["page_title"], "url": r["final_url"]})
+        if a:
+            port = 443 if (r["scheme"] or "").lower() == "https" else 80 if (r["scheme"] or "").lower() == "http" else None
+            asset_observation_add(a["id"], project_id, "httpx", port=port, protocol=r["scheme"] or "http", data=dict(r), observed_at=r["last_checked"])
+            if port:
+                asset_relationship_upsert(project_id, a["id"], "observed_on_port", None, str(port), {"scheme": r["scheme"], "status_code": r["status_code"]})
+            final_host = _asset_value((r["final_url"] or "").split("://")[-1].split("/")[0].split(":")[0])
+            if final_host and final_host != _asset_value(r["hostname"]):
+                target = asset_upsert(project_id, "host", final_host, "httpx", "internet", seen_at=r["last_checked"])
+                if target:
+                    asset_relationship_upsert(project_id, a["id"], "resolves_to", target["id"], final_host, {"via": "httpx_final_url"})
+            count += 1
+    for r in x("SELECT * FROM results WHERE project_id=?", (project_id,)).fetchall():
+        a = asset_upsert(project_id, "host", r["hostname"], "tls_scan", "tls", seen_at=r["checked_at"], metadata={"cn": r["cn"], "expiry": r["expiry"], "issuer": r["issuer"]})
+        if a:
+            asset_observation_add(a["id"], project_id, "tls_scan", port=443, protocol="tls", data=dict(r), observed_at=r["checked_at"])
+            asset_relationship_upsert(project_id, a["id"], "observed_on_port", None, "443", {"protocol": "tls"})
+            if r["fingerprint_sha256"]:
+                cert = asset_upsert(project_id, "certificate", r["fingerprint_sha256"], "tls_scan", "certificate", seen_at=r["checked_at"], metadata={"cn": r["cn"], "issuer": r["issuer"], "expiry": r["expiry"]})
+                if cert:
+                    asset_relationship_upsert(project_id, a["id"], "served_by_certificate", cert["id"], r["fingerprint_sha256"])
+            if r["is_mismatch"] or r["is_expired"] or r["is_expiring"] or r["error"]:
+                key = "tls:" + ("error" if r["error"] else "expired" if r["is_expired"] else "mismatch" if r["is_mismatch"] else "expiring")
+                asset_finding_upsert(project_id, a["id"], "tls_scan", key, "high" if r["is_expired"] or r["error"] else "medium", key.replace("tls:", "TLS "), dict(r))
+            count += 1
+    commit()
+    return {"assets": count}
+
+def asset_record_nuclei_findings(project_id: str, findings: list[dict], scan_id: str = ""):
+    for f in findings or []:
+        host = _asset_value(f.get("host") or f.get("matched") or f.get("url") or f.get("target") or "")
+        if "://" in host:
+            try:
+                from urllib.parse import urlparse
+                host = urlparse(host).hostname or host
+            except Exception:
+                pass
+        a = asset_upsert(project_id, "host", host, "nuclei", "internet", metadata={"scan_id": scan_id})
+        if not a:
+            continue
+        key = f.get("template_id") or f.get("matcher_name") or f.get("name") or f.get("matched") or _json_dump(f)[:120]
+        title = f.get("name") or f.get("template_id") or "Nuclei finding"
+        asset_finding_upsert(project_id, a["id"], "nuclei", str(key), f.get("severity") or "", title, {**f, "scan_id": scan_id})
+        asset_observation_add(a["id"], project_id, "nuclei", data=f)
+    commit()
+
+def assets_list(project_id="", search="", page=1, per_page=100):
+    clauses, params = ["1=1"], []
+    if project_id:
+        clauses.append("a.project_id=?"); params.append(project_id)
+    if search:
+        clauses.append("LOWER(a.value) LIKE ?"); params.append(f"%{search.lower()}%")
+    where = " AND ".join(clauses)
+    total = x(f"SELECT COUNT(*) FROM assets a WHERE {where}", params).fetchone()[0]
+    offset = (page-1)*per_page
+    rows = x(f"""
+      SELECT a.*, p.name project_name,
+        (SELECT COUNT(*) FROM asset_findings f WHERE f.asset_id=a.id) findings_count,
+        (SELECT title FROM asset_findings f WHERE f.asset_id=a.id ORDER BY f.last_seen DESC LIMIT 1) latest_finding,
+        (SELECT severity FROM asset_findings f WHERE f.asset_id=a.id ORDER BY f.last_seen DESC LIMIT 1) latest_severity
+      FROM assets a JOIN projects p ON p.id=a.project_id
+      WHERE {where}
+      ORDER BY a.last_seen DESC LIMIT ? OFFSET ?
+    """, params + [per_page, offset]).fetchall()
+    return {"assets": [dict(r) for r in rows], "total": total, "page": page, "pages": max(1,(total+per_page-1)//per_page)}
+
+def asset_get(asset_id: str):
+    r = x("SELECT a.*,p.name project_name FROM assets a JOIN projects p ON p.id=a.project_id WHERE a.id=?", (asset_id,)).fetchone()
+    if not r:
+        return None
+    d = dict(r)
+    d["observations"] = [dict(o) for o in x("SELECT * FROM asset_observations WHERE asset_id=? ORDER BY observed_at DESC LIMIT 100", (asset_id,)).fetchall()]
+    d["findings"] = [dict(f) for f in x("SELECT * FROM asset_findings WHERE asset_id=? ORDER BY last_seen DESC LIMIT 100", (asset_id,)).fetchall()]
+    return d
+
+def asset_relationships_get(asset_id: str):
+    rows = x("""
+      SELECT r.*, ta.asset_type target_asset_type, ta.value target_asset_value
+      FROM asset_relationships r
+      LEFT JOIN assets ta ON ta.id=r.target_asset_id
+      WHERE r.source_asset_id=? OR r.target_asset_id=?
+      ORDER BY r.last_seen DESC
+    """, (asset_id, asset_id)).fetchall()
     return [dict(r) for r in rows]
 
 

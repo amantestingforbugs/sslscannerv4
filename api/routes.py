@@ -1011,6 +1011,32 @@ def get_scan(sid):
     return ok(s)
 
 
+@api.get("/assets")
+def assets_list():
+    project_id = request.args.get("project_id", "").strip()
+    search = request.args.get("search", "").strip()
+    page = _safe_int(request.args.get("page", 1), 1, min_value=1)
+    per_page = _safe_int(request.args.get("per_page", 100), 100, min_value=1, max_value=500)
+    if project_id:
+        db.asset_backfill_project(project_id)
+    return ok(db.assets_list(project_id=project_id, search=search, page=page, per_page=per_page))
+
+
+@api.get("/assets/<asset_id>")
+def asset_detail(asset_id):
+    asset = db.asset_get(asset_id)
+    if not asset:
+        return err("Asset not found", 404)
+    return ok(asset)
+
+
+@api.get("/assets/<asset_id>/relationships")
+def asset_relationships(asset_id):
+    if not db.asset_get(asset_id):
+        return err("Asset not found", 404)
+    return ok({"relationships": db.asset_relationships_get(asset_id)})
+
+
 @api.get("/scans/<sid>/results")
 def get_results(sid):
     flt = request.args.get("filter", "all")
@@ -1866,6 +1892,10 @@ def _run_nuclei_sync(pid: str, project_name: str, mode: str, hosts: list[str]) -
             detail = stderr_tail or stdout_tail or f"nuclei exited with code {run.returncode}"
             return None, f"Nuclei scan failed: {detail}", 500
 
+        try:
+            db.asset_record_nuclei_findings(pid, findings, scan_id=f"sync:{int(time.time())}")
+        except Exception as exc:
+            log.warning("Unable to persist nuclei findings to asset inventory: %s", exc)
         return {
             "project_id": pid,
             "project_name": project_name,
@@ -2010,6 +2040,11 @@ def _nuclei_worker(scan_id: str):
             state = _nuclei_state.get(scan_id) or {}
             stopped = bool(state.get("stop_requested"))
             findings = list(state.get("findings") or [])
+        if pid:
+            try:
+                db.asset_record_nuclei_findings(pid, findings, scan_id=scan_id)
+            except Exception as exc:
+                log.warning("Unable to persist nuclei findings to asset inventory: %s", exc)
         if stopped:
             _nuclei_log_status(scan_id, "Nuclei scan stopped", status="stopped", exit_code=exit_code, finished_at=db.now(), elapsed_seconds=elapsed, progress_percent=100)
         elif exit_code != 0 and not findings:

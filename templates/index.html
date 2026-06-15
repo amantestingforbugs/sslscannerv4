@@ -969,6 +969,10 @@ html[data-density="comfortable"] .card-body,html[data-density="comfortable"] .mo
       <svg fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path d="M3 7h18M3 12h18M3 17h18"/><circle cx="7" cy="7" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="17" cy="17" r="1"/></svg>
       <span>Discoveries</span>
     </button>
+    <button class="nav-item" data-page="assets">
+      <svg fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path d="M4 7h16M4 12h16M4 17h16"/><path d="M8 5v14M16 5v14"/></svg>
+      <span>Assets</span>
+    </button>
     <button class="nav-item" data-page="bounty-leads">
       <svg fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path d="M12 3l2.6 5.3 5.9.9-4.2 4.1 1 5.8L12 16.4 6.7 19.1l1-5.8-4.2-4.1 5.9-.9L12 3z"/></svg>
       <span>Bounty Leads</span>
@@ -1458,6 +1462,34 @@ html[data-density="comfortable"] .card-body,html[data-density="comfortable"] .mo
         </div>
       </div>
 
+    </div>
+
+
+    <!-- ══════ ASSETS ══════ -->
+    <div class="page" id="page-assets">
+      <div class="page-header">
+        <div>
+          <div class="page-title">Assets</div>
+          <div class="page-sub">Normalized inventory from projects, Subfinder, HTTP probes, TLS scans, and Nuclei findings.</div>
+        </div>
+        <button class="btn btn-primary" onclick="loadAssets()">Refresh Assets</button>
+      </div>
+      <div class="card">
+        <div class="card-header">
+          <span class="card-title">Asset Inventory</span>
+          <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+            <select class="form-input" id="assets-project-filter" onchange="loadAssets()" style="width:220px"><option value="">All projects</option></select>
+            <input class="form-input" id="assets-search" placeholder="Search hostname, cert, IP..." oninput="debounceAssets()" style="width:240px">
+            <span id="assets-count" style="font-size:12px;color:var(--text-muted)">0 assets</span>
+          </div>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Asset</th><th>Type</th><th>Exposure</th><th>Latest Findings</th><th>Ownership / Project</th><th>Last Seen</th></tr></thead>
+            <tbody id="assets-body"><tr><td colspan="6" style="text-align:center;padding:16px;color:var(--text-muted)">Loading assets…</td></tr></tbody>
+          </table>
+        </div>
+      </div>
     </div>
 
     <!-- ══════ ALERTS ══════ -->
@@ -2181,6 +2213,7 @@ const PAGE_INFRA = {
   alerts: { title: 'Alerts', onEnter: loadAlerts },
   subfinder: { title: 'Subfinder', onEnter: initSfPage },
   discoveries: { title: 'Discoveries', onEnter: initDiscoveriesPage },
+  assets: { title: 'Assets', onEnter: initAssetsPage },
   'bounty-leads': { title: 'Bounty Leads', onEnter: initBountyLeadsPage },
   'subfinder-raw': { title: 'Subfinder Enumeration', onEnter: initSfRawPage },
   nuclei: { title: 'Nuclei CVEs', onEnter: initNucleiPage },
@@ -2188,7 +2221,7 @@ const PAGE_INFRA = {
   logs: { title: 'Logs', onEnter: loadLogsPage },
   settings: { title: 'Alert Routing', onEnter: loadAlertSettings },
 };
-const QUICK_ACTION_PAGES = ['dashboard', 'projects', 'alerts', 'subfinder', 'discoveries', 'bounty-leads', 'subfinder-raw', 'nuclei', 'openssl', 'logs', 'settings'];
+const QUICK_ACTION_PAGES = ['dashboard', 'projects', 'alerts', 'subfinder', 'discoveries', 'assets', 'bounty-leads', 'subfinder-raw', 'nuclei', 'openssl', 'logs', 'settings'];
 const QUICK_ACTIONS = [
   ...QUICK_ACTION_PAGES.map(page => ({
     label: PAGE_INFRA[page]?.title || page,
@@ -3536,6 +3569,54 @@ async function loadHistory(pid) {
 function viewScan(sid, scan) {
   curSid=sid; showResults(scan);
   document.getElementById('results-card').scrollIntoView({behavior:'smooth'});
+}
+
+
+// ════════════════════════════════════════════════════════════
+// ASSETS
+// ════════════════════════════════════════════════════════════
+let assetsTimer = null;
+async function initAssetsPage() {
+  await ensureAssetsProjectFilter();
+  await loadAssets();
+}
+async function ensureAssetsProjectFilter() {
+  const el = document.getElementById('assets-project-filter');
+  if (!el) return;
+  const prev = el.value || '';
+  const projs = projectsCache.length ? projectsCache : (await apiJSON('/api/projects')).data || [];
+  projectsCache = projs || [];
+  el.innerHTML = '<option value="">All projects</option>' + (projs || []).map(p => `<option value="${p.id}">${esc(p.name)}</option>`).join('');
+  if (prev && (projs || []).some(p => p.id === prev)) el.value = prev;
+}
+function debounceAssets() {
+  clearTimeout(assetsTimer);
+  assetsTimer = setTimeout(() => loadAssets(), 250);
+}
+async function loadAssets() {
+  await ensureAssetsProjectFilter();
+  const pid = encodeURIComponent(document.getElementById('assets-project-filter')?.value || '');
+  const q = encodeURIComponent((document.getElementById('assets-search')?.value || '').trim());
+  const { ok, data, error } = await apiJSON(`/api/assets?project_id=${pid}&search=${q}&per_page=250`);
+  const body = document.getElementById('assets-body');
+  if (!ok) { body.innerHTML = `<tr><td colspan="6" style="text-align:center;padding:16px;color:var(--red)">${esc(error || 'Failed to load assets')}</td></tr>`; return; }
+  const rows = data?.assets || [];
+  document.getElementById('assets-count').textContent = `${fmt(data?.total || rows.length)} assets`;
+  body.innerHTML = rows.length ? rows.map(a => `
+    <tr onclick="showAssetRelationships('${esc(a.id)}')" style="cursor:pointer">
+      <td><b>${esc(a.value)}</b><div style="font-size:11px;color:var(--text-muted)">${esc(a.source || '')}</div></td>
+      <td><span class="badge">${esc(a.asset_type)}</span></td>
+      <td>${esc(a.exposure || 'unknown')}</td>
+      <td>${a.findings_count ? `<b>${fmt(a.findings_count)}</b> · ${esc(a.latest_severity || '')} ${esc(a.latest_finding || '')}` : '<span style="color:var(--text-muted)">No findings</span>'}</td>
+      <td>${esc(a.project_name || a.project_id || '')}</td>
+      <td>${a.last_seen ? new Date(a.last_seen).toLocaleString() : '—'}</td>
+    </tr>`).join('') : '<tr><td colspan="6" style="text-align:center;padding:16px;color:var(--text-muted)">No assets found. Run scans or discovery to populate inventory.</td></tr>';
+}
+async function showAssetRelationships(id) {
+  const { ok, data } = await apiJSON(`/api/assets/${encodeURIComponent(id)}/relationships`);
+  if (!ok) return;
+  const rels = data?.relationships || [];
+  toast(rels.length ? `${fmt(rels.length)} relationship(s): ${rels.slice(0,3).map(r => r.relationship_type).join(', ')}` : 'No relationships recorded yet', 'ok');
 }
 
 // ════════════════════════════════════════════════════════════
