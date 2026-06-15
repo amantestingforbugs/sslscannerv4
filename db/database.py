@@ -227,6 +227,39 @@ def init_db():
         last_checked TEXT NOT NULL,
         UNIQUE(project_id, hostname)
     );
+
+    CREATE TABLE IF NOT EXISTS jobs (
+        id TEXT PRIMARY KEY,
+        type TEXT NOT NULL,
+        project_id TEXT DEFAULT '',
+        status TEXT DEFAULT 'queued',
+        progress INTEGER DEFAULT 0,
+        total INTEGER DEFAULT 0,
+        done INTEGER DEFAULT 0,
+        source TEXT DEFAULT '',
+        payload_json TEXT DEFAULT '{}',
+        started_at TEXT,
+        finished_at TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS job_events (
+        id TEXT PRIMARY KEY,
+        job_id TEXT NOT NULL,
+        event TEXT NOT NULL,
+        payload_json TEXT DEFAULT '{}',
+        created_at TEXT NOT NULL,
+        FOREIGN KEY(job_id) REFERENCES jobs(id) ON DELETE CASCADE
+    );
+    CREATE TABLE IF NOT EXISTS job_controls (
+        job_id TEXT NOT NULL,
+        action TEXT NOT NULL,
+        requested INTEGER DEFAULT 0,
+        reason TEXT DEFAULT '',
+        updated_at TEXT NOT NULL,
+        PRIMARY KEY(job_id, action),
+        FOREIGN KEY(job_id) REFERENCES jobs(id) ON DELETE CASCADE
+    );
     CREATE TABLE IF NOT EXISTS assets (
         id TEXT PRIMARY KEY,
         project_id TEXT NOT NULL,
@@ -291,6 +324,9 @@ def init_db():
     CREATE INDEX IF NOT EXISTS idx_sfnew_proj_job_host ON subfinder_new_discoveries(project_id, job_id, hostname);
     CREATE INDEX IF NOT EXISTS idx_sfhttpx_proj_checked ON subfinder_httpx_results(project_id, last_checked DESC);
     CREATE INDEX IF NOT EXISTS idx_openssl_proj_checked ON openssl_results(project_id, last_checked DESC);
+    CREATE INDEX IF NOT EXISTS idx_jobs_type_status ON jobs(type, status, updated_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_jobs_project ON jobs(project_id, type, created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_job_events_job_rowid ON job_events(job_id);
     CREATE INDEX IF NOT EXISTS idx_assets_proj_seen ON assets(project_id, last_seen DESC);
     CREATE INDEX IF NOT EXISTS idx_assets_value ON assets(value);
     CREATE INDEX IF NOT EXISTS idx_asset_rel_source ON asset_relationships(source_asset_id, relationship_type);
@@ -395,6 +431,7 @@ def init_db():
         x("CREATE UNIQUE INDEX IF NOT EXISTS idx_sfnew_project_host_unique ON subfinder_new_discoveries(project_id, hostname)")
     except sqlite3.IntegrityError:
         pass
+    x("UPDATE jobs SET status='stopped', finished_at=COALESCE(finished_at, ?), updated_at=? WHERE status IN ('queued','preparing','running','paused','stopping')", (now(), now()))
     x(
         """
         INSERT OR IGNORE INTO alert_settings(
@@ -452,8 +489,8 @@ def project_update(pid, **kw):
     commit()
 
 def project_delete(pid):
-    for t in ("asset_findings","asset_observations","asset_relationships","assets","results","alerts","scans","subfinder_jobs","subfinder_hosts","subfinder_new_discoveries","openssl_results"):
-        x(f"DELETE FROM {t} WHERE project_id=?", (pid,))
+    for t in ("job_events","job_controls","jobs","asset_findings","asset_observations","asset_relationships","assets","results","alerts","scans","subfinder_jobs","subfinder_hosts","subfinder_new_discoveries","openssl_results"):
+        x(f"DELETE FROM {t} WHERE project_id=?", (pid,)) if t not in {"job_events", "job_controls"} else None
     x("DELETE FROM projects WHERE id=?", (pid,))
     commit()
 
@@ -1519,3 +1556,134 @@ def stats_global():
             "expiring": r["expi"] or 0, "ok": r["ok"] or 0,
             "unseen_alerts": unseen, "subfinder_hosts": sf_hosts,
             "active_scans": active_scans}
+
+# ── Durable jobs ──────────────────────────────────────────────────────────────
+
+def _job_decode(row):
+    if not row:
+        return None
+    d = dict(row)
+    try:
+        d["payload"] = json.loads(d.get("payload_json") or "{}")
+    except Exception:
+        d["payload"] = {}
+    d.pop("payload_json", None)
+    return d
+
+
+def job_create(job_type, payload=None, **fields):
+    jid = fields.pop("id", None) or uid()
+    n = now()
+    status = fields.pop("status", "queued")
+    if job_get(jid):
+        update = {
+            "type": job_type,
+            "project_id": fields.pop("project_id", "") or "",
+            "status": status,
+            "progress": int(fields.pop("progress", 0) or 0),
+            "total": int(fields.pop("total", 0) or 0),
+            "done": int(fields.pop("done", 0) or 0),
+            "source": fields.pop("source", "") or fields.pop("triggered_by", "") or "",
+            "payload": payload or {},
+            "started_at": fields.pop("started_at", n),
+            "finished_at": fields.pop("finished_at", None),
+        }
+        return job_update(jid, **update)
+    x(
+        """
+        INSERT INTO jobs(id,type,project_id,status,progress,total,done,source,payload_json,
+                         started_at,finished_at,created_at,updated_at)
+        VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)
+        """,
+        (
+            jid,
+            job_type,
+            fields.pop("project_id", "") or "",
+            status,
+            int(fields.pop("progress", 0) or 0),
+            int(fields.pop("total", 0) or 0),
+            int(fields.pop("done", 0) or 0),
+            fields.pop("source", "") or fields.pop("triggered_by", "") or "",
+            json.dumps(payload or {}, separators=(",", ":")),
+            fields.pop("started_at", n),
+            fields.pop("finished_at", None),
+            n,
+            n,
+        ),
+    )
+    x("INSERT OR IGNORE INTO job_controls(job_id,action,requested,updated_at) VALUES(?,?,0,?)", (jid, "pause", n))
+    x("INSERT OR IGNORE INTO job_controls(job_id,action,requested,updated_at) VALUES(?,?,0,?)", (jid, "cancel", n))
+    commit()
+    return job_get(jid)
+
+
+def job_get(job_id):
+    return _job_decode(x("SELECT * FROM jobs WHERE id=?", (job_id,)).fetchone())
+
+
+def job_list(job_type=None, project_id=None, statuses=None, active=None, limit=100):
+    where, params = [], []
+    if job_type:
+        where.append("type=?"); params.append(job_type)
+    if project_id:
+        where.append("project_id=?"); params.append(project_id)
+    if active is not None:
+        statuses = ["queued", "preparing", "running", "paused", "stopping"] if active else ["done", "error", "stopped", "cancelled"]
+    if statuses:
+        where.append("status IN (%s)" % ",".join("?" for _ in statuses)); params.extend(statuses)
+    sql = "SELECT * FROM jobs" + (" WHERE " + " AND ".join(where) if where else "") + " ORDER BY created_at DESC LIMIT ?"
+    params.append(int(limit or 100))
+    return [_job_decode(r) for r in x(sql, params).fetchall()]
+
+
+def job_update(job_id, **kw):
+    if not kw:
+        return job_get(job_id)
+    if "payload" in kw:
+        kw["payload_json"] = json.dumps(kw.pop("payload") or {}, separators=(",", ":"))
+    kw["updated_at"] = now()
+    sets = ",".join(f"{k}=?" for k in kw)
+    x(f"UPDATE jobs SET {sets} WHERE id=?", [*kw.values(), job_id])
+    commit()
+    return job_get(job_id)
+
+
+def job_event_append(job_id, event, data=None):
+    eid, n = uid(), now()
+    x("INSERT INTO job_events(id,job_id,event,payload_json,created_at) VALUES(?,?,?,?,?)", (eid, job_id, event, json.dumps(data or {}, separators=(",", ":")), n))
+    commit()
+    row = x("SELECT rowid,* FROM job_events WHERE id=?", (eid,)).fetchone()
+    d = dict(row)
+    d["payload"] = json.loads(d.pop("payload_json") or "{}")
+    return d
+
+
+def job_events_since(last_id=0, limit=100):
+    rows = x("SELECT rowid,* FROM job_events WHERE rowid>? ORDER BY rowid ASC LIMIT ?", (int(last_id or 0), int(limit or 100))).fetchall()
+    out = []
+    for r in rows:
+        d = dict(r)
+        try: d["payload"] = json.loads(d.pop("payload_json") or "{}")
+        except Exception: d["payload"] = {}
+        out.append(d)
+    return out
+
+
+def job_control_request(job_id, action, reason=""):
+    n = now()
+    if action == "resume":
+        x("UPDATE job_controls SET requested=0, updated_at=?, reason=? WHERE job_id=? AND action='pause'", (n, reason, job_id))
+        job_update(job_id, status="running")
+    elif action == "pause":
+        x("INSERT INTO job_controls(job_id,action,requested,reason,updated_at) VALUES(?,?,?,?,?) ON CONFLICT(job_id,action) DO UPDATE SET requested=1,reason=excluded.reason,updated_at=excluded.updated_at", (job_id, "pause", 1, reason, n))
+        job_update(job_id, status="paused")
+    elif action in {"cancel", "stop"}:
+        x("INSERT INTO job_controls(job_id,action,requested,reason,updated_at) VALUES(?,?,?,?,?) ON CONFLICT(job_id,action) DO UPDATE SET requested=1,reason=excluded.reason,updated_at=excluded.updated_at", (job_id, "cancel", 1, reason, n))
+        job_update(job_id, status="stopping")
+    commit()
+    return True
+
+
+def job_control_get(job_id):
+    rows = x("SELECT action,requested FROM job_controls WHERE job_id=?", (job_id,)).fetchall()
+    return {r["action"]: bool(r["requested"]) for r in rows}
