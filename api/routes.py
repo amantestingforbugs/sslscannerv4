@@ -510,6 +510,132 @@ def _collect_bounty_summary(project_id: str = "", search: str = "") -> dict:
         ),
     }
 
+
+BOUNTY_HYPOTHESIS_RULES = [
+    {
+        "id": "access-control",
+        "match": ("admin", "administrator", "login", "dashboard", "sso", "auth"),
+        "title": "Access-control and authentication boundary review",
+        "tests": [
+            "Map login, logout, password reset, invitation, and SSO callback flows.",
+            "Validate horizontal and vertical authorization with low-privilege accounts you own.",
+            "Check redirects, method overrides, and path normalization for protected routes.",
+        ],
+        "reporting": "Include affected URL, role matrix, request/response pair, impact, and remediation boundary.",
+    },
+    {
+        "id": "api-exposure",
+        "match": ("api", "swagger", "openapi", "graphql"),
+        "title": "API/schema exposure and IDOR review",
+        "tests": [
+            "Enumerate documented endpoints and compare unauthenticated vs authenticated responses.",
+            "Probe object identifiers you own for predictable IDs, tenant leaks, and excessive fields.",
+            "Review GraphQL introspection, batching, depth, and authorization on nested resolvers where allowed.",
+        ],
+        "reporting": "Attach schema excerpts, minimal safe proof-of-concept requests, and tenant/user isolation impact.",
+    },
+    {
+        "id": "devops-panel",
+        "match": ("jenkins", "git", "grafana", "kibana", "prometheus", "metrics", "jira", "confluence"),
+        "title": "DevOps/SaaS panel exposure review",
+        "tests": [
+            "Confirm whether the panel is intended to be internet-accessible and in bounty scope.",
+            "Check unauthenticated metadata, dashboards, version banners, and sensitive project names.",
+            "Test only safe read-only access paths; avoid destructive CI/CD, issue-tracker, or monitoring actions.",
+        ],
+        "reporting": "Document exposed product, access level, screenshots, sensitive metadata, and business impact.",
+    },
+    {
+        "id": "environment-drift",
+        "match": ("dev", "test", "stage", "staging", "uat", "internal"),
+        "title": "Non-production environment drift review",
+        "tests": [
+            "Compare headers, auth requirements, and feature flags against production equivalents.",
+            "Look for debug output, stack traces, sample credentials, and permissive CORS on owned test accounts.",
+            "Validate that staging data is synthetic and does not expose customer or employee information.",
+        ],
+        "reporting": "Show environment indicator, drift from production controls, and concrete data/control exposure.",
+    },
+    {
+        "id": "tls-routing",
+        "match": ("tls", "certificate", "mismatch", "expired"),
+        "title": "TLS/routing anomaly review",
+        "tests": [
+            "Inspect certificate CN/SANs for unrelated tenants, stale brands, or takeover clues.",
+            "Compare HTTP Host routing over HTTPS for misdirected default vhosts and stale services.",
+            "Check expiry/mismatch impact on authentication, API clients, and sensitive user flows.",
+        ],
+        "reporting": "Include certificate fingerprint, CN/SAN evidence, affected hostname, and routing impact.",
+    },
+]
+
+
+def _lead_keywords(row: dict) -> str:
+    return " ".join(str(row.get(k) or "") for k in ("hostname", "lead_type", "http_page_title", "http_final_url", "evidence")).lower()
+
+
+def _hypotheses_for_leads(leads: list[dict]) -> list[dict]:
+    joined = " ".join(_lead_keywords(r) for r in leads)
+    selected = []
+    for rule in BOUNTY_HYPOTHESIS_RULES:
+        if any(token in joined for token in rule["match"]):
+            selected.append(rule)
+    if not selected:
+        selected.append({
+            "id": "baseline-recon",
+            "title": "Baseline recon and exposure review",
+            "tests": [
+                "Verify scope, ownership, and safe testing rules before touching any asset.",
+                "Capture status, title, redirects, technologies, and screenshots for active hosts.",
+                "Prioritize authenticated, high-impact business functionality over noisy automated checks.",
+            ],
+            "reporting": "Bundle exact URLs, safe reproduction steps, observed impact, and suggested fix.",
+        })
+    return selected
+
+
+def _collect_bounty_brief(project_id: str = "", search: str = "", limit: int = 25) -> dict:
+    """Build a bug-bounty operator brief from ranked authorized attack-surface leads."""
+    leads_data = _collect_bounty_leads(project_id=project_id, search=search, limit=limit)
+    leads = leads_data.get("rows", [])
+    summary = _collect_bounty_summary(project_id=project_id, search=search)
+    critical_path = []
+    for idx, lead in enumerate(leads[:10], start=1):
+        critical_path.append({
+            "rank": idx,
+            "hostname": lead.get("hostname"),
+            "score": lead.get("score"),
+            "severity": lead.get("severity"),
+            "why": lead.get("evidence", [])[:4],
+            "first_actions": lead.get("next_steps", [])[:3],
+        })
+    return {
+        "generated_at": db.now(),
+        "project_id": project_id,
+        "search": search,
+        "scope_guardrails": [
+            "Only test assets that are explicitly authorized by the program or your configured scope.",
+            "Prefer low-impact proof-of-concepts; do not run destructive, persistence, spam, or data-exfiltration tests.",
+            "Record timestamps, account IDs you own, request IDs, and exact URLs for reproducibility.",
+        ],
+        "executive_summary": summary.get("executive_summary"),
+        "kpis": summary,
+        "critical_path": critical_path,
+        "hypotheses": _hypotheses_for_leads(leads),
+        "report_template": {
+            "title": "[Asset] Vulnerability class with concise impact",
+            "sections": [
+                "Scope and authorization statement",
+                "Affected asset(s) and environment",
+                "Impact and affected users/data",
+                "Safe reproduction steps",
+                "Evidence: requests, responses, screenshots, and timestamps",
+                "Suggested remediation and validation steps",
+            ],
+        },
+        "method": "Transforms ranked authorized leads into a manual validation plan, hypotheses, and report-ready evidence checklist.",
+    }
+
 def _run_openssl_subject(hostname: str, timeout: int = 20) -> dict:
     cmd = ["openssl", "s_client", "-connect", f"{hostname}:443"]
     try:
@@ -1142,6 +1268,14 @@ def bounty_leads():
     search = (request.args.get("search") or "").strip()
     limit = _safe_int(request.args.get("limit", 100), 100, min_value=1, max_value=500)
     return ok(_collect_bounty_leads(project_id=project_id, search=search, limit=limit))
+
+
+@api.get("/bounty/brief")
+def bounty_brief():
+    project_id = (request.args.get("project_id") or "").strip()
+    search = (request.args.get("search") or "").strip()
+    limit = _safe_int(request.args.get("limit", 25), 25, min_value=1, max_value=100)
+    return ok(_collect_bounty_brief(project_id=project_id, search=search, limit=limit))
 
 
 @api.get("/bounty/leads/export")

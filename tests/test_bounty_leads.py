@@ -99,3 +99,41 @@ def test_bounty_summary_rolls_up_company_attack_surface(tmp_path, monkeypatch):
     assert summary["tls_anomalies"] == 1
     assert summary["top_surface_types"]
     assert "high-priority" in summary["executive_summary"]
+
+
+def test_bounty_brief_builds_operator_plan_from_ranked_leads(tmp_path, monkeypatch):
+    reset_db(tmp_path, monkeypatch)
+    project = db.project_create("bounty-brief-program")
+    job_id = db.subfinder_job_create(project["id"], "example.com", by="manual")
+    db.subfinder_hosts_add_batch(project["id"], ["admin-api.staging.example.com", "www.example.com"])
+    db.subfinder_new_discoveries_add_batch(job_id, project["id"], ["admin-api.staging.example.com"])
+    db.subfinder_httpx_results_upsert_batch(project["id"], job_id, [
+        {
+            "hostname": "admin-api.staging.example.com",
+            "status_code": 403,
+            "page_title": "OpenAPI Admin Login",
+            "final_url": "https://admin-api.staging.example.com/swagger",
+            "scheme": "https",
+            "is_active": True,
+        },
+        {
+            "hostname": "www.example.com",
+            "status_code": 200,
+            "page_title": "Home",
+            "final_url": "https://www.example.com",
+            "scheme": "https",
+            "is_active": True,
+        },
+    ])
+
+    from api.routes import _collect_bounty_brief
+
+    brief = _collect_bounty_brief(project_id=project["id"], limit=10)
+
+    assert brief["critical_path"][0]["hostname"] == "admin-api.staging.example.com"
+    assert brief["scope_guardrails"]
+    hypothesis_ids = {h["id"] for h in brief["hypotheses"]}
+    assert "access-control" in hypothesis_ids
+    assert "api-exposure" in hypothesis_ids
+    assert "environment-drift" in hypothesis_ids
+    assert "Safe reproduction steps" in brief["report_template"]["sections"]
