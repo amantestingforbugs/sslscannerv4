@@ -472,7 +472,7 @@ def _score_bounty_lead(row: dict) -> dict:
 
 
 def _collect_bounty_leads(project_id: str = "", search: str = "", limit: int = 100) -> dict:
-    where = ["p.enabled=1"]
+    where = ["p.enabled=1", "COALESCE(hx.is_active, 0)=1"]
     params: list = []
     if project_id:
         where.append("p.id=?")
@@ -521,7 +521,7 @@ def _collect_bounty_leads(project_id: str = "", search: str = "", limit: int = 1
         LEFT JOIN subfinder_httpx_results hx ON hx.project_id=h.project_id AND hx.hostname=h.hostname
         LEFT JOIN latest_result r ON r.project_id=h.project_id AND r.hostname=h.hostname
         WHERE {where_sql}
-        ORDER BY h.first_seen DESC
+        ORDER BY hx.last_checked DESC, h.first_seen DESC
         LIMIT ?
         """,
         params + [max(1, min(500, limit * 4))],
@@ -535,7 +535,7 @@ def _collect_bounty_leads(project_id: str = "", search: str = "", limit: int = 1
         "returned": len(selected),
         "project_id": project_id,
         "search": search,
-        "method": "Ranks authorized Subfinder discoveries by active HTTP exposure, high-value host keywords, fresh-discovery status, and TLS anomalies.",
+        "method": "Ranks authorized Subfinder discoveries after validating host reachability with ProjectDiscovery httpx, then scores active HTTP exposure, high-value host keywords, fresh-discovery status, and TLS anomalies.",
     }
 
 

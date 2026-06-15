@@ -76,6 +76,40 @@ def test_collect_bounty_leads_returns_ranked_authorized_discoveries(tmp_path, mo
     assert "TLS hostname mismatch" in " ".join(data["rows"][0]["evidence"])
 
 
+def test_collect_bounty_leads_requires_httpx_valid_active_hosts(tmp_path, monkeypatch):
+    reset_db(tmp_path, monkeypatch)
+    project = db.project_create("httpx-validated-program")
+    job_id = db.subfinder_job_create(project["id"], "example.com", by="manual")
+    db.subfinder_hosts_add_batch(project["id"], [
+        "admin.example.com",
+        "stale.example.com",
+        "unprobed.example.com",
+    ])
+    db.subfinder_httpx_results_upsert_batch(project["id"], job_id, [
+        {
+            "hostname": "admin.example.com",
+            "status_code": 200,
+            "page_title": "Admin",
+            "final_url": "https://admin.example.com",
+            "scheme": "https",
+            "is_active": True,
+        },
+        {
+            "hostname": "stale.example.com",
+            "status_code": None,
+            "page_title": "",
+            "final_url": "",
+            "scheme": "",
+            "is_active": False,
+        },
+    ])
+
+    data = _collect_bounty_leads(project_id=project["id"], limit=10)
+
+    assert data["total"] == 1
+    assert [row["hostname"] for row in data["rows"]] == ["admin.example.com"]
+    assert "ProjectDiscovery httpx" in data["method"]
+
 def test_bounty_summary_rolls_up_company_attack_surface(tmp_path, monkeypatch):
     reset_db(tmp_path, monkeypatch)
     project = db.project_create("enterprise-program")
