@@ -111,6 +111,37 @@ def _directory_has_files(path: str) -> bool:
     return any(os.path.isfile(os.path.join(root, name)) for root, _, files in os.walk(path) for name in files)
 
 
+def _nuclei_template_count(path: str) -> int:
+    if not os.path.isdir(path):
+        return 0
+    return sum(
+        1
+        for root, _, files in os.walk(path)
+        for name in files
+        if name.endswith((".yaml", ".yml"))
+    )
+
+
+def _nuclei_resource_settings() -> dict:
+    return {
+        "rate_limit": _safe_int(os.environ.get("NUCLEI_RATE_LIMIT"), 25, min_value=1, max_value=500),
+        "concurrency": _safe_int(os.environ.get("NUCLEI_CONCURRENCY"), 10, min_value=1, max_value=100),
+        "bulk_size": _safe_int(os.environ.get("NUCLEI_BULK_SIZE"), 10, min_value=1, max_value=100),
+        "timeout": _safe_int(os.environ.get("NUCLEI_TIMEOUT"), 5, min_value=1, max_value=60),
+    }
+
+
+def _nuclei_exit_error(exit_code: int, stderr_tail: str = "", stdout_tail: str = "") -> str:
+    detail = (stderr_tail or stdout_tail or "").strip()
+    if exit_code == -9:
+        hint = (
+            "nuclei was killed by SIGKILL (exit code -9), usually because the container ran out of memory. "
+            "The scan now uses conservative defaults; lower NUCLEI_RATE_LIMIT, NUCLEI_CONCURRENCY, or NUCLEI_BULK_SIZE further if this continues."
+        )
+        return f"{hint} Last output: {detail}" if detail else hint
+    return detail or f"nuclei exited with code {exit_code}"
+
+
 def _ensure_nuclei_templates(nuclei_bin: str) -> tuple[bool, str]:
     """
     Ensure nuclei templates exist locally.
@@ -1627,6 +1658,7 @@ def _resolve_nuclei_hosts(pid: str, mode: str) -> list[str]:
 
 
 def _nuclei_command(nuclei_bin: str, targets_file: str, templates_dir: str) -> list[str]:
+    resources = _nuclei_resource_settings()
     return [
         nuclei_bin,
         "-l", targets_file,
@@ -1637,6 +1669,10 @@ def _nuclei_command(nuclei_bin: str, targets_file: str, templates_dir: str) -> l
         "-duc",
         "-ud", templates_dir,
         "-t", templates_dir,
+        "-rl", str(resources["rate_limit"]),
+        "-c", str(resources["concurrency"]),
+        "-bs", str(resources["bulk_size"]),
+        "-timeout", str(resources["timeout"]),
     ]
 
 
@@ -1889,8 +1925,7 @@ def _run_nuclei_sync(pid: str, project_name: str, mode: str, hosts: list[str]) -
         stderr_tail = (run.stderr or "")[-4000:]
         stdout_tail = (run.stdout or "")[-4000:]
         if run.returncode != 0 and not findings:
-            detail = stderr_tail or stdout_tail or f"nuclei exited with code {run.returncode}"
-            return None, f"Nuclei scan failed: {detail}", 500
+            return None, f"Nuclei scan failed: {_nuclei_exit_error(run.returncode, stderr_tail, stdout_tail)}", 500
 
         try:
             db.asset_record_nuclei_findings(pid, findings, scan_id=f"sync:{int(time.time())}")
@@ -1902,7 +1937,9 @@ def _run_nuclei_sync(pid: str, project_name: str, mode: str, hosts: list[str]) -
             "scan_mode": mode,
             "hosts_scanned": len(hosts),
             "severities": ["medium", "high", "critical"],
-            "command": "nuclei -l <hosts_file> -severity medium,high,critical -jsonl -stats -stats-json -duc -ud <templates_dir> -t <templates_dir>",
+            "command": "nuclei -l <hosts_file> -severity medium,high,critical -jsonl -stats -stats-json -duc -ud <templates_dir> -t <templates_dir> -rl <rate> -c <concurrency> -bs <bulk> -timeout <seconds>",
+            "template_count": _nuclei_template_count(templates_dir),
+            "resource_settings": _nuclei_resource_settings(),
             "findings": findings,
             "findings_total": len(findings),
             "stats": _merge_nuclei_stats(stats, None, len(findings)),
@@ -1957,10 +1994,13 @@ def _nuclei_worker(scan_id: str):
             return
         cmd = _nuclei_command(nuclei_bin, targets_file, templates_dir)
         _nuclei_append_log(scan_id, f"Binary: {nuclei_bin}", stream="status")
-        _nuclei_append_log(scan_id, f"Templates: {templates_dir} ({templates_msg})", stream="status")
+        template_count = _nuclei_template_count(templates_dir)
+        resources = _nuclei_resource_settings()
+        _nuclei_append_log(scan_id, f"Templates: {templates_dir} ({templates_msg}; {template_count} template files)", stream="status")
+        _nuclei_append_log(scan_id, f"Resource limits: rate={resources['rate_limit']}/s concurrency={resources['concurrency']} bulk={resources['bulk_size']} timeout={resources['timeout']}s", stream="status")
         _nuclei_append_log(scan_id, f"Targets: {len(hosts)} host(s); mode={mode}; severities=medium,high,critical", stream="status")
-        _nuclei_append_log(scan_id, "Command: nuclei -l <hosts_file> -severity medium,high,critical -jsonl -stats -stats-json -duc -ud <templates_dir> -t <templates_dir>", stream="status")
-        _nuclei_set_state(scan_id, status="running", message="Nuclei process is starting", templates_status=templates_msg, command=" ".join(cmd))
+        _nuclei_append_log(scan_id, "Command: nuclei -l <hosts_file> -severity medium,high,critical -jsonl -stats -stats-json -duc -ud <templates_dir> -t <templates_dir> -rl <rate> -c <concurrency> -bs <bulk> -timeout <seconds>", stream="status")
+        _nuclei_set_state(scan_id, status="running", message="Nuclei process is starting", templates_status=templates_msg, template_count=template_count, resource_settings=resources, command=" ".join(cmd))
         process = subprocess.Popen(
             cmd,
             stdout=subprocess.PIPE,
@@ -2048,7 +2088,8 @@ def _nuclei_worker(scan_id: str):
         if stopped:
             _nuclei_log_status(scan_id, "Nuclei scan stopped", status="stopped", exit_code=exit_code, finished_at=db.now(), elapsed_seconds=elapsed, progress_percent=100)
         elif exit_code != 0 and not findings:
-            _nuclei_log_status(scan_id, f"Nuclei exited with code {exit_code} and no findings", status="error", exit_code=exit_code, finished_at=db.now(), elapsed_seconds=elapsed, error=f"nuclei exited with code {exit_code}", progress_percent=100)
+            error_detail = _nuclei_exit_error(exit_code)
+            _nuclei_log_status(scan_id, f"Nuclei exited with code {exit_code} and no findings. {error_detail}", status="error", exit_code=exit_code, finished_at=db.now(), elapsed_seconds=elapsed, error=error_detail, progress_percent=100)
         else:
             _nuclei_log_status(scan_id, f"Nuclei scan complete: {len(findings)} finding(s), exit code {exit_code}", status="done", exit_code=exit_code, finished_at=db.now(), elapsed_seconds=elapsed, progress_percent=100)
     except Exception as e:
