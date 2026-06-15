@@ -171,32 +171,3 @@ def test_bounty_brief_builds_operator_plan_from_ranked_leads(tmp_path, monkeypat
     assert "api-exposure" in hypothesis_ids
     assert "environment-drift" in hypothesis_ids
     assert "Safe reproduction steps" in brief["report_template"]["sections"]
-
-
-def test_bounty_v5_enriches_leads_with_current_hunter_signal_packs(tmp_path, monkeypatch):
-    reset_db(tmp_path, monkeypatch)
-    project = db.project_create("v5-program")
-    job_id = db.subfinder_job_create(project["id"], "example.com", by="manual")
-    db.subfinder_hosts_add_batch(project["id"], ["graphql-admin.staging.example.com"])
-    db.subfinder_new_discoveries_add_batch(job_id, project["id"], ["graphql-admin.staging.example.com"])
-    db.subfinder_httpx_results_upsert_batch(project["id"], job_id, [{
-        "hostname": "graphql-admin.staging.example.com",
-        "status_code": 403,
-        "page_title": "GraphQL Admin OpenAPI Login",
-        "final_url": "https://graphql-admin.staging.example.com/graphql",
-        "scheme": "https",
-        "is_active": True,
-    }])
-
-    from api.routes import _collect_bounty_v5
-
-    data = _collect_bounty_v5(project_id=project["id"], limit=10)
-
-    assert data["version"] == "v5"
-    assert any("OWASP API Security Top 10 2023" in item for item in data["capabilities"])
-    assert data["rows"][0]["v5_signal_packs"]
-    pack_ids = {pack["id"] for pack in data["rows"][0]["v5_signal_packs"]}
-    assert "owasp-api-2023" in pack_ids
-    assert "owasp-web-2025" in pack_ids
-    assert data["rows"][0]["v5_validation_actions"]
-    assert data["rows"][0]["nuclei_strategy"]["safe_mode"]

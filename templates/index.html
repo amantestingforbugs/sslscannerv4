@@ -924,7 +924,7 @@ html[data-density="comfortable"] .card-body,html[data-density="comfortable"] .mo
 @media (max-width:700px){.onboarding-strip{grid-template-columns:1fr}}
 
 
-.xbow-brief-grid{display:grid;grid-template-columns:minmax(260px,.85fr) minmax(320px,1.15fr) minmax(280px,1fr);gap:12px;margin-bottom:12px}
+.xbow-brief-grid{display:grid;grid-template-columns:repeat(4,minmax(240px,1fr));gap:12px;margin-bottom:12px}
 .xbow-panel{border:1px solid color-mix(in srgb,var(--accent) 38%,var(--border));border-radius:16px;background:linear-gradient(145deg,color-mix(in srgb,var(--bg-surface) 88%,transparent),color-mix(in srgb,var(--accent) 8%,var(--bg-raised)));padding:14px;box-shadow:var(--shadow-sm)}
 .xbow-kicker{font-size:10px;font-weight:900;letter-spacing:.12em;text-transform:uppercase;color:var(--accent);margin-bottom:5px}.xbow-title{font-size:15px;font-weight:850;color:var(--text-primary);letter-spacing:-.02em}.xbow-copy{font-size:12px;color:var(--text-secondary);line-height:1.45;margin-top:5px}.xbow-list{margin:10px 0 0 16px;color:var(--text-secondary);font-size:12px;line-height:1.45}.xbow-path{padding:9px 0;border-top:1px solid var(--border-subtle)}.xbow-path:first-child{border-top:none}.xbow-path-host{font-family:var(--mono);font-weight:800;color:var(--text-primary);font-size:12px}.xbow-path-meta{font-size:11px;color:var(--text-muted);margin-top:3px}.xbow-empty{border:1px dashed var(--border);border-radius:12px;padding:12px;color:var(--text-muted);font-size:12px;background:var(--bg-raised)}
 @media(max-width:1100px){.xbow-brief-grid{grid-template-columns:1fr}.xbow-panel{min-height:auto}}
@@ -1647,6 +1647,11 @@ html[data-density="comfortable"] .card-body,html[data-density="comfortable"] .mo
           <div class="xbow-kicker">Hypotheses</div>
           <div class="xbow-title">Safe test playbooks</div>
           <div id="xbow-hypotheses" style="margin-top:10px"><div class="xbow-empty">Playbooks will appear after the brief is generated.</div></div>
+        </section>
+        <section class="xbow-panel">
+          <div class="xbow-kicker">Attack-chain intelligence</div>
+          <div class="xbow-title">Cutting-edge hunter paths</div>
+          <div id="xbow-attack-chains" style="margin-top:10px"><div class="xbow-empty">Chain plans will appear after the brief is generated.</div></div>
         </section>
       </div>
 
@@ -4168,6 +4173,11 @@ function renderXbowBrief(brief) {
   if (hyp) {
     const rows = brief.hypotheses || [];
     hyp.innerHTML = rows.length ? rows.slice(0, 3).map(h => `<div class="xbow-path"><div class="xbow-path-host">${esc(h.title || 'Validation playbook')}</div><ul class="xbow-list">${(h.tests || []).slice(0,3).map(t => `<li>${esc(t)}</li>`).join('')}</ul></div>`).join('') : '<div class="xbow-empty">No hypotheses yet.</div>';
+  }
+  const chains = document.getElementById('xbow-attack-chains');
+  if (chains) {
+    const rows = brief.attack_chains || [];
+    chains.innerHTML = rows.length ? rows.slice(0, 3).map(c => `<div class="xbow-path"><div class="xbow-path-host">${esc(c.title || 'Attack chain')}</div><div class="xbow-path-meta">${fmt(c.confidence || 0)}% confidence · ${(c.matched_assets || []).map(a => esc(a.hostname || '')).filter(Boolean).slice(0,2).join(' • ')}</div><ul class="xbow-list">${(c.safe_steps || []).slice(0,2).map(t => `<li>${esc(t)}</li>`).join('')}</ul></div>`).join('') : '<div class="xbow-empty">No attack-chain plans yet.</div>';
   }
 }
 
