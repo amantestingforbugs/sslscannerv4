@@ -39,3 +39,42 @@ def test_dispatchable_alert_ids_honors_mismatch_scope_filter():
     ]
 
     assert AlertManager(settings).dispatchable_alert_ids(alerts) == ["same", "expired"]
+
+
+def test_telegram_notifier_escapes_html(monkeypatch):
+    from alerts.notifiers import TelegramNotifier
+    import urllib.parse
+
+    captured = {}
+
+    class DummyResponse:
+        status = 200
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+    def fake_urlopen(req, timeout=10):
+        captured["body"] = req.data.decode()
+        return DummyResponse()
+
+    monkeypatch.setattr("alerts.notifiers._urlopen_no_redirect", fake_urlopen)
+    notifier = TelegramNotifier({
+        "telegram_enabled": 1,
+        "telegram_bot_token": "token",
+        "telegram_chat_id": "chat",
+    })
+
+    assert notifier.send_mismatch_digest(
+        "<Project&>",
+        [{"hostname": "<host&>", "issue_type": "SSL Mismatch", "details": "CN <bad&>"}],
+    ) is True
+
+    payload = urllib.parse.parse_qs(captured["body"])
+    text = payload["text"][0]
+    assert "&lt;Project&amp;&gt;" in text
+    assert "&lt;host&amp;&gt;" in text
+    assert "CN &lt;bad&amp;&gt;" in text
+    assert "<Project&>" not in text
