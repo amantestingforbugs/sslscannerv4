@@ -2337,7 +2337,22 @@ const QUICK_ACTIONS = [
   { label: 'Open alert routing', description: 'Configure Slack, Discord, Telegram, and trigger rules', group: 'Actions', icon: '📣', page: 'settings' },
 ];
 
-function nav(name) {
+function pageFromHash() {
+  const raw = window.location.hash.replace(/^#\/?/, '');
+  const [page, detailId] = raw.split('/').map(decodeURIComponent);
+  return { page: PAGE_INFRA[page] ? page : 'dashboard', detailId: detailId || null };
+}
+
+function persistRoute(name, detailId = null, replace = false) {
+  const hash = detailId ? `#${encodeURIComponent(name)}/${encodeURIComponent(detailId)}` : `#${encodeURIComponent(name)}`;
+  if (window.location.hash !== hash) {
+    const method = replace ? 'replaceState' : 'pushState';
+    history[method](null, '', hash);
+  }
+}
+
+function nav(name, options = {}) {
+  const { persist = true, detailId = null, replace = false } = options;
   const config = PAGE_INFRA[name] || {};
   performance.mark?.(`nav:${name}`);
   document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
@@ -2350,6 +2365,7 @@ function nav(name) {
   document.getElementById('topTitle').textContent = config.title || name;
   document.title = `${config.title || name} · SSL Sentinel`;
   document.getElementById('mainContent')?.focus({ preventScroll: true });
+  if (persist) persistRoute(name, detailId, replace);
   config.onEnter?.();
 }
 
@@ -3217,8 +3233,8 @@ async function createProject() {
 // ════════════════════════════════════════════════════════════
 // PROJECT DETAIL
 // ════════════════════════════════════════════════════════════
-async function openProject(pid) {
-  curPid = pid; nav('detail');
+async function openProject(pid, options = {}) {
+  curPid = pid; nav('detail', { ...options, detailId: pid });
   try {
     const { data: p } = await fetch(`/api/projects/${pid}`).then(r=>r.json());
     document.getElementById('det-name').textContent = p.name;
@@ -4566,7 +4582,16 @@ async function runNucleiScan() {
 // INIT
 // ════════════════════════════════════════════════════════════
 initGenericTableSorting();
-loadDash();
+function applyRouteFromHash(options = {}) {
+  const route = pageFromHash();
+  if (route.page === 'detail' && route.detailId) {
+    openProject(route.detailId, options);
+  } else {
+    nav(route.page, options);
+  }
+}
+applyRouteFromHash({ persist: Boolean(window.location.hash), replace: true });
+window.addEventListener('popstate', () => applyRouteFromHash({ persist: false }));
 hydrateTopProjectSelect();
 document.getElementById('alerts-search')?.addEventListener('input', debounce(() => {
   alertsCurPage = 1;
