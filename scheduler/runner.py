@@ -8,6 +8,7 @@ import threading, time, logging
 from datetime import datetime, timezone
 from typing import Dict, Optional
 from core.observability import log_event, publish
+from core import jobs
 
 log = logging.getLogger(__name__)
 
@@ -61,23 +62,22 @@ def _build_alert_from_result(r: Dict, expiring_threshold: int):
 
 
 def get_scan_state(sid: str) -> Optional[Dict]:
-    with _scan_lock:
-        return _scan_state.get(sid)
+    job = jobs.get_job(sid)
+    return jobs.public_state(job) if job else None
 
 
 def list_active_scans() -> list:
-    with _scan_lock:
-        return [v.copy() for v in _scan_state.values() if v.get("status") in {"running", "paused"}]
+    return [jobs.public_state(j) for j in jobs.list_jobs(job_type="ssl_scan", active=True, limit=200)]
 
 
 def prune_finished_scan_state(now_ts: Optional[float] = None) -> int:
-    """Bound completed in-memory scan state so long-running workers do not leak RAM."""
+    """Bound any legacy in-memory scan snapshots; durable jobs remain in SQLite."""
     now_ts = time.time() if now_ts is None else now_ts
     with _scan_lock:
         completed = [
             (sid, state)
             for sid, state in _scan_state.items()
-            if state.get("status") in {"done", "error", "stopped"}
+            if state.get("status") in {"done", "error", "stopped", "cancelled"}
         ]
         stale_ids = {
             sid
@@ -94,37 +94,18 @@ def prune_finished_scan_state(now_ts: Optional[float] = None) -> int:
 
 
 def pause_scan(sid: str) -> bool:
-    with _scan_lock:
-        state = _scan_state.get(sid)
-        controls = _scan_controls.get(sid)
-        if not state or state.get("status") != "running" or not controls:
-            return False
-        controls["pause"].set()
-        state["status"] = "paused"
-    return True
+    state = jobs.get_job(sid)
+    return bool(state and state.get("status") == "running" and jobs.request_pause(sid))
 
 
 def resume_scan(sid: str) -> bool:
-    with _scan_lock:
-        state = _scan_state.get(sid)
-        controls = _scan_controls.get(sid)
-        if not state or state.get("status") != "paused" or not controls:
-            return False
-        controls["pause"].clear()
-        state["status"] = "running"
-    return True
+    state = jobs.get_job(sid)
+    return bool(state and state.get("status") == "paused" and jobs.request_resume(sid))
 
 
 def stop_scan(sid: str) -> bool:
-    with _scan_lock:
-        state = _scan_state.get(sid)
-        controls = _scan_controls.get(sid)
-        if not state or state.get("status") not in {"running", "paused"} or not controls:
-            return False
-        controls["stop"].set()
-        controls["pause"].clear()
-        state["status"] = "stopping"
-    return True
+    state = jobs.get_job(sid)
+    return bool(state and state.get("status") in {"running", "paused", "stopping"} and jobs.request_cancel(sid))
 
 
 def run_project_scan(project_id: str, triggered_by: str = "manual") -> Optional[str]:
@@ -152,13 +133,17 @@ def run_project_scan(project_id: str, triggered_by: str = "manual") -> Optional[
     scan = scan_create(project_id, total, triggered_by)
     sid = scan["id"]
 
-    with _scan_lock:
-        _scan_state[sid] = {
-            "status": "running", "progress": 0, "total": total,
-            "project_id": project_id, "project_name": project["name"],
-            "started_at": _now(), "start_ts": time.time(), "triggered_by": triggered_by,
-        }
-        _scan_controls[sid] = {"pause": threading.Event(), "stop": threading.Event()}
+    jobs.create_job("ssl_scan", id=sid, project_id=project_id, status="running", total=total, source=triggered_by, payload={"project_name": project["name"], "triggered_by": triggered_by})
+    pause_event, stop_event = threading.Event(), threading.Event()
+
+    def sync_controls():
+        ctl = jobs.get_control(sid)
+        if ctl.get("pause"):
+            pause_event.set()
+        else:
+            pause_event.clear()
+        if ctl.get("cancel"):
+            stop_event.set(); pause_event.clear()
 
     result_batch, alert_batch, done_count = [], [], [0]
     lock = threading.Lock()
@@ -180,9 +165,8 @@ def run_project_scan(project_id: str, triggered_by: str = "manual") -> Optional[
                 alert_batch.clear()
             if cur % PROGRESS_UPDATE_EVERY == 0:
                 scan_progress(sid, cur)
-                with _scan_lock:
-                    if sid in _scan_state:
-                        _scan_state[sid]["progress"] = cur
+                jobs.update_progress(sid, done=cur, total=total)
+            sync_controls()
 
     try:
         run_checker(
@@ -190,13 +174,11 @@ def run_project_scan(project_id: str, triggered_by: str = "manual") -> Optional[
             max_workers=MAX_WORKERS,
             progress_callback=on_result,
             collect_results=False,  # avoid storing millions of in-memory results
-            pause_event=_scan_controls[sid]["pause"],
-            stop_event=_scan_controls[sid]["stop"],
+            pause_event=pause_event,
+            stop_event=stop_event,
         )
 
-        with _scan_lock:
-            controls = _scan_controls.get(sid)
-            was_stopped = bool(controls and controls["stop"].is_set())
+        was_stopped = bool(stop_event.is_set() or jobs.get_control(sid).get("cancel"))
 
         with lock:
             if result_batch:
@@ -207,16 +189,12 @@ def run_project_scan(project_id: str, triggered_by: str = "manual") -> Optional[
         if was_stopped:
             done = done_count[0]
             scan_update(sid, status="stopped", finished_at=_now(), done=done)
-            with _scan_lock:
-                if sid in _scan_state:
-                    _scan_state[sid].update({"status": "stopped", "progress": done, "finished_at": _now(), "finished_ts": time.time(), "done": done})
+            jobs.update_state(sid, status="stopped", progress=done, done=done, finished_at=_now())
             log_event("ssl_scan", "warning", "Scan stopped by user", project_id=project_id, scan_id=sid, total=total, done=done, status="stopped")
         else:
             scan_finish(sid)
             log_event("ssl_scan", "info", "Scan finished", project_id=project_id, scan_id=sid, total=total, status="idle")
-            with _scan_lock:
-                if sid in _scan_state:
-                    _scan_state[sid].update({"status": "done", "progress": total, "finished_at": _now(), "finished_ts": time.time(), "done": total})
+            jobs.update_state(sid, status="done", progress=total, done=total, finished_at=_now())
 
         # Send Telegram
         unsent = [a for a in alerts_unsent() if a["project_id"] == project_id]
@@ -235,22 +213,16 @@ def run_project_scan(project_id: str, triggered_by: str = "manual") -> Optional[
         log.exception("Scan failed for '%s': %s", project["name"], e)
         log_event("ssl_scan", "error", f"Scan failed: {e}", project_id=project_id, scan_id=sid, status="failed")
         scan_update(sid, status="error")
-        with _scan_lock:
-            if sid in _scan_state:
-                _scan_state[sid]["status"] = "error"
-                _scan_state[sid]["finished_ts"] = time.time()
-                _scan_state[sid]["finished_at"] = _now()
+        jobs.update_state(sid, status="error", finished_at=_now())
         return None
     finally:
-        with _scan_lock:
-            _scan_controls.pop(sid, None)
+        pass
 
 
 def run_project_scan_async(project_id: str, triggered_by: str = "manual") -> bool:
-    with _scan_lock:
-        for s in _scan_state.values():
-            if s.get("project_id") == project_id and s.get("status") in {"running", "paused", "stopping"}:
-                return False
+    for s in jobs.list_jobs(job_type="ssl_scan", project_id=project_id, active=True, limit=10):
+        if s.get("status") in {"queued", "running", "paused", "stopping"}:
+            return False
     threading.Thread(target=run_project_scan, args=(project_id, triggered_by),
                      daemon=True, name=f"scan-{project_id[:8]}").start()
     return True
