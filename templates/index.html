@@ -950,11 +950,7 @@ html[data-density="comfortable"] .card-body,html[data-density="comfortable"] .mo
     </button>
     <button class="nav-item" data-page="discoveries">
       <svg fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path d="M3 7h18M3 12h18M3 17h18"/><circle cx="7" cy="7" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="17" cy="17" r="1"/></svg>
-      <span>New Discoveries</span>
-    </button>
-    <button class="nav-item" data-page="discoveries-latest">
-      <svg fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path d="M5 12h14"/><path d="m12 5 7 7-7 7"/><path d="M5 5v14"/></svg>
-      <span>Latest Discovery Batch</span>
+      <span>Discoveries</span>
     </button>
     <button class="nav-item" data-page="bounty-leads">
       <svg fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path d="M12 3l2.6 5.3 5.9.9-4.2 4.1 1 5.8L12 16.4 6.7 19.1l1-5.8-4.2-4.1 5.9-.9L12 3z"/></svg>
@@ -1464,13 +1460,22 @@ html[data-density="comfortable"] .card-body,html[data-density="comfortable"] .mo
     <div class="page" id="page-discoveries">
       <div class="page-header">
         <div>
-          <div class="page-title">New Discoveries</div>
-          <div class="page-sub">Fresh subdomains from Subfinder and their SSL outcomes.</div>
+          <div class="page-title">Discoveries</div>
+          <div class="page-sub">View fresh subdomains or only the most recent Subfinder batch from one place.</div>
         </div>
       </div>
-      <div class="form-group" style="max-width:320px;margin-bottom:14px">
-        <label class="form-label">Project</label>
-        <select class="form-input" id="nd-project-select" onchange="loadDiscoveries()"><option value="">— Choose a project —</option></select>
+      <div style="display:flex;gap:12px;flex-wrap:wrap;align-items:flex-end;margin-bottom:14px">
+        <div class="form-group" style="max-width:320px;margin-bottom:0;flex:1 1 260px">
+          <label class="form-label">Project</label>
+          <select class="form-input" id="nd-project-select" onchange="loadDiscoveries()"><option value="">— Choose a project —</option></select>
+        </div>
+        <div class="form-group" style="max-width:320px;margin-bottom:0;flex:1 1 240px">
+          <label class="form-label">Discovery view</label>
+          <select class="form-input" id="nd-mode" onchange="loadDiscoveries()">
+            <option value="latest">New discoveries</option>
+            <option value="last_job">Latest discovery batch</option>
+          </select>
+        </div>
       </div>
       <div class="table-toolbar">
         <div class="search-input">
@@ -1484,34 +1489,6 @@ html[data-density="comfortable"] .card-body,html[data-density="comfortable"] .mo
           <table>
             <thead><tr><th>Hostname</th><th>First Seen</th><th>HTTP</th><th>Redirect</th><th>Title</th><th>SSL Status</th><th>CN</th><th>Expiry</th></tr></thead>
             <tbody id="nd-body"></tbody>
-          </table>
-        </div>
-      </div>
-    </div>
-
-    <div class="page" id="page-discoveries-latest">
-      <div class="page-header">
-        <div>
-          <div class="page-title">Latest Discovery Batch</div>
-          <div class="page-sub">Only subdomains discovered in the most recent Subfinder run for each project.</div>
-        </div>
-      </div>
-      <div class="form-group" style="max-width:320px;margin-bottom:14px">
-        <label class="form-label">Project</label>
-        <select class="form-input" id="nd-latest-project-select" onchange="loadLatestDiscoveries()"><option value="">— Choose a project —</option></select>
-      </div>
-      <div class="table-toolbar">
-        <div class="search-input">
-          <svg width="14" height="14" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
-          <input type="text" id="nd-latest-search" placeholder="Search latest discovered hostname...">
-        </div>
-        <span id="nd-latest-count" style="font-size:12px;color:var(--text-muted)">0 rows</span>
-      </div>
-      <div class="card">
-        <div class="table-wrap">
-          <table>
-            <thead><tr><th>Hostname</th><th>First Seen</th><th>HTTP</th><th>Redirect</th><th>Title</th><th>SSL Status</th><th>CN</th><th>Expiry</th></tr></thead>
-            <tbody id="nd-latest-body"></tbody>
           </table>
         </div>
       </div>
@@ -2159,8 +2136,7 @@ const PAGE_INFRA = {
   detail: { title: 'Project Detail' },
   alerts: { title: 'Alerts', onEnter: loadAlerts },
   subfinder: { title: 'Subfinder', onEnter: initSfPage },
-  discoveries: { title: 'New Discoveries', onEnter: initDiscoveriesPage },
-  'discoveries-latest': { title: 'Latest Discovery Batch', onEnter: initLatestDiscoveriesPage },
+  discoveries: { title: 'Discoveries', onEnter: initDiscoveriesPage },
   'bounty-leads': { title: 'Bounty Leads', onEnter: initBountyLeadsPage },
   'subfinder-raw': { title: 'Subfinder Enumeration', onEnter: initSfRawPage },
   nuclei: { title: 'Nuclei CVEs', onEnter: initNucleiPage },
@@ -2168,7 +2144,7 @@ const PAGE_INFRA = {
   logs: { title: 'Logs', onEnter: loadLogsPage },
   settings: { title: 'Alert Routing', onEnter: loadAlertSettings },
 };
-const QUICK_ACTION_PAGES = ['dashboard', 'projects', 'alerts', 'subfinder', 'discoveries', 'discoveries-latest', 'bounty-leads', 'subfinder-raw', 'nuclei', 'openssl', 'logs', 'settings'];
+const QUICK_ACTION_PAGES = ['dashboard', 'projects', 'alerts', 'subfinder', 'discoveries', 'bounty-leads', 'subfinder-raw', 'nuclei', 'openssl', 'logs', 'settings'];
 const QUICK_ACTIONS = [
   ...QUICK_ACTION_PAGES.map(page => ({
     label: PAGE_INFRA[page]?.title || page,
@@ -3720,17 +3696,6 @@ async function initDiscoveriesPage() {
   loadDiscoveries();
 }
 
-async function initLatestDiscoveriesPage() {
-  const sel = document.getElementById('nd-latest-project-select');
-  const projs = projectsCache.length ? projectsCache : (await apiJSON('/api/projects')).data || [];
-  const prev = sel.value;
-  sel.innerHTML = '<option value="">— Choose a project —</option>' +
-    (projs || []).map(p => `<option value="${p.id}">${esc(p.name)}</option>`).join('');
-  if (prev) sel.value = prev;
-  if (!sel.value && projs?.length) sel.value = projs[0].id;
-  loadLatestDiscoveries();
-}
-
 
 let enumCurrentRows = [];
 let enumCurrentScan = null;
@@ -3895,27 +3860,11 @@ async function loadDiscoveries() {
       return;
     }
     const q = encodeURIComponent(document.getElementById('nd-search').value || '');
-    const { data } = await fetch(`/api/projects/${pid}/discoveries?search=${q}&page=1&per_page=200&mode=latest`).then(r => r.json());
+    const mode = encodeURIComponent(document.getElementById('nd-mode')?.value || 'latest');
+    const { data } = await fetch(`/api/projects/${pid}/discoveries?search=${q}&page=1&per_page=200&mode=${mode}`).then(r => r.json());
     renderDiscoveriesRows(data, 'nd-count', 'nd-body');
   } finally {
     window.ndLoading = false;
-  }
-}
-
-async function loadLatestDiscoveries() {
-  if (window.ndLatestLoading) return;
-  window.ndLatestLoading = true;
-  try {
-    const pid = document.getElementById('nd-latest-project-select').value;
-    if (!pid) {
-      document.getElementById('nd-latest-body').innerHTML = '<tr><td colspan="8" style="text-align:center;padding:20px;color:var(--text-muted)">Select a project to view latest batch.</td></tr>';
-      return;
-    }
-    const q = encodeURIComponent(document.getElementById('nd-latest-search').value || '');
-    const { data } = await fetch(`/api/projects/${pid}/discoveries?search=${q}&page=1&per_page=200&mode=last_job`).then(r => r.json());
-    renderDiscoveriesRows(data, 'nd-latest-count', 'nd-latest-body');
-  } finally {
-    window.ndLatestLoading = false;
   }
 }
 
@@ -4027,9 +3976,6 @@ function scheduleLiveRefresh() {
       }
       if (document.getElementById('page-discoveries').classList.contains('active')) {
         await loadDiscoveries();
-      }
-      if (document.getElementById('page-discoveries-latest').classList.contains('active')) {
-        await loadLatestDiscoveries();
       }
     }
     scheduleLiveRefresh();
@@ -4299,7 +4245,6 @@ document.getElementById('alerts-search')?.addEventListener('input', debounce(() 
   loadAlerts(1);
 }, 250));
 document.getElementById('nd-search')?.addEventListener('input', debounce(loadDiscoveries, 300));
-document.getElementById('nd-latest-search')?.addEventListener('input', debounce(loadLatestDiscoveries, 300));
 document.getElementById('bounty-search')?.addEventListener('input', debounce(loadBountyLeads, 300));
 scheduleLiveRefresh();
 document.addEventListener('visibilitychange', () => {
