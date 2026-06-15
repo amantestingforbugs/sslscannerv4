@@ -7,9 +7,33 @@ from api.routes import (  # noqa: E402
     _looks_like_nuclei_finding,
     _normalize_nuclei_finding,
     _normalize_nuclei_target,
+    _nuclei_command,
+    _nuclei_exit_error,
     _parse_nuclei_stats_line,
     _resolve_nuclei_binary,
 )
+
+
+def test_nuclei_command_uses_conservative_resource_limits(monkeypatch):
+    monkeypatch.delenv("NUCLEI_RATE_LIMIT", raising=False)
+    monkeypatch.delenv("NUCLEI_CONCURRENCY", raising=False)
+    monkeypatch.delenv("NUCLEI_BULK_SIZE", raising=False)
+    monkeypatch.delenv("NUCLEI_TIMEOUT", raising=False)
+
+    cmd = _nuclei_command("/bin/nuclei", "/tmp/targets", "/tmp/templates")
+
+    assert cmd[cmd.index("-rl") + 1] == "25"
+    assert cmd[cmd.index("-c") + 1] == "10"
+    assert cmd[cmd.index("-bs") + 1] == "10"
+    assert cmd[cmd.index("-timeout") + 1] == "5"
+
+
+def test_nuclei_exit_error_explains_sigkill_oom():
+    message = _nuclei_exit_error(-9)
+
+    assert "SIGKILL" in message
+    assert "out of memory" in message
+    assert "NUCLEI_CONCURRENCY" in message
 
 
 def test_normalize_nuclei_target_accepts_host_and_urls():
