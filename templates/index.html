@@ -3288,6 +3288,8 @@ async function openProject(pid, options = {}) {
   try {
     const { data: p } = await fetch(`/api/projects/${pid}`).then(r=>r.json());
     document.getElementById('det-name').textContent = p.name;
+    document.getElementById('topTitle').textContent = p.name;
+    document.title = `${p.name} · SSL Sentinel`;
     document.getElementById('det-meta').textContent =
       `${fmt(p.host_count)} hosts · scan every ${p.scan_interval_minutes}min · subfinder every ${p.subfinder_interval_minutes}min`;
     document.getElementById('host-count').textContent = fmt(p.host_count);
