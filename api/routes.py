@@ -33,6 +33,7 @@ from core.target_policy import (
     allowed_scope_domains,
     is_ip_disallowed,
     is_target_allowed,
+    resolves_to_disallowed_ip,
     normalize_hostname as normalize_target_hostname,
     registered_domain,
 )
@@ -237,7 +238,7 @@ def _validate_webhook_url(raw: str) -> str:
     if parsed.scheme != "https" or not parsed.netloc:
         raise ValueError("Webhook URLs must be valid https URLs")
     host = (parsed.hostname or "").strip().lower()
-    if not host or _is_private_or_local_host(host):
+    if not host or _is_private_or_local_host(host) or resolves_to_disallowed_ip(host):
         raise ValueError("Webhook URL host is not allowed")
     return value
 

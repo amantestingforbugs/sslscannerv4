@@ -59,3 +59,19 @@ def test_api_key_auth_can_be_required(monkeypatch):
     assert allowed.status_code == 200
     assert allowed.get_json()["data"]["api_key_required"] is True
 
+
+
+def test_webhook_url_validation_rejects_hosts_resolving_private(monkeypatch):
+    routes.resolves_to_disallowed_ip.cache_clear()
+
+    def fake_getaddrinfo(host, port, type=0):
+        return [(None, None, None, None, ("10.0.0.12", port))]
+
+    monkeypatch.delenv("ALLOW_PRIVATE_SCAN_TARGETS", raising=False)
+    monkeypatch.setattr("core.target_policy.socket.getaddrinfo", fake_getaddrinfo)
+
+    try:
+        routes._validate_webhook_url("https://hooks.example.com/notify")
+        assert False, "Expected private DNS webhook target to be rejected"
+    except ValueError as exc:
+        assert "not allowed" in str(exc)

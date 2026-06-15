@@ -4,6 +4,7 @@ Supports Telegram, Slack, and Discord webhooks.
 """
 
 import json
+import html
 import logging
 import urllib.error
 import urllib.parse
@@ -11,6 +12,16 @@ import urllib.request
 from typing import Dict, List
 
 logger = logging.getLogger(__name__)
+
+
+class _NoRedirectHandler(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+
+def _urlopen_no_redirect(req, timeout: int = 10):
+    opener = urllib.request.build_opener(_NoRedirectHandler)
+    return opener.open(req, timeout=timeout)
 
 
 def _issue_enabled(issue_type: str, settings: Dict) -> bool:
@@ -57,11 +68,15 @@ class TelegramNotifier:
             return True
         if not self.ready:
             return False
-        lines = [f"<b>🔐 SSL Sentinel Alert — {project_name}</b>", ""]
+        safe_project_name = html.escape(str(project_name), quote=False)
+        lines = [f"<b>🔐 SSL Sentinel Alert — {safe_project_name}</b>", ""]
         for a in alerts[:10]:
             icon = {"SSL Mismatch": "❌", "Expired": "💀", "Expiring Soon": "⚠️"}.get(a.get("issue_type"), "🔔")
-            lines.append(f"{icon} <code>{a.get('hostname','')}</code>")
-            lines.append(f"   {a.get('issue_type','Issue')}: {a.get('details','')}")
+            hostname = html.escape(str(a.get('hostname', '')), quote=False)
+            issue_type = html.escape(str(a.get('issue_type', 'Issue')), quote=False)
+            details = html.escape(str(a.get('details', '')), quote=False)
+            lines.append(f"{icon} <code>{hostname}</code>")
+            lines.append(f"   {issue_type}: {details}")
             lines.append("")
         if len(alerts) > 10:
             lines.append(f"...and {len(alerts) - 10} more. Check dashboard.")
@@ -77,7 +92,7 @@ class TelegramNotifier:
                 data=payload,
                 method="POST",
             )
-            with urllib.request.urlopen(req, timeout=10) as resp:
+            with _urlopen_no_redirect(req, timeout=10) as resp:
                 return resp.status == 200
         except Exception as e:
             logger.error("Telegram send failed: %s", e)
@@ -109,7 +124,7 @@ class WebhookNotifier:
                 headers={"Content-Type": "application/json"},
                 method="POST",
             )
-            with urllib.request.urlopen(req, timeout=10) as resp:
+            with _urlopen_no_redirect(req, timeout=10) as resp:
                 return 200 <= resp.status < 300
         except urllib.error.HTTPError as e:
             body = ""
