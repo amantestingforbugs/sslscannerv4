@@ -1255,6 +1255,46 @@ def global_stats():
     return ok(db.stats_global())
 
 
+def _collect_attack_surface_risk() -> dict:
+    """Return an operator-ready risk rollup for the dashboard."""
+    stats = db.stats_global()
+    projects = db.project_list()
+    bounty = _collect_bounty_summary()
+    total_hosts = max(1, int(stats.get("total_domains") or stats.get("domains") or stats.get("hosts") or 0))
+    anomaly_count = sum(int(stats.get(k) or 0) for k in ("mismatches", "expired", "errors"))
+    stale_projects = sum(1 for p in projects if not db.scan_latest(p["id"]))
+    risk_score = min(100, round(
+        (anomaly_count / total_hosts) * 70
+        + (int(stats.get("unseen_alerts") or 0) / total_hosts) * 20
+        + ((stale_projects / max(1, len(projects))) * 10)
+    ))
+    if risk_score >= 75:
+        posture = "critical"
+    elif risk_score >= 50:
+        posture = "high"
+    elif risk_score >= 25:
+        posture = "moderate"
+    else:
+        posture = "low"
+    return {
+        "risk_score": risk_score,
+        "posture": posture,
+        "anomaly_count": anomaly_count,
+        "stale_projects": stale_projects,
+        "bounty_summary": bounty,
+        "recommended_actions": [
+            "Validate high-priority bounty leads before broad automated scanning.",
+            "Run Subfinder on stale projects to refresh scope and discovery evidence.",
+            "Triage TLS mismatches and expired certificates for tenant-routing or takeover clues.",
+        ],
+    }
+
+
+@api.get("/attack-surface/risk")
+def attack_surface_risk():
+    return ok(_collect_attack_surface_risk())
+
+
 @api.get("/bounty/summary")
 def bounty_summary():
     project_id = (request.args.get("project_id") or "").strip()
