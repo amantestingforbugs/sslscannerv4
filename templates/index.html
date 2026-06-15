@@ -1870,13 +1870,13 @@ html[data-density="comfortable"] .card-body,html[data-density="comfortable"] .mo
       <div class="form-row">
         <div class="form-group">
           <label class="form-label">SSL Scan Interval (minutes)</label>
-          <input class="form-input" type="number" id="cp-scan-int" value="60" min="5">
+          <input class="form-input" type="number" id="cp-scan-int" value="60" min="5" max="10080">
           <div class="form-hint">Auto-scan every N minutes</div>
         </div>
         <div class="form-group">
           <label class="form-label">Subfinder Interval (minutes)</label>
-          <input class="form-input" type="number" id="cp-sf-int" value="30" min="10" max="30">
-          <div class="form-hint">Discovery interval (10–30 minutes)</div>
+          <input class="form-input" type="number" id="cp-sf-int" value="30" min="5" max="10080">
+          <div class="form-hint">Discovery interval (5–10080 minutes)</div>
         </div>
       </div>
     </div>
@@ -1907,11 +1907,11 @@ html[data-density="comfortable"] .card-body,html[data-density="comfortable"] .mo
       <div class="form-row">
         <div class="form-group">
           <label class="form-label">SSL Scan Interval (min)</label>
-          <input class="form-input" type="number" id="ep-scan-int" min="5">
+          <input class="form-input" type="number" id="ep-scan-int" min="5" max="10080">
         </div>
         <div class="form-group">
           <label class="form-label">Subfinder Interval (min)</label>
-          <input class="form-input" type="number" id="ep-sf-int" min="10" max="30">
+          <input class="form-input" type="number" id="ep-sf-int" min="5" max="10080">
         </div>
       </div>
     </div>
