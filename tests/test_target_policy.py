@@ -75,3 +75,43 @@ def test_webhook_url_validation_rejects_hosts_resolving_private(monkeypatch):
         assert False, "Expected private DNS webhook target to be rejected"
     except ValueError as exc:
         assert "not allowed" in str(exc)
+
+
+def test_api_host_normalizers_reject_dns_rebinding_targets(monkeypatch):
+    routes.resolves_to_disallowed_ip.cache_clear()
+
+    def fake_getaddrinfo(host, port, type=0):
+        return [(None, None, None, None, ("127.0.0.1", port))]
+
+    monkeypatch.delenv("ALLOW_PRIVATE_SCAN_TARGETS", raising=False)
+    monkeypatch.setattr("core.target_policy.socket.getaddrinfo", fake_getaddrinfo)
+
+    assert routes._normalize_hostname("rebind.example.com") == ""
+    assert routes._normalize_nuclei_target("rebind.example.com") == ""
+
+
+def test_project_update_validates_missing_and_duplicate_names(tmp_path, monkeypatch):
+    import db.database as database
+
+    monkeypatch.setattr(database, "DB_PATH", tmp_path / "projects.sqlite3")
+    monkeypatch.setattr(database, "_local", __import__("threading").local())
+    database.init_db()
+
+    app = Flask(__name__)
+    app.register_blueprint(routes.api)
+    client = app.test_client()
+
+    first = database.project_create("first")
+    second = database.project_create("second")
+
+    missing = client.put("/api/projects/not-a-project", json={"name": "new"})
+    blank = client.put(f"/api/projects/{first['id']}", json={"name": "   "})
+    duplicate = client.put(f"/api/projects/{first['id']}", json={"name": "second"})
+    valid = client.put(f"/api/projects/{first['id']}", json={"name": "renamed"})
+
+    assert missing.status_code == 404
+    assert blank.status_code == 400
+    assert duplicate.status_code == 400
+    assert valid.status_code == 200
+    assert database.project_get(first["id"])["name"] == "renamed"
+    assert database.project_get(second["id"])["name"] == "second"
