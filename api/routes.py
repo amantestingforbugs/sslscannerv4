@@ -362,6 +362,96 @@ def _analyze_hosts_text(content: str) -> dict:
 
 
 
+
+V5_HUNTER_SIGNAL_PACKS = [
+    {
+        "id": "owasp-web-2025",
+        "name": "OWASP Top 10 2025 web risk lens",
+        "focus": "Broken access control, security misconfiguration, cryptographic failures, vulnerable/outdated components, and software supply-chain exposure.",
+        "signals": ("admin", "login", "dashboard", "debug", "backup", "config", "git", "jenkins", "swagger", "openapi"),
+    },
+    {
+        "id": "owasp-api-2023",
+        "name": "OWASP API Security Top 10 2023 lens",
+        "focus": "BOLA, broken authentication, object-property authorization, unrestricted resource consumption, SSRF, and unsafe API inventory.",
+        "signals": ("api", "graphql", "swagger", "openapi", "rest", "v1", "v2", "internal", "callback"),
+    },
+    {
+        "id": "cloud-devops-exposure",
+        "name": "Cloud/DevOps exposure lens",
+        "focus": "CI/CD, monitoring, logs, metrics, source control, and non-production drift that often produces high-impact bounty findings.",
+        "signals": ("jenkins", "git", "grafana", "kibana", "prometheus", "metrics", "dev", "test", "stage", "staging", "uat"),
+    },
+    {
+        "id": "tenant-routing-takeover",
+        "name": "Tenant routing and takeover lens",
+        "focus": "TLS mismatch, expired certificates, stale redirects, fresh subdomains, and default virtual-host clues for safe takeover/routing validation.",
+        "signals": ("cdn", "assets", "static", "edge", "preview", "sandbox", "legacy", "old"),
+    },
+]
+
+def _v5_signal_text(row: dict) -> str:
+    return " ".join(str(row.get(k) or "") for k in ("hostname", "lead_type", "http_page_title", "http_final_url", "evidence", "error")).lower()
+
+def _v5_pack_matches(row: dict) -> list[dict]:
+    text = _v5_signal_text(row)
+    matches = []
+    for pack in V5_HUNTER_SIGNAL_PACKS:
+        hit = sorted({sig for sig in pack["signals"] if sig in text})
+        if hit or (pack["id"] == "tenant-routing-takeover" and (row.get("is_mismatch") or row.get("is_expired") or row.get("is_latest_discovery"))):
+            matches.append({"id": pack["id"], "name": pack["name"], "focus": pack["focus"], "matched_signals": hit[:8]})
+    return matches
+
+def _v5_validate_actions(row: dict) -> list[str]:
+    packs = {p["id"] for p in row.get("v5_signal_packs") or _v5_pack_matches(row)}
+    actions = ["Re-confirm written authorization and rate limits before touching this asset."]
+    if "owasp-api-2023" in packs:
+        actions.append("Map API objects and properties with accounts you own; prioritize BOLA/IDOR, excessive fields, auth bypass, and SSRF-safe callbacks.")
+    if "owasp-web-2025" in packs:
+        actions.append("Check access-control, misconfiguration, outdated-component banners, debug surfaces, and security headers using non-destructive requests.")
+    if "cloud-devops-exposure" in packs:
+        actions.append("Validate whether DevOps/monitoring panels expose read-only metadata, versions, project names, logs, or CI/CD controls.")
+    if "tenant-routing-takeover" in packs:
+        actions.append("Compare DNS, TLS CN/SANs, redirects, and default vhost responses for stale tenant routing or takeover evidence.")
+    return actions[:5]
+
+def _collect_bounty_v5(project_id: str = "", search: str = "", limit: int = 50) -> dict:
+    leads_data = _collect_bounty_leads(project_id=project_id, search=search, limit=limit)
+    leads = []
+    pack_counts: dict[str, int] = {}
+    for lead in leads_data.get("rows", []):
+        packs = _v5_pack_matches(lead)
+        for pack in packs:
+            pack_counts[pack["name"]] = pack_counts.get(pack["name"], 0) + 1
+        enriched = {
+            **lead,
+            "v5_signal_packs": packs,
+            "v5_validation_actions": _v5_validate_actions({**lead, "v5_signal_packs": packs}),
+            "nuclei_strategy": {
+                "template_filters": "critical,high,medium severity plus exposure,misconfig,cves,exposures,files,takeovers,technologies tags where supported",
+                "safe_mode": "Use rate-limited validation on authorized hosts only; treat output as leads that require manual verification.",
+            },
+        }
+        leads.append(enriched)
+    return {
+        "version": "v5",
+        "generated_at": db.now(),
+        "project_id": project_id,
+        "search": search,
+        "total": leads_data.get("total", len(leads)),
+        "returned": len(leads),
+        "signal_pack_counts": [{"name": k, "count": v} for k, v in sorted(pack_counts.items(), key=lambda item: item[1], reverse=True)],
+        "rows": leads,
+        "capabilities": [
+            "OWASP Top 10 2025 web-risk prioritization",
+            "OWASP API Security Top 10 2023 API abuse-case mapping",
+            "Cloud/DevOps exposure triage",
+            "Tenant-routing, TLS drift, and takeover clue correlation",
+            "Nuclei validation strategy hints with scope-first guardrails",
+        ],
+        "method": "v5 enriches ranked authorized leads with current OWASP web/API, cloud DevOps, takeover-routing, and Nuclei validation lenses for bug-bounty triage.",
+    }
+
 BOUNTY_KEYWORD_RULES = [
     ("admin", 20, "Admin surface"),
     ("administrator", 20, "Admin surface"),
@@ -469,7 +559,7 @@ def _score_bounty_lead(row: dict) -> dict:
         evidence.append("Discovered subdomain with no high-signal bounty markers yet")
         lead_types.append("Recon candidate")
 
-    return {
+    lead = {
         **row,
         "score": score,
         "severity": _bounty_lead_severity(score),
@@ -477,6 +567,9 @@ def _score_bounty_lead(row: dict) -> dict:
         "evidence": evidence[:10],
         "next_steps": _bounty_lead_next_steps(row, evidence),
     }
+    lead["v5_signal_packs"] = _v5_pack_matches(lead)
+    lead["v5_validation_actions"] = _v5_validate_actions(lead)
+    return lead
 
 
 def _collect_bounty_leads(project_id: str = "", search: str = "", limit: int = 100) -> dict:
@@ -1429,6 +1522,14 @@ def bounty_brief():
     search = (request.args.get("search") or "").strip()
     limit = _safe_int(request.args.get("limit", 25), 25, min_value=1, max_value=100)
     return ok(_collect_bounty_brief(project_id=project_id, search=search, limit=limit))
+
+
+@api.get("/bounty/v5")
+def bounty_v5():
+    project_id = (request.args.get("project_id") or "").strip()
+    search = (request.args.get("search") or "").strip()
+    limit = _safe_int(request.args.get("limit", 50), 50, min_value=1, max_value=200)
+    return ok(_collect_bounty_v5(project_id=project_id, search=search, limit=limit))
 
 
 @api.get("/bounty/leads/export")
