@@ -914,8 +914,6 @@ html[data-density="comfortable"] .card-body,html[data-density="comfortable"] .mo
 .beginner-switch{position:relative;width:42px;height:24px;flex:0 0 auto}.beginner-switch input{position:absolute;opacity:0}.beginner-switch span{position:absolute;inset:0;border-radius:999px;background:var(--border);transition:background var(--transition)}.beginner-switch span::after{content:'';position:absolute;top:3px;left:3px;width:18px;height:18px;border-radius:50%;background:#fff;transition:transform var(--transition);box-shadow:var(--shadow-sm)}.beginner-switch input:checked + span{background:var(--accent)}.beginner-switch input:checked + span::after{transform:translateX(18px)}
 html[data-experience="beginner"] .advanced-nav{display:none}
 html[data-experience="beginner"] .nav-section.advanced-nav{display:none}
-.customer-start-grid{display:grid;grid-template-columns:1.2fr repeat(3,minmax(170px,1fr));gap:12px;margin-bottom:18px}.customer-start-card{border:1px solid color-mix(in srgb,var(--accent) 34%,var(--border));border-radius:20px;background:linear-gradient(145deg,color-mix(in srgb,var(--bg-surface) 94%,transparent),color-mix(in srgb,var(--accent) 8%,var(--bg-raised)));padding:18px;box-shadow:var(--shadow-sm)}.customer-start-card.primary{background:linear-gradient(135deg,color-mix(in srgb,var(--accent) 18%,var(--bg-surface)),var(--bg-surface))}.customer-step{width:34px;height:34px;border-radius:13px;display:grid;place-items:center;background:var(--accent-dim);color:var(--accent);font-weight:900;margin-bottom:10px}.customer-start-card h2,.customer-start-card h3{letter-spacing:-.03em}.customer-start-card h2{font-size:20px;margin-bottom:6px}.customer-start-card h3{font-size:14px;margin-bottom:5px}.customer-start-card p{color:var(--text-secondary);font-size:12.5px;line-height:1.45}.customer-start-actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:14px}.plain-language-note{display:flex;gap:10px;align-items:flex-start;border:1px dashed color-mix(in srgb,var(--green) 40%,var(--border));background:var(--green-dim);border-radius:16px;padding:12px 14px;margin-bottom:18px;color:var(--text-secondary);font-size:12.5px}.plain-language-note strong{color:var(--text-primary)}
-@media (max-width:1100px){.customer-start-grid{grid-template-columns:1fr 1fr}.customer-start-card.primary{grid-column:1/-1}}@media (max-width:700px){.customer-start-grid{grid-template-columns:1fr}}
 
 /* Friendly onboarding and guided workflow helpers */
 .onboarding-strip{display:grid;grid-template-columns:1.1fr repeat(3,minmax(170px,1fr));gap:12px;margin:0 0 16px}
@@ -1033,7 +1031,7 @@ html[data-experience="beginner"] .nav-section.advanced-nav{display:none}
     <div class="nav-section">Overview</div>
     <button class="nav-item active" data-page="dashboard">
       <svg fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>
-      <span>Home</span>
+      <span>Dashboard</span>
     </button>
     <button class="nav-item" data-page="projects">
       <svg fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path d="M3 7a2 2 0 012-2h4l2 2h8a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2V7z"/></svg>
@@ -1094,7 +1092,7 @@ html[data-experience="beginner"] .nav-section.advanced-nav{display:none}
 <div class="main">
   <div class="topbar">
     <button class="mobile-menu-btn" id="mobileMenuBtn" aria-label="Open menu">☰</button>
-    <div class="topbar-title" id="topTitle">Home</div>
+    <div class="topbar-title" id="topTitle">Dashboard</div>
     <div class="topbar-meta">
       <span class="topbar-health"><span class="topbar-health-dot"></span>Live updates</span>
       <span class="topbar-meta-sep">•</span>
@@ -1116,21 +1114,6 @@ html[data-experience="beginner"] .nav-section.advanced-nav{display:none}
 
     <!-- ══════ DASHBOARD ══════ -->
     <div class="page active dashboard-redesign" id="page-dashboard">
-      <section class="customer-start-grid" aria-label="Getting started guide">
-        <article class="customer-start-card primary">
-          <div class="dash-eyebrow">New customer guide</div>
-          <h2>Start with one domain, then follow the alerts.</h2>
-          <p>This home page now highlights the safest path: add domains, run discovery, review plain-language alerts, then save notification settings when you are ready.</p>
-          <div class="customer-start-actions">
-            <button class="btn btn-primary" onclick="openModal('createModal')">Add your first domain</button>
-            <button class="btn" onclick="nav('projects')">Run a quick scan</button>
-          </div>
-        </article>
-        <article class="customer-start-card"><div class="customer-step">1</div><h3>Add domains</h3><p>Create a saved domain list or paste hosts into Quick Scan without setting up a project.</p></article>
-        <article class="customer-start-card"><div class="customer-step">2</div><h3>Check risk</h3><p>Use the score, alerts, and mismatch cards to understand what needs attention first.</p></article>
-        <article class="customer-start-card"><div class="customer-step">3</div><h3>Get notified</h3><p>Connect Slack, Discord, or Telegram only after the first scan is working.</p></article>
-      </section>
-      <div class="plain-language-note"><span>✨</span><div><strong>Simple mode is on by default.</strong> Advanced tools like raw enumeration, Nuclei CVEs, OpenSSL, and logs are still available from the sidebar toggle.</div></div>
       <section class="dash-command-center" aria-label="Dashboard overview">
         <div class="dash-hero-copy">
           <div class="dash-eyebrow">SSL Sentinel v5 Command Center</div>
