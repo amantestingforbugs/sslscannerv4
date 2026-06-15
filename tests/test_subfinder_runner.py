@@ -514,3 +514,69 @@ def test_permutation_dns_hosts_returns_partial_results_when_resolver_wedges(monk
 
     assert found == ["api-new.example.com"]
     assert elapsed < 1.8
+
+
+def test_shared_subdomain_enumeration_combines_tool_passive_and_dns(monkeypatch):
+    monkeypatch.setattr(
+        runner,
+        "_passive_enumeration_sources",
+        lambda: {"passive": lambda root: ["www.example.com", "bad.net"]},
+    )
+    monkeypatch.setattr(
+        runner,
+        "_run_subfinder_for_root",
+        lambda root, timeout=180: {"root_domain": root, "status": "done", "found": ["api.example.com"], "found_count": 1, "stderr": ""},
+    )
+    monkeypatch.setattr(runner, "_bruteforce_dns_hosts", lambda root, seed, max_candidates=0: ["admin.example.com"])
+    monkeypatch.setattr(runner, "_permutation_dns_hosts", lambda root, seed, max_candidates=0: ["dev.example.com"])
+
+    result = runner._run_subdomain_enumeration(["example.com"])
+
+    assert result["found"] == ["admin.example.com", "api.example.com", "dev.example.com", "www.example.com"]
+    assert result["source_map"]["subfinder"] == ["api.example.com"]
+    assert result["source_map"]["passive"] == ["www.example.com"]
+    assert result["source_map"]["dns_bruteforce"] == ["admin.example.com"]
+    assert result["source_map"]["dns_permutation"] == ["dev.example.com"]
+
+
+def test_domain_enumeration_and_project_subfinder_share_same_pipeline(monkeypatch):
+    import db.database as db
+
+    shared = {
+        "found": ["api.example.com", "www.example.com"],
+        "source_map": {"subfinder": ["api.example.com"], "passive": ["www.example.com"]},
+        "source_counts": {"subfinder": 1, "passive": 1},
+        "raw_records": [
+            {"source": "subfinder", "root_domain": "example.com", "status": "done", "found_count": 1, "found_sample": ["api.example.com"]},
+            {"source": "passive", "root_domain": "example.com", "status": "done", "found_count": 1, "found_sample": ["www.example.com"]},
+        ],
+    }
+    calls = []
+    monkeypatch.setattr(runner, "_run_subdomain_enumeration", lambda roots: calls.append(tuple(roots)) or shared)
+    monkeypatch.setattr(runner, "subfinder_available", lambda: True)
+    monkeypatch.setattr(runner, "_resolve_active_hosts_with_httpx", lambda hosts: [])
+    monkeypatch.setattr(runner, "_ssl_scan_subfinder_hosts", lambda *args, **kwargs: None)
+    monkeypatch.setattr(db, "domain_enum_scan_create", lambda *args, **kwargs: "scan1")
+    enum_rows = []
+    monkeypatch.setattr(db, "domain_enum_results_add_batch", lambda scan_id, domain, hosts, source="mixed": enum_rows.append((domain, tuple(hosts), source)))
+    monkeypatch.setattr(db, "domain_enum_scan_finish", lambda *args, **kwargs: None)
+    monkeypatch.setattr(db, "project_get", lambda project_id: {"id": project_id, "name": "Example"})
+    monkeypatch.setattr(db, "project_hosts", lambda project_id: ["example.com"])
+    monkeypatch.setattr(db, "subfinder_job_create", lambda *args, **kwargs: "job1")
+    monkeypatch.setattr(db, "subfinder_raw_result_add", lambda *args, **kwargs: "raw1")
+    monkeypatch.setattr(db, "subfinder_raw_result_finish", lambda *args, **kwargs: None)
+    inserted = {}
+    monkeypatch.setattr(db, "subfinder_hosts_add_batch", lambda project_id, hosts: inserted.setdefault("hosts", tuple(hosts)) or (len(hosts), hosts))
+    monkeypatch.setattr(db, "subfinder_new_discoveries_add_batch", lambda *args, **kwargs: None)
+    monkeypatch.setattr(db, "subfinder_httpx_results_upsert_batch", lambda *args, **kwargs: None)
+    monkeypatch.setattr(db, "subfinder_job_finish", lambda *args, **kwargs: None)
+    monkeypatch.setattr(db, "subfinder_job_error", lambda *args, **kwargs: None)
+
+    enum_result = runner.run_domain_enumeration_scan("example.com")
+    job_id = runner.run_subfinder_for_project("project1", triggered_by="manual")
+
+    assert calls == [("example.com",), ("example.com",)]
+    assert enum_result["total_found"] == 2
+    assert sorted(enum_rows) == [("example.com", ("api.example.com",), "subfinder"), ("example.com", ("www.example.com",), "passive")]
+    assert inserted["hosts"] == ("api.example.com", "www.example.com")
+    assert job_id == "job1"
