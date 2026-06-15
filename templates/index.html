@@ -931,9 +931,23 @@ html[data-density="comfortable"] .card-body,html[data-density="comfortable"] .mo
 
 @media (max-width:1180px){.mission-grid{grid-template-columns:1fr 1fr}.mission-grid .mission-card:first-child{grid-column:1/-1}.risk-orb{width:128px;height:128px}}@media (max-width:760px){.mission-grid{grid-template-columns:1fr}.metric-row{grid-template-columns:96px 1fr 42px}.shortcuts-fab{display:none}}
 
+
+/* Experience upgrade: accessibility, perceived performance, and focus polish */
+.skip-link{position:fixed;left:16px;top:12px;z-index:5000;transform:translateY(-140%);background:var(--accent);color:#fff;padding:9px 12px;border-radius:999px;font-weight:800;box-shadow:var(--shadow);transition:transform var(--transition)}
+.skip-link:focus{transform:translateY(0);outline:none}
+.app-progress{position:fixed;top:0;left:0;right:0;height:3px;z-index:5001;opacity:0;pointer-events:none;background:transparent;transition:opacity .18s ease}
+.app-progress span{display:block;width:38%;height:100%;border-radius:999px;background:linear-gradient(90deg,var(--accent),var(--purple),var(--green));box-shadow:0 0 18px color-mix(in srgb,var(--accent) 54%,transparent);transform:translateX(-120%)}
+.app-progress.is-active{opacity:1}.app-progress.is-active span{animation:app-progress-slide 1.05s ease-in-out infinite}.app-progress.is-finishing span{animation:none;transform:translateX(165%);transition:transform .25s ease}
+@keyframes app-progress-slide{0%{transform:translateX(-120%);width:30%}55%{width:46%}100%{transform:translateX(260%);width:30%}}
+.content:focus{outline:none}.page[aria-current="page"]{scroll-margin-top:var(--header-h)}
+.command-palette.open .command-shell{animation:command-pop .16s ease-out both}@keyframes command-pop{from{opacity:.6;transform:translateY(-8px) scale(.98)}to{opacity:1;transform:none}}
+@media (prefers-reduced-motion: reduce){.app-progress span,.command-palette.open .command-shell{animation:none!important}}
+
 </style>
 </head>
 <body>
+<a class="skip-link" href="#mainContent">Skip to dashboard content</a>
+<div class="app-progress" id="appProgress" aria-hidden="true"><span></span></div>
 <div class="app">
 <div class="sidebar-overlay" id="sidebarOverlay"></div>
 
@@ -1034,7 +1048,7 @@ html[data-density="comfortable"] .card-body,html[data-density="comfortable"] .mo
     </div>
   </div>
 
-  <div class="content">
+  <div class="content" id="mainContent" tabindex="-1">
 
     <!-- ══════ DASHBOARD ══════ -->
     <div class="page active" id="page-dashboard">
@@ -2011,6 +2025,25 @@ let nucleiPendingStats = null;
 const apiMemo = new Map();
 const API_MEMO_TTL = 3500;
 
+
+let activeNetworkRequests = 0;
+let progressHideTimer = null;
+function trackNetworkActivity(promise) {
+  const progress = document.getElementById('appProgress');
+  activeNetworkRequests += 1;
+  clearTimeout(progressHideTimer);
+  progress?.classList.add('is-active');
+  return Promise.resolve(promise).finally(() => {
+    activeNetworkRequests = Math.max(0, activeNetworkRequests - 1);
+    if (!activeNetworkRequests) {
+      progress?.classList.add('is-finishing');
+      progressHideTimer = setTimeout(() => {
+        progress?.classList.remove('is-active', 'is-finishing');
+      }, 260);
+    }
+  });
+}
+
 function isReadRequest(opts = {}) {
   return !opts?.method || String(opts.method).toUpperCase() === 'GET';
 }
@@ -2037,7 +2070,7 @@ async function apiJSON(url, opts) {
   if (hasBody) {
     req.headers = { 'Content-Type': 'application/json', ...(req.headers || {}) };
   }
-  const promise = fetch(url, req).then(async resp => {
+  const promise = trackNetworkActivity(fetch(url, req)).then(async resp => {
     const out = await resp.json();
     if (out?.ok !== false) setLastSyncStamp();
     if (!resp.ok || out?.ok === false) apiMemo.delete(memoKey);
@@ -2285,13 +2318,17 @@ const QUICK_ACTIONS = [
 
 function nav(name) {
   const config = PAGE_INFRA[name] || {};
+  performance.mark?.(`nav:${name}`);
   document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
   document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
   const pg = document.getElementById('page-'+name);
-  if (pg) pg.classList.add('active');
+  if (pg) { pg.classList.add('active'); pg.setAttribute('aria-current', 'page'); }
+  document.querySelectorAll('.page:not(.active)').forEach(p => p.removeAttribute('aria-current'));
   const ni = document.querySelector(`[data-page="${name}"]`);
   if (ni) ni.classList.add('active');
   document.getElementById('topTitle').textContent = config.title || name;
+  document.title = `${config.title || name} · SSL Sentinel`;
+  document.getElementById('mainContent')?.focus({ preventScroll: true });
   config.onEnter?.();
 }
 
