@@ -995,6 +995,34 @@ html[data-experience="beginner"] .nav-section.advanced-nav{display:none}
 @media(max-width:1180px){.dash-command-center,.dash-section-grid,.dash-section-grid-primary{grid-template-columns:1fr}.dash-kpi-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.dash-system-strip{grid-template-columns:repeat(3,minmax(0,1fr))}.dash-matrix{grid-template-columns:repeat(2,minmax(0,1fr))}}
 @media(max-width:700px){.dashboard-redesign{max-width:none}.dash-hero-copy{padding:22px;min-height:auto}.dash-kpi-grid,.dash-system-strip,.dash-matrix{grid-template-columns:1fr}.dash-kpi-card{align-items:flex-start}.dash-card-header{flex-direction:column}.dash-risk-orb{width:140px;height:140px}}
 
+/* 2026 UI refresh: depth, clarity, and operator guidance */
+[data-theme="dark"]{--bg-base:#080b12;--bg-surface:#101622;--bg-raised:#151d2c;--border:#263246;--accent:#7c3aed;--accent-2:#06b6d4;--hero-glow:rgba(124,58,237,.28)}
+[data-theme="light"]{--accent:#6d28d9;--accent-2:#0891b2;--hero-glow:rgba(109,40,217,.14)}
+body::before{content:'';position:fixed;inset:0;pointer-events:none;background:radial-gradient(circle at 18% 0%,color-mix(in srgb,var(--accent) 18%,transparent),transparent 34%),radial-gradient(circle at 82% 10%,color-mix(in srgb,var(--accent-2) 14%,transparent),transparent 32%);opacity:.9}
+.sidebar{background:linear-gradient(180deg,color-mix(in srgb,var(--bg-surface) 96%,transparent),color-mix(in srgb,var(--bg-base) 94%,transparent));box-shadow:18px 0 54px rgba(2,6,23,.18)}
+.logo-mark{box-shadow:0 12px 28px color-mix(in srgb,var(--accent) 34%,transparent);background:conic-gradient(from 220deg,var(--accent),var(--accent-2),var(--purple),var(--accent))}
+.topbar{background:color-mix(in srgb,var(--bg-surface) 82%,transparent);backdrop-filter:blur(18px);position:relative;z-index:5}
+.content{background:linear-gradient(180deg,transparent,color-mix(in srgb,var(--bg-base) 82%,transparent));}
+.dash-hero-copy,.dash-risk-panel,.dash-card,.dash-system-strip,.dash-kpi-card{box-shadow:0 22px 70px rgba(2,6,23,.20),inset 0 1px 0 color-mix(in srgb,#fff 8%,transparent)}
+.dash-hero-copy{min-height:312px;background:linear-gradient(135deg,color-mix(in srgb,var(--bg-surface) 92%,transparent),color-mix(in srgb,var(--accent) 12%,var(--bg-raised)));}
+.dash-hero-copy::before{content:'';position:absolute;inset:-1px;background:linear-gradient(120deg,color-mix(in srgb,var(--accent) 30%,transparent),transparent 32%,color-mix(in srgb,var(--accent-2) 24%,transparent));opacity:.7;mask:linear-gradient(#000,transparent 62%);pointer-events:none}
+.dash-hero-copy::after{right:-120px;top:-145px;width:420px;height:420px;background:radial-gradient(circle,var(--hero-glow),transparent 68%)}
+.dash-eyebrow{display:inline-flex;align-items:center;gap:8px;width:max-content;padding:7px 10px;border-radius:999px;background:color-mix(in srgb,var(--accent) 12%,transparent);border:1px solid color-mix(in srgb,var(--accent) 28%,var(--border));}
+.dash-eyebrow::before{content:'●';font-size:9px;color:var(--green);filter:drop-shadow(0 0 7px var(--green))}
+.dash-hero-copy h1{max-width:850px;text-wrap:balance}.dash-hero-copy p{text-wrap:pretty}
+.dash-cta-row .btn{border-radius:999px;padding:9px 15px}.btn-primary{background:linear-gradient(135deg,var(--accent),var(--accent-2));border-color:transparent;box-shadow:0 12px 28px color-mix(in srgb,var(--accent) 28%,transparent)}
+.dash-trust-row{position:relative;z-index:1;display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;margin-top:24px;max-width:760px}
+.dash-trust-chip{padding:11px 12px;border-radius:16px;background:color-mix(in srgb,var(--bg-base) 38%,transparent);border:1px solid color-mix(in srgb,var(--border) 68%,var(--accent));backdrop-filter:blur(12px)}
+.dash-trust-chip span{display:block;font-size:10px;color:var(--text-muted);text-transform:uppercase;letter-spacing:.1em;font-weight:900}.dash-trust-chip strong{display:block;margin-top:3px;font-size:13px;color:var(--text-primary)}
+.dash-kpi-card{position:relative;overflow:hidden;transition:transform var(--transition),border-color var(--transition),box-shadow var(--transition)}.dash-kpi-card:hover{transform:translateY(-3px);border-color:color-mix(in srgb,var(--accent) 52%,var(--border));box-shadow:0 26px 76px rgba(2,6,23,.26)}
+.dash-kpi-card::after{content:'';position:absolute;right:-38px;bottom:-42px;width:120px;height:120px;border-radius:50%;background:color-mix(in srgb,var(--accent) 12%,transparent)}
+.dash-kpi-icon{position:relative;z-index:1}.dash-kpi-card>div{position:relative;z-index:1}
+.dash-insight-rail{display:grid;grid-template-columns:1.2fr 1fr 1fr;gap:14px;margin:-4px 0 18px}
+.dash-insight-card{border:1px solid color-mix(in srgb,var(--border) 76%,var(--accent));border-radius:20px;padding:16px;background:linear-gradient(180deg,color-mix(in srgb,var(--bg-surface) 94%,transparent),color-mix(in srgb,var(--bg-raised) 82%,transparent));box-shadow:0 14px 38px rgba(2,6,23,.13)}
+.dash-insight-card strong{display:block;font-size:14px;margin:5px 0 4px}.dash-insight-card p{color:var(--text-secondary);font-size:12px;line-height:1.45}.dash-insight-icon{width:32px;height:32px;border-radius:12px;display:grid;place-items:center;background:var(--accent-dim)}
+@media(max-width:900px){.dash-trust-row,.dash-insight-rail{grid-template-columns:1fr}.dash-hero-copy{min-height:auto}}
+
+
 </style>
 </head>
 <body>
@@ -1124,6 +1152,11 @@ html[data-experience="beginner"] .nav-section.advanced-nav{display:none}
             <button class="btn" onclick="nav('subfinder')">Run Discovery</button>
             <button class="btn" onclick="nav('alerts')">Review Alerts</button>
           </div>
+          <div class="dash-trust-row" aria-label="Workflow highlights">
+            <div class="dash-trust-chip"><span>Coverage</span><strong>Inventory-first TLS view</strong></div>
+            <div class="dash-trust-chip"><span>Signal</span><strong>Risk-ranked anomalies</strong></div>
+            <div class="dash-trust-chip"><span>Workflow</span><strong>Evidence-ready prompts</strong></div>
+          </div>
         </div>
         <div class="dash-risk-panel" aria-label="Current risk signal">
           <div class="dash-panel-top">
@@ -1151,6 +1184,24 @@ html[data-experience="beginner"] .nav-section.advanced-nav{display:none}
         <article class="dash-kpi-card amber">
           <span class="dash-kpi-icon">🔔</span>
           <div><div class="dash-kpi-value" id="s-expg">—</div><div class="dash-kpi-label">Alerts</div></div>
+        </article>
+      </section>
+
+      <section class="dash-insight-rail" aria-label="Recommended next actions">
+        <article class="dash-insight-card">
+          <div class="dash-insight-icon">⚡</div>
+          <strong>Start with the highest-confidence surfaces</strong>
+          <p>Use High-Priority Leads to review takeover, auth boundary, redirect, and TLS signals before expanding the scan scope.</p>
+        </article>
+        <article class="dash-insight-card">
+          <div class="dash-insight-icon">🧭</div>
+          <strong>Keep scope visible</strong>
+          <p>The project selector and simple mode reduce navigation noise while you triage fresh discoveries.</p>
+        </article>
+        <article class="dash-insight-card">
+          <div class="dash-insight-icon">🧾</div>
+          <strong>Package evidence faster</strong>
+          <p>Copilot packs turn live findings into concise prompts for validation notes and bounty report drafts.</p>
         </article>
       </section>
 
