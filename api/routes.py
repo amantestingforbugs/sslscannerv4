@@ -697,6 +697,8 @@ def _collect_bounty_brief(project_id: str = "", search: str = "", limit: int = 2
         "kpis": summary,
         "critical_path": critical_path,
         "hypotheses": _hypotheses_for_leads(leads),
+        "attack_chains": _attack_chains_for_leads(leads),
+        "operator_mode": "scope-first chain planning with safe manual validation and no exploit execution",
         "report_template": {
             "title": "[Asset] Vulnerability class with concise impact",
             "sections": [
@@ -710,6 +712,80 @@ def _collect_bounty_brief(project_id: str = "", search: str = "", limit: int = 2
         },
         "method": "Transforms ranked authorized leads into a manual validation plan, hypotheses, and report-ready evidence checklist.",
     }
+
+
+BOUNTY_ATTACK_CHAIN_RULES = [
+    {
+        "id": "graphql-idor-chain",
+        "match": ("graphql", "api", "openapi", "swagger"),
+        "title": "API discovery → auth mapping → IDOR proof path",
+        "signal": "API documentation or schema-like surface detected on an active host.",
+        "safe_steps": [
+            "Inventory documented endpoints and authentication requirements without fuzzing destructive methods.",
+            "Use only researcher-owned accounts and objects to compare tenant, role, and ownership checks.",
+            "Capture minimal request/response evidence for one impacted object class before broad validation.",
+        ],
+        "automation": ["Nuclei medium+ templates", "httpx title/status replay", "manual proxy diff with owned accounts"],
+        "report_angle": "Business-object authorization impact with exact endpoint, object type, and affected role boundary.",
+    },
+    {
+        "id": "edge-auth-bypass-chain",
+        "match": ("admin", "login", "sso", "auth", "dashboard"),
+        "title": "Protected panel → edge routing → access-control bypass review",
+        "signal": "Administrative or authentication boundary exposed on the internet.",
+        "safe_steps": [
+            "Map redirects, canonical hostnames, and status transitions for the protected route.",
+            "Check safe read-only variants such as trailing slash, case, encoded slash, and alternate host headers where allowed.",
+            "Validate any bypass only against accounts and data you own, then stop at proof of impact.",
+        ],
+        "automation": ["OpenSSL CN/SAN check", "Nuclei exposures/auth templates", "browser screenshot evidence"],
+        "report_angle": "Externally reachable auth boundary with reproducible route normalization or authorization failure.",
+    },
+    {
+        "id": "env-drift-secrets-chain",
+        "match": ("dev", "test", "stage", "staging", "uat", "internal"),
+        "title": "Non-production exposure → config drift → sensitive metadata review",
+        "signal": "Environment-name host suggests staging, test, or internal deployment drift.",
+        "safe_steps": [
+            "Compare headers, robots.txt, source maps, and public metadata against production equivalents.",
+            "Look for debug banners, stack traces, sample data, and permissive CORS without extracting secrets or bulk data.",
+            "Document one safe page or response proving drift and ask for permission before deeper testing if needed.",
+        ],
+        "automation": ["httpx enrichment", "Nuclei exposures/misconfig templates", "manual source-map review"],
+        "report_angle": "Environment control gap that increases exposure of non-production data, debug output, or weaker auth controls.",
+    },
+    {
+        "id": "tls-takeover-routing-chain",
+        "match": ("tls", "mismatch", "expired", "certificate"),
+        "title": "TLS anomaly → vhost routing → stale tenant/takeover review",
+        "signal": "Certificate mismatch, expiry, or routing anomaly indicates stale infrastructure or shared tenant confusion.",
+        "safe_steps": [
+            "Record CN/SANs, issuer, expiry, redirect chain, and default vhost behavior for the hostname.",
+            "Compare HTTPS Host routing with the final URL and any unrelated tenant names in certificates.",
+            "If takeover is suspected, follow program-specific claim rules and avoid claiming resources without permission.",
+        ],
+        "automation": ["OpenSSL subject/SAN capture", "SSL scanner replay", "httpx redirect comparison"],
+        "report_angle": "Routing/certificate evidence showing stale service ownership, tenant bleed, or reliability/security impact.",
+    },
+]
+
+
+def _attack_chains_for_leads(leads: list[dict]) -> list[dict]:
+    chains = []
+    for rule in BOUNTY_ATTACK_CHAIN_RULES:
+        matched = []
+        for lead in leads:
+            haystack = _lead_keywords(lead)
+            if any(token in haystack for token in rule["match"]):
+                matched.append({
+                    "hostname": lead.get("hostname"),
+                    "score": lead.get("score"),
+                    "severity": lead.get("severity"),
+                    "evidence": (lead.get("evidence") or [])[:3],
+                })
+        if matched:
+            chains.append({**rule, "matched_assets": matched[:5], "confidence": min(99, 55 + len(matched) * 8 + max((m.get("score") or 0 for m in matched), default=0) // 5)})
+    return sorted(chains, key=lambda c: (c.get("confidence") or 0, len(c.get("matched_assets") or [])), reverse=True)[:6]
 
 def _run_openssl_subject(hostname: str, timeout: int = 20) -> dict:
     cmd = ["openssl", "s_client", "-connect", f"{hostname}:443"]
