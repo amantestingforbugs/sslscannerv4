@@ -1023,6 +1023,25 @@ body::before{content:'';position:fixed;inset:0;pointer-events:none;background:ra
 @media(max-width:900px){.dash-trust-row,.dash-insight-rail{grid-template-columns:1fr}.dash-hero-copy{min-height:auto}}
 
 
+/* Simple dashboard override: fewer panels, clearer primary actions */
+.dashboard-redesign{max-width:1180px;margin:0 auto}
+.dash-command-center{display:block;margin-bottom:16px}
+.dash-hero-copy{min-height:auto;padding:28px;border-radius:22px;background:linear-gradient(135deg,color-mix(in srgb,var(--bg-surface) 96%,transparent),color-mix(in srgb,var(--accent) 8%,var(--bg-raised)));box-shadow:0 16px 44px rgba(2,6,23,.14)}
+.dash-hero-copy::before,.dash-hero-copy::after{display:none}
+.dash-hero-copy h1{font-size:clamp(30px,4vw,46px);line-height:1.05;letter-spacing:-.045em;max-width:720px}
+.dash-hero-copy p{max-width:660px;font-size:14px}
+.dash-eyebrow{background:var(--green-dim);border-color:color-mix(in srgb,var(--green) 28%,var(--border));color:var(--green)}
+.dash-cta-row{margin-top:20px}.dash-cta-row .btn{min-height:40px}
+.dash-kpi-grid{grid-template-columns:repeat(4,minmax(0,1fr));gap:12px;margin-bottom:16px}
+.dash-kpi-card{border-radius:18px;padding:16px;box-shadow:none}.dash-kpi-card:hover{transform:none;box-shadow:0 12px 34px rgba(2,6,23,.12)}
+.dash-simple-grid{display:grid;grid-template-columns:minmax(0,1.05fr) minmax(300px,.95fr);gap:16px;margin-bottom:16px}
+.dash-card{border-radius:20px;box-shadow:none}.dash-card-header{padding:16px 18px}.dash-card-subtitle{max-width:64ch}
+.dash-help-list{display:grid;gap:10px;padding:16px 18px}.dash-help-item{display:grid;grid-template-columns:34px 1fr;gap:12px;padding:12px;border:1px solid var(--border);border-radius:14px;background:color-mix(in srgb,var(--bg-raised) 72%,transparent)}
+.dash-help-item span{width:34px;height:34px;border-radius:12px;display:grid;place-items:center;background:var(--accent-dim)}.dash-help-item strong{display:block;margin-bottom:2px}.dash-help-item p{font-size:12px;color:var(--text-secondary)}
+.dash-secondary-grid{display:grid;grid-template-columns:1fr 1fr;gap:16px}.dash-system-strip{grid-template-columns:repeat(3,minmax(0,1fr));box-shadow:none}
+.dash-risk-panel,.dash-insight-rail{display:none}.dash-log-card{display:none}.dash-table-slot{min-height:160px}.dash-matrix{grid-template-columns:repeat(2,minmax(0,1fr));padding:16px}.visually-hidden{position:absolute!important;width:1px!important;height:1px!important;padding:0!important;margin:-1px!important;overflow:hidden!important;clip:rect(0,0,0,0)!important;white-space:nowrap!important;border:0!important}
+@media(max-width:900px){.dash-kpi-grid,.dash-simple-grid,.dash-secondary-grid,.dash-system-strip{grid-template-columns:1fr}.dash-hero-copy{padding:22px}}
+
 </style>
 </head>
 <body>
@@ -1144,27 +1163,15 @@ body::before{content:'';position:fixed;inset:0;pointer-events:none;background:ra
     <div class="page active dashboard-redesign" id="page-dashboard">
       <section class="dash-command-center" aria-label="Dashboard overview">
         <div class="dash-hero-copy">
-          <div class="dash-eyebrow">SSL Sentinel v5 Command Center</div>
-          <h1>Clean certificate recon, prioritized.</h1>
-          <p>Monitor project coverage, catch certificate drift, and move from fresh discoveries to validated evidence without digging through clutter.</p>
-          <div class="dash-cta-row">
+          <div class="dash-eyebrow">Simple SSL Dashboard</div>
+          <h1>See what needs attention, then take action.</h1>
+          <p>A cleaner home screen for everyday SSL and recon work: create a project, run discovery, review alerts, and check recent certificate problems without navigating a complex command center.</p>
+          <div class="dash-cta-row" aria-label="Primary dashboard actions">
             <button class="btn btn-primary" onclick="openModal('createModal')">+ Create Project</button>
             <button class="btn" onclick="nav('subfinder')">Run Discovery</button>
             <button class="btn" onclick="nav('alerts')">Review Alerts</button>
+            <button class="btn" onclick="loadDash()">Refresh</button>
           </div>
-          <div class="dash-trust-row" aria-label="Workflow highlights">
-            <div class="dash-trust-chip"><span>Coverage</span><strong>Inventory-first TLS view</strong></div>
-            <div class="dash-trust-chip"><span>Signal</span><strong>Risk-ranked anomalies</strong></div>
-            <div class="dash-trust-chip"><span>Workflow</span><strong>Evidence-ready prompts</strong></div>
-          </div>
-        </div>
-        <div class="dash-risk-panel" aria-label="Current risk signal">
-          <div class="dash-panel-top">
-            <span class="dash-panel-label">Risk signal</span>
-            <span class="dash-live-pill" id="missionState">Correlating</span>
-          </div>
-          <div class="risk-orb dash-risk-orb" id="riskOrb"><div><div class="risk-number" id="riskNumber">—</div><div class="risk-caption" id="riskCaption">Signal</div></div></div>
-          <p id="riskNarrative">Correlating takeover, misroute, stale-asset, and certificate anomaly signals…</p>
         </div>
       </section>
 
@@ -1175,70 +1182,52 @@ body::before{content:'';position:fixed;inset:0;pointer-events:none;background:ra
         </article>
         <article class="dash-kpi-card green">
           <span class="dash-kpi-icon">✅</span>
-          <div><div class="dash-kpi-value" id="s-ok">—</div><div class="dash-kpi-label">Active Domains</div></div>
+          <div><div class="dash-kpi-value" id="s-ok">—</div><div class="dash-kpi-label">Healthy Domains</div></div>
         </article>
         <article class="dash-kpi-card red">
-          <span class="dash-kpi-icon">❌</span>
-          <div><div class="dash-kpi-value" id="s-mis">—</div><div class="dash-kpi-label">Mismatches</div></div>
+          <span class="dash-kpi-icon">⚠️</span>
+          <div><div class="dash-kpi-value" id="s-mis">—</div><div class="dash-kpi-label">Certificate Issues</div></div>
         </article>
         <article class="dash-kpi-card amber">
           <span class="dash-kpi-icon">🔔</span>
-          <div><div class="dash-kpi-value" id="s-expg">—</div><div class="dash-kpi-label">Alerts</div></div>
+          <div><div class="dash-kpi-value" id="s-expg">—</div><div class="dash-kpi-label">Open Alerts</div></div>
         </article>
       </section>
 
-      <section class="dash-insight-rail" aria-label="Recommended next actions">
-        <article class="dash-insight-card">
-          <div class="dash-insight-icon">⚡</div>
-          <strong>Start with the highest-confidence surfaces</strong>
-          <p>Use High-Priority Leads to review takeover, auth boundary, redirect, and TLS signals before expanding the scan scope.</p>
-        </article>
-        <article class="dash-insight-card">
-          <div class="dash-insight-icon">🧭</div>
-          <strong>Keep scope visible</strong>
-          <p>The project selector and simple mode reduce navigation noise while you triage fresh discoveries.</p>
-        </article>
-        <article class="dash-insight-card">
-          <div class="dash-insight-icon">🧾</div>
-          <strong>Package evidence faster</strong>
-          <p>Copilot packs turn live findings into concise prompts for validation notes and bounty report drafts.</p>
-        </article>
-      </section>
-
-      <section class="dash-section-grid dash-section-grid-primary">
-        <article class="dash-card dash-card-large">
-          <div class="dash-card-header">
-            <div><span class="dash-card-kicker">AI Bounty Copilot</span><h2>Prompt workbench</h2><p class="dash-card-subtitle">AI-ready context packs for scope checks, recon clustering, exploit hypotheses, and report drafting.</p></div>
-            <button class="btn btn-sm" onclick="loadDash()">Refresh packs</button>
-          </div>
-          <div class="hunter-matrix dash-matrix" id="hunterMatrix">
-            <div class="skeleton"></div><div class="skeleton"></div><div class="skeleton"></div>
-          </div>
-        </article>
+      <section class="dash-simple-grid" aria-label="Dashboard quick actions and system status">
         <article class="dash-card">
           <div class="dash-card-header">
-            <div><span class="dash-card-kicker">AI Workflow Queue</span><h2>Reusable bounty prompts</h2></div>
-            <button class="btn btn-sm" onclick="nav('bounty-leads')">Load evidence</button>
+            <div><span class="dash-card-kicker">What can I do here?</span><h2>Quick actions</h2><p class="dash-card-subtitle">Start with these common workflows. Advanced bounty and AI tools remain available when you need them.</p></div>
           </div>
-          <div class="hunter-paths dash-paths" id="hunterPaths">
-            <div class="skeleton"></div><div class="skeleton"></div><div class="skeleton"></div>
+          <div class="dash-help-list">
+            <div class="dash-help-item"><span>➕</span><div><strong>Add a domain</strong><p>Create a project and start monitoring certificate health.</p></div></div>
+            <div class="dash-help-item"><span>🛰️</span><div><strong>Find subdomains</strong><p>Run discovery to expand coverage for an approved scope.</p></div></div>
+            <div class="dash-help-item"><span>🔔</span><div><strong>Fix alerts first</strong><p>Review mismatches, expired certificates, and scan errors.</p></div></div>
+            <div class="dash-help-item"><span>🤖</span><div><strong>Need deeper triage?</strong><p>Open AI Bounty Copilot for a Prompt workbench, AI prompt pack, and Actionable bounty copilot workflows.</p></div></div>
           </div>
+        </article>
+
+        <article class="dash-card">
+          <div class="dash-card-header">
+            <div><span class="dash-card-kicker">System status</span><h2>Scanner health</h2><p class="dash-card-subtitle" id="riskNarrative">Loading scanner status…</p></div>
+            <span class="dash-live-pill" id="missionState">Ready</span>
+          </div>
+          <div class="dash-system-strip" aria-label="System health">
+            <div><span>Uptime</span><strong id="sys-uptime">—</strong></div>
+            <div><span>Running Scans</span><strong id="sys-running-scans">—</strong></div>
+            <div><span>Enabled Projects</span><strong id="sys-enabled-projects">—</strong></div>
+            <div><span>DB Size</span><strong id="sys-db-size">—</strong></div>
+            <div><span>Discovered Hosts</span><strong id="sys-discoveries">—</strong></div>
+            <div><span>Unresolved Alerts</span><strong id="sys-unresolved">—</strong></div>
+          </div>
+          <div class="visually-hidden" id="riskOrb"><span id="riskNumber">—</span><span id="riskCaption">Signal</span></div>
         </article>
       </section>
 
-      <section class="dash-system-strip" aria-label="System health">
-        <div><span>Uptime</span><strong id="sys-uptime">—</strong></div>
-        <div><span>Running Scans</span><strong id="sys-running-scans">—</strong></div>
-        <div><span>Enabled Projects</span><strong id="sys-enabled-projects">—</strong></div>
-        <div><span>DB Size</span><strong id="sys-db-size">—</strong></div>
-        <div><span>Discovered Hosts</span><strong id="sys-discoveries">—</strong></div>
-        <div><span>Unresolved Alerts</span><strong id="sys-unresolved">—</strong></div>
-      </section>
-
-      <section class="dash-section-grid">
+      <section class="dash-secondary-grid" aria-label="Current work">
         <article class="dash-card">
           <div class="dash-card-header">
-            <div><span class="dash-card-kicker">Operations</span><h2>Active scans</h2></div>
+            <div><span class="dash-card-kicker">Now running</span><h2>Active scans</h2></div>
             <button class="btn btn-sm btn-primary" onclick="nav('projects')">+ New Project</button>
           </div>
           <div id="dash-active-scans" class="dash-table-slot">
@@ -1247,7 +1236,7 @@ body::before{content:'';position:fixed;inset:0;pointer-events:none;background:ra
         </article>
         <article class="dash-card">
           <div class="dash-card-header">
-            <div><span class="dash-card-kicker">Findings</span><h2>Recent mismatches</h2></div>
+            <div><span class="dash-card-kicker">Needs review</span><h2>Recent certificate issues</h2></div>
             <button class="btn btn-sm" onclick="nav('projects')">All Projects →</button>
           </div>
           <div id="dash-mismatches" class="dash-table-slot">
@@ -1256,14 +1245,18 @@ body::before{content:'';position:fixed;inset:0;pointer-events:none;background:ra
         </article>
       </section>
 
-      <section class="dash-card dash-log-card">
+      <section class="dash-card" aria-label="AI prompt pack" style="margin-top:16px">
         <div class="dash-card-header">
-          <div><span class="dash-card-kicker">Telemetry</span><h2>Live execution logs</h2></div>
-          <span id="dash-log-status">Idle</span>
+          <div><span class="dash-card-kicker">AI Bounty Copilot</span><h2>Prompt workbench</h2><p class="dash-card-subtitle">Optional AI prompt pack for authorized evidence summaries and report drafts.</p></div>
+          <button class="btn btn-sm" onclick="nav('bounty-leads')">Open copilot</button>
         </div>
-        <div id="dash-logs" class="logs-panel dash-logs">
-          <div class="empty"><div class="empty-icon">📜</div><div class="empty-title">Waiting for logs</div></div>
-        </div>
+        <div class="hunter-matrix dash-matrix" id="hunterMatrix"><div class="skeleton"></div><div class="skeleton"></div></div>
+        <div class="hunter-paths dash-paths visually-hidden" id="hunterPaths"></div>
+      </section>
+
+      <section class="dash-card dash-log-card" aria-hidden="true">
+        <span id="dash-log-status">Idle</span>
+        <div id="dash-logs" class="logs-panel dash-logs"></div>
       </section>
     </div>
 
