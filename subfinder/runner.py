@@ -27,7 +27,7 @@ import time
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from pathlib import Path
 from typing import Callable, Dict, Iterable, List, Optional, Set
-from urllib.parse import quote_plus, urlparse
+from urllib.parse import quote_plus, urlencode, urlparse
 from urllib.request import urlopen, Request
 from urllib.error import HTTPError, URLError
 from core.observability import log_event
@@ -709,17 +709,28 @@ def _filter_hosts_for_root(candidates: Iterable[str], root_domain: str) -> List[
     return sorted(found)
 
 
+def _hosts_from_json_obj(obj: object, root_domain: str) -> Set[str]:
+    """Recursively extract in-scope hostnames from nested JSON-like objects."""
+    found: Set[str] = set()
+    if isinstance(obj, dict):
+        for value in obj.values():
+            found.update(_hosts_from_json_obj(value, root_domain))
+    elif isinstance(obj, (list, tuple, set)):
+        for value in obj:
+            found.update(_hosts_from_json_obj(value, root_domain))
+    elif obj is not None:
+        found.update(_extract_hosts_from_text(str(obj), root_domain))
+    return found
+
+
 def _query_crtsh_for_root(root_domain: str, timeout: int = 45) -> List[str]:
     url = f"https://crt.sh/?q=%25.{root_domain}&output=json"
     try:
-        req = Request(url, headers={"User-Agent": "ssl-sentinel/1.0"})
-        ctx = ssl.create_default_context()
-        with urlopen(req, timeout=timeout, context=ctx) as res:
-            body = res.read().decode("utf-8", errors="replace")
+        body = _http_text_with_retries(url, timeout=timeout, retries=3, max_bytes=12_000_000)
         rows = json.loads(body or "[]")
         found: Set[str] = set()
         for row in rows:
-            names = str(row.get("name_value") or "").splitlines()
+            names = str(row.get("name_value") or row.get("common_name") or "").splitlines()
             for name in names:
                 host = _normalize_host(name)
                 if host and _HOST_RE.match(host) and _is_host_within_root(host, root_domain):
@@ -785,7 +796,13 @@ def _http_text_with_retries(
             req = Request(url, headers=req_headers)
             ctx = ssl.create_default_context()
             with urlopen(req, timeout=timeout, context=ctx) as res:
-                return res.read(max_bytes).decode("utf-8", errors="replace")
+                try:
+                    raw = res.read(max_bytes)
+                except TypeError:
+                    # Some tests and lightweight response wrappers expose
+                    # ``read()`` without a size argument.
+                    raw = res.read()
+                return raw.decode("utf-8", errors="replace")
         except (HTTPError, URLError, TimeoutError, ssl.SSLError) as e:
             last_err = e
             if attempt < retries:
@@ -899,18 +916,26 @@ def _query_virustotal_for_root(root_domain: str, timeout: int = 35) -> List[str]
     api_key = os.getenv("VT_API_KEY", "").strip()
     if not api_key:
         return []
-    url = f"https://www.virustotal.com/api/v3/domains/{root_domain}/subdomains?limit=1000"
+    limit = _env_int("VT_SUBDOMAIN_PAGE_LIMIT", 1000, minimum=40, maximum=1000)
+    max_pages = _env_int("VT_SUBDOMAIN_MAX_PAGES", 10, minimum=1, maximum=100)
+    url = f"https://www.virustotal.com/api/v3/domains/{root_domain}/subdomains?limit={limit}"
     try:
-        req = Request(url, headers={"User-Agent": "ssl-sentinel/1.0", "x-apikey": api_key})
-        ctx = ssl.create_default_context()
-        with urlopen(req, timeout=timeout, context=ctx) as res:
-            body = res.read().decode("utf-8", errors="replace")
-        payload = json.loads(body or "{}")
         found: Set[str] = set()
-        for row in (payload or {}).get("data") or []:
-            host = _normalize_host(str((row or {}).get("id") or ""))
-            if host and _HOST_RE.match(host) and _is_host_within_root(host, root_domain):
-                found.add(host)
+        for _page in range(max_pages):
+            payload = _http_json_with_retries(
+                url,
+                timeout=timeout,
+                retries=2,
+                headers={"x-apikey": api_key},
+            )
+            for row in (payload or {}).get("data") or []:
+                host = _normalize_host(str((row or {}).get("id") or ""))
+                if host and _HOST_RE.match(host) and _is_host_within_root(host, root_domain):
+                    found.add(host)
+            next_url = ((payload or {}).get("links") or {}).get("next")
+            if not next_url:
+                break
+            url = str(next_url)
         return sorted(found)
     except Exception:
         return []
@@ -986,17 +1011,27 @@ def _query_threatcrowd_for_root(root_domain: str, timeout: int = 35) -> List[str
 
 def _query_urlscan_for_root(root_domain: str, timeout: int = 45) -> List[str]:
     """Pull related hostnames from public URLScan search index."""
-    url = f"https://urlscan.io/api/v1/search/?q=domain:{root_domain}&size=100"
+    size = _env_int("URLSCAN_PAGE_SIZE", 100, minimum=10, maximum=10000)
+    max_pages = _env_int("URLSCAN_MAX_PAGES", 5, minimum=1, maximum=50)
+    params = {"q": f"domain:{root_domain}", "size": str(size)}
     try:
-        payload = _http_json_with_retries(url, timeout=timeout, retries=3)
         found: Set[str] = set()
-        for row in (payload or {}).get("results") or []:
-            task = row.get("task") or {}
-            page = row.get("page") or {}
-            for token in (task.get("domain"), page.get("domain"), page.get("apexDomain")):
-                host = _normalize_host(str(token or ""))
-                if host and _HOST_RE.match(host) and _is_host_within_root(host, root_domain):
-                    found.add(host)
+        for _page in range(max_pages):
+            url = f"https://urlscan.io/api/v1/search/?{urlencode(params)}"
+            payload = _http_json_with_retries(url, timeout=timeout, retries=3)
+            rows = (payload or {}).get("results") or []
+            for row in rows:
+                task = row.get("task") or {}
+                page = row.get("page") or {}
+                for token in (task.get("domain"), page.get("domain"), page.get("apexDomain"), page.get("url")):
+                    host = _normalize_host(str(token or ""))
+                    if host and _HOST_RE.match(host) and _is_host_within_root(host, root_domain):
+                        found.add(host)
+                found.update(_hosts_from_json_obj(row.get("lists") or {}, root_domain))
+            search_after = (payload or {}).get("search_after")
+            if not search_after or not rows:
+                break
+            params["search_after"] = ",".join(str(x) for x in search_after) if isinstance(search_after, list) else str(search_after)
         return sorted(found)
     except Exception:
         return []
@@ -1072,6 +1107,59 @@ def _query_github_code_for_root(root_domain: str, timeout: int = 40) -> List[str
         return sorted(found)
     except Exception:
         return []
+
+
+def _query_censys_for_root(root_domain: str, timeout: int = 40) -> List[str]:
+    """Pull names from Censys Search v2 when CENSYS_API_ID/SECRET are configured."""
+    api_id = os.getenv("CENSYS_API_ID", "").strip()
+    api_secret = os.getenv("CENSYS_API_SECRET", "").strip()
+    if not api_id or not api_secret:
+        return []
+    import base64
+
+    query = quote_plus(f"names: *.{root_domain}")
+    per_page = _env_int("CENSYS_PER_PAGE", 100, minimum=1, maximum=100)
+    max_pages = _env_int("CENSYS_MAX_PAGES", 5, minimum=1, maximum=25)
+    cursor = ""
+    found: Set[str] = set()
+    auth = base64.b64encode(f"{api_id}:{api_secret}".encode("utf-8")).decode("ascii")
+    for _page in range(max_pages):
+        url = f"https://search.censys.io/api/v2/hosts/search?q={query}&per_page={per_page}"
+        if cursor:
+            url += f"&cursor={quote_plus(cursor)}"
+        try:
+            payload = _http_json_with_retries(
+                url,
+                timeout=timeout,
+                retries=2,
+                headers={"Authorization": f"Basic {auth}"},
+            )
+        except Exception:
+            break
+        found.update(_hosts_from_json_obj((payload or {}).get("result") or {}, root_domain))
+        cursor = str((((payload or {}).get("result") or {}).get("links") or {}).get("next") or "")
+        if not cursor:
+            break
+    return sorted(found)
+
+
+def _query_binaryedge_for_root(root_domain: str, timeout: int = 40) -> List[str]:
+    """Pull subdomains from BinaryEdge when BINARYEDGE_API_KEY is configured."""
+    api_key = os.getenv("BINARYEDGE_API_KEY", "").strip()
+    if not api_key:
+        return []
+    max_pages = _env_int("BINARYEDGE_MAX_PAGES", 5, minimum=1, maximum=50)
+    found: Set[str] = set()
+    for page in range(1, max_pages + 1):
+        url = f"https://api.binaryedge.io/v2/query/domains/subdomain/{root_domain}?page={page}"
+        try:
+            payload = _http_json_with_retries(url, timeout=timeout, retries=2, headers={"X-Key": api_key})
+        except Exception:
+            break
+        found.update(_hosts_from_json_obj(payload, root_domain))
+        if not (payload or {}).get("events"):
+            break
+    return sorted(found)
 
 
 def _query_dnsdumpster_for_root(root_domain: str, timeout: int = 30) -> List[str]:
@@ -1169,6 +1257,8 @@ def _passive_enumeration_sources() -> Dict[str, EnumerationSource]:
         "wayback": _query_wayback_for_root,
         "commoncrawl": _query_commoncrawl_for_root,
         "github_code": _query_github_code_for_root,
+        "censys": _query_censys_for_root,
+        "binaryedge": _query_binaryedge_for_root,
         "dnsdumpster_export": _query_dnsdumpster_for_root,
         "alienvault_otx": _query_alienvault_otx_for_root,
         "threatcrowd": _query_threatcrowd_for_root,
