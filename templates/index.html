@@ -985,6 +985,10 @@ html[data-density="comfortable"] .card-body,html[data-density="comfortable"] .mo
       <svg fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path d="M12 2v20"/><path d="M5 7h14"/><path d="M5 17h14"/><circle cx="12" cy="12" r="3"/></svg>
       <span>OpenSSL</span>
     </button>
+    <button class="nav-item" data-page="connectors">
+      <svg fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path d="M4 7h5v10H4z"/><path d="M15 7h5v10h-5z"/><path d="M9 12h6"/></svg>
+      <span>Connectors</span>
+    </button>
     <div class="nav-section">System</div>
     <button class="nav-item" data-page="logs">
       <svg fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path d="M4 6h16M4 12h16M4 18h10"/></svg>
@@ -1182,6 +1186,24 @@ html[data-density="comfortable"] .card-body,html[data-density="comfortable"] .mo
         <div class="card-body">
           <div id="logs-page-body" class="logs-panel" style="min-height:320px;max-height:520px;overflow:auto;font-family:var(--mono);font-size:12px"></div>
         </div>
+      </div>
+    </div>
+
+
+    <div class="page" id="page-connectors">
+      <div class="page-header">
+        <div>
+          <div class="page-title">Inventory Connectors</div>
+          <div class="page-sub">Import external assets through provider adapters backed by environment-variable credentials.</div>
+        </div>
+        <button class="btn btn-sm" onclick="loadConnectors()">Refresh</button>
+      </div>
+      <div class="integrations-grid" id="connectorsGrid">
+        <div class="integration-card"><div class="integration-name"><span class="integration-icon">☁️</span>Loading connectors…</div></div>
+      </div>
+      <div class="card" style="margin-top:14px">
+        <div class="card-header"><div class="card-title">Recent Connector Runs</div></div>
+        <div class="card-body"><div id="connectorRunsList" class="mini-list muted">No runs yet.</div></div>
       </div>
     </div>
 
@@ -2185,10 +2207,11 @@ const PAGE_INFRA = {
   'subfinder-raw': { title: 'Subfinder Enumeration', onEnter: initSfRawPage },
   nuclei: { title: 'Nuclei CVEs', onEnter: initNucleiPage },
   openssl: { title: 'OpenSSL', onEnter: initOpenSSLPage },
+  connectors: { title: 'Connectors', onEnter: loadConnectors },
   logs: { title: 'Logs', onEnter: loadLogsPage },
   settings: { title: 'Alert Routing', onEnter: loadAlertSettings },
 };
-const QUICK_ACTION_PAGES = ['dashboard', 'projects', 'alerts', 'subfinder', 'discoveries', 'bounty-leads', 'subfinder-raw', 'nuclei', 'openssl', 'logs', 'settings'];
+const QUICK_ACTION_PAGES = ['dashboard', 'projects', 'alerts', 'subfinder', 'discoveries', 'bounty-leads', 'subfinder-raw', 'nuclei', 'openssl', 'connectors', 'logs', 'settings'];
 const QUICK_ACTIONS = [
   ...QUICK_ACTION_PAGES.map(page => ({
     label: PAGE_INFRA[page]?.title || page,
@@ -2201,6 +2224,42 @@ const QUICK_ACTIONS = [
   { label: 'Refresh dashboard', description: 'Reload stats, logs, active scans, and recommendations', group: 'Actions', icon: '↻', action: () => loadDash(), shortcut: 'R' },
   { label: 'Open alert routing', description: 'Configure Slack, Discord, Telegram, and trigger rules', group: 'Actions', icon: '📣', page: 'settings' },
 ];
+
+
+async function runConnector(type) {
+  const res = await apiJSON(`/api/connectors/${encodeURIComponent(type)}/run`, { method: 'POST' });
+  if (!res.ok) return toast(res.error || 'Connector run failed', 'error');
+  const status = res.data?.status || 'done';
+  toast(`${type} connector finished with status ${status}`);
+  await loadConnectors();
+}
+
+async function loadConnectors() {
+  const grid = document.getElementById('connectorsGrid');
+  const runs = document.getElementById('connectorRunsList');
+  if (!grid) return;
+  const res = await apiJSON('/api/connectors');
+  if (!res.ok) { grid.innerHTML = `<div class="integration-card">${escapeHTML(res.error || 'Unable to load connectors')}</div>`; return; }
+  const rows = res.data?.rows || [];
+  grid.innerHTML = rows.map(c => {
+    const ready = !!c.credentials?.ready;
+    const lastStatus = c.last_run_status || 'never run';
+    const missing = (c.credentials?.missing || []).join(', ') || 'none';
+    return `<div class="integration-card">
+      <div class="integration-head"><div class="integration-name"><span class="integration-icon">${ready ? '✅' : '🔐'}</span>${escapeHTML(c.name || c.type)}</div><span class="integration-enabled">${escapeHTML(lastStatus)}</span></div>
+      <ol class="integration-steps">
+        <li>Status: ${ready ? 'Credentials detected' : `Missing env: ${escapeHTML(missing)}`}</li>
+        <li>Last run: ${escapeHTML(c.last_run_at || 'Never')}</li>
+        <li>Imported assets: ${Number(c.imported_assets || 0)}</li>
+        <li>Errors: ${escapeHTML(c.last_error || 'None')}</li>
+      </ol>
+      <button class="btn btn-sm btn-primary" onclick="runConnector('${escapeHTML(c.type)}')">Run connector</button>
+    </div>`;
+  }).join('') || '<div class="integration-card">No connectors registered.</div>';
+  const runRes = await apiJSON('/api/connectors/runs?limit=10');
+  const runRows = runRes.data?.rows || [];
+  if (runs) runs.innerHTML = runRows.map(r => `<div class="mini-row"><b>${escapeHTML(r.connector_type)}</b> ${escapeHTML(r.status)} · assets ${Number(r.assets_imported || 0)} · ${escapeHTML(r.started_at || '')}${r.error ? ` · ${escapeHTML(r.error)}` : ''}</div>`).join('') || 'No runs yet.';
+}
 
 function nav(name) {
   const config = PAGE_INFRA[name] || {};

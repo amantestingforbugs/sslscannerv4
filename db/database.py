@@ -227,6 +227,60 @@ def init_db():
         last_checked TEXT NOT NULL,
         UNIQUE(project_id, hostname)
     );
+    CREATE TABLE IF NOT EXISTS connectors (
+        id TEXT PRIMARY KEY,
+        type TEXT NOT NULL UNIQUE,
+        name TEXT NOT NULL,
+        status TEXT DEFAULT 'configured',
+        enabled INTEGER DEFAULT 1,
+        credential_hint TEXT DEFAULT '',
+        last_run_id TEXT DEFAULT '',
+        last_run_status TEXT DEFAULT '',
+        last_run_at TEXT DEFAULT '',
+        last_error TEXT DEFAULT '',
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS connector_runs (
+        id TEXT PRIMARY KEY,
+        connector_id TEXT NOT NULL,
+        connector_type TEXT NOT NULL,
+        status TEXT DEFAULT 'running',
+        assets_imported INTEGER DEFAULT 0,
+        findings_count INTEGER DEFAULT 0,
+        error TEXT DEFAULT '',
+        started_at TEXT NOT NULL,
+        finished_at TEXT,
+        FOREIGN KEY(connector_id) REFERENCES connectors(id) ON DELETE CASCADE
+    );
+    CREATE TABLE IF NOT EXISTS assets (
+        id TEXT PRIMARY KEY,
+        asset_key TEXT NOT NULL UNIQUE,
+        connector_type TEXT DEFAULT '',
+        source TEXT DEFAULT '',
+        asset_type TEXT DEFAULT 'host',
+        hostname TEXT DEFAULT '',
+        address TEXT DEFAULT '',
+        name TEXT DEFAULT '',
+        external_id TEXT DEFAULT '',
+        metadata TEXT DEFAULT '{}',
+        first_seen TEXT NOT NULL,
+        last_seen TEXT NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS connector_assets (
+        id TEXT PRIMARY KEY,
+        connector_id TEXT NOT NULL,
+        run_id TEXT NOT NULL,
+        asset_id TEXT NOT NULL,
+        connector_type TEXT NOT NULL,
+        external_id TEXT DEFAULT '',
+        raw_json TEXT DEFAULT '{}',
+        imported_at TEXT NOT NULL,
+        UNIQUE(run_id, asset_id),
+        FOREIGN KEY(connector_id) REFERENCES connectors(id) ON DELETE CASCADE,
+        FOREIGN KEY(run_id) REFERENCES connector_runs(id) ON DELETE CASCADE,
+        FOREIGN KEY(asset_id) REFERENCES assets(id) ON DELETE CASCADE
+    );
     CREATE INDEX IF NOT EXISTS idx_res_scan  ON results(scan_id);
     CREATE INDEX IF NOT EXISTS idx_res_proj  ON results(project_id);
     CREATE INDEX IF NOT EXISTS idx_res_mis   ON results(scan_id, is_mismatch);
@@ -244,6 +298,11 @@ def init_db():
     CREATE INDEX IF NOT EXISTS idx_sfnew_proj_job_host ON subfinder_new_discoveries(project_id, job_id, hostname);
     CREATE INDEX IF NOT EXISTS idx_sfhttpx_proj_checked ON subfinder_httpx_results(project_id, last_checked DESC);
     CREATE INDEX IF NOT EXISTS idx_openssl_proj_checked ON openssl_results(project_id, last_checked DESC);
+    CREATE INDEX IF NOT EXISTS idx_connectors_type ON connectors(type);
+    CREATE INDEX IF NOT EXISTS idx_connector_runs_started ON connector_runs(started_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_assets_last_seen ON assets(last_seen DESC);
+    CREATE INDEX IF NOT EXISTS idx_assets_hostname ON assets(hostname);
+    CREATE INDEX IF NOT EXISTS idx_connector_assets_run ON connector_assets(run_id);
     CREATE INDEX IF NOT EXISTS idx_den_scans_domain_started ON domain_enum_scans(domain, started_at DESC);
     CREATE INDEX IF NOT EXISTS idx_den_results_scan ON domain_enum_results(scan_id);
     CREATE INDEX IF NOT EXISTS idx_den_results_domain_host ON domain_enum_results(domain, hostname);
@@ -354,8 +413,90 @@ def init_db():
         """,
         (now(),),
     )
+    _ensure_default_connectors()
     commit()
     log.info("DB ready at %s", DB_PATH)
+
+
+def _ensure_default_connectors():
+    ts = now()
+    defaults = [
+        ("aws", "AWS", "AWS_ACCESS_KEY_ID/AWS_SECRET_ACCESS_KEY"),
+        ("cloudflare", "Cloudflare", "CLOUDFLARE_API_TOKEN"),
+        ("github", "GitHub", "GITHUB_TOKEN"),
+    ]
+    for ctype, name, hint in defaults:
+        x(
+            """
+            INSERT OR IGNORE INTO connectors(id,type,name,credential_hint,created_at,updated_at)
+            VALUES(?,?,?,?,?,?)
+            """,
+            (uid(), ctype, name, hint, ts, ts),
+        )
+
+
+def connectors_list():
+    rows = x(
+        """
+        SELECT c.*,
+               COALESCE((SELECT COUNT(*) FROM assets a WHERE a.connector_type=c.type), 0) AS imported_assets
+        FROM connectors c ORDER BY c.name ASC
+        """
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def connector_get_by_type(connector_type):
+    r = x("SELECT * FROM connectors WHERE type=?", (connector_type,)).fetchone()
+    return dict(r) if r else None
+
+
+def connector_run_start(connector_id, connector_type):
+    rid = uid()
+    x(
+        "INSERT INTO connector_runs(id,connector_id,connector_type,status,started_at) VALUES(?,?,?,?,?)",
+        (rid, connector_id, connector_type, "running", now()),
+    )
+    x("UPDATE connectors SET last_run_id=?,last_run_status='running',last_run_at=?,last_error='',updated_at=? WHERE id=?", (rid, now(), now(), connector_id))
+    commit()
+    return rid
+
+
+def connector_run_finish(run_id, status="done", assets_imported=0, findings_count=0, error=""):
+    finished = now()
+    x("UPDATE connector_runs SET status=?,assets_imported=?,findings_count=?,error=?,finished_at=? WHERE id=?", (status, assets_imported, findings_count, error or "", finished, run_id))
+    x("UPDATE connectors SET last_run_status=?,last_run_at=?,last_error=?,updated_at=? WHERE last_run_id=?", (status, finished, error or "", finished, run_id))
+    commit()
+
+
+def connector_runs_list(limit=50):
+    return [dict(r) for r in x("SELECT * FROM connector_runs ORDER BY started_at DESC LIMIT ?", (limit,)).fetchall()]
+
+
+def connector_assets_import(connector_id, run_id, connector_type, findings):
+    ts = now()
+    imported = 0
+    for f in findings:
+        hostname = (f.get("hostname") or "").strip().lower()
+        address = (f.get("address") or "").strip()
+        name = (f.get("name") or hostname or address or f.get("external_id") or "").strip()
+        asset_type = (f.get("asset_type") or "host").strip() or "host"
+        external_id = (f.get("external_id") or "").strip()
+        key_value = hostname or address or external_id or name
+        if not key_value:
+            continue
+        asset_key = f"{connector_type}:{asset_type}:{key_value.lower()}"
+        metadata = json.dumps(f.get("metadata") or {}, sort_keys=True)
+        existing = x("SELECT id FROM assets WHERE asset_key=?", (asset_key,)).fetchone()
+        asset_id = existing["id"] if existing else uid()
+        if existing:
+            x("UPDATE assets SET hostname=?,address=?,name=?,external_id=?,metadata=?,last_seen=?,source=?,connector_type=? WHERE id=?", (hostname, address, name, external_id, metadata, ts, connector_type, connector_type, asset_id))
+        else:
+            x("INSERT INTO assets(id,asset_key,connector_type,source,asset_type,hostname,address,name,external_id,metadata,first_seen,last_seen) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)", (asset_id, asset_key, connector_type, connector_type, asset_type, hostname, address, name, external_id, metadata, ts, ts))
+        x("INSERT OR IGNORE INTO connector_assets(id,connector_id,run_id,asset_id,connector_type,external_id,raw_json,imported_at) VALUES(?,?,?,?,?,?,?,?)", (uid(), connector_id, run_id, asset_id, connector_type, external_id, json.dumps(f, sort_keys=True), ts))
+        imported += 1
+    commit()
+    return imported
 
 
 # ── Projects ──────────────────────────────────────────────────────────────────

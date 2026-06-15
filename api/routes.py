@@ -44,6 +44,7 @@ from scheduler.runner import (
     stop_scan,
 )
 from alerts.notifiers import WebhookNotifier, TelegramNotifier
+from connectors import get_connector, CONNECTOR_TYPES
 
 log = logging.getLogger(__name__)
 api = Blueprint("api", __name__, url_prefix="/api")
@@ -1385,6 +1386,56 @@ def system_overview():
             "size_bytes": db_file.stat().st_size if db_file.exists() else 0,
         },
     })
+
+
+# ── Connectors ────────────────────────────────────────────────────────────────
+
+@api.get("/connectors")
+def connectors_list():
+    rows = []
+    for row in db.connectors_list():
+        ctype = row.get("type")
+        try:
+            connector = get_connector(ctype)
+            row["credentials"] = connector.credential_status()
+        except ValueError:
+            row["credentials"] = {"ready": False, "missing": [], "configured": []}
+        rows.append(row)
+    return ok({"rows": rows, "types": sorted(CONNECTOR_TYPES)})
+
+
+@api.post("/connectors/<connector_type>/run")
+def connector_run(connector_type):
+    connector_type = (connector_type or "").strip().lower()
+    try:
+        connector = get_connector(connector_type)
+    except ValueError as e:
+        return err(str(e), 404)
+
+    record = db.connector_get_by_type(connector_type)
+    if not record:
+        return err("Connector is not registered in the database", 404)
+
+    run_id = db.connector_run_start(record["id"], connector_type)
+    try:
+        result = connector.run()
+        findings = [finding.to_record() for finding in result.findings]
+        imported = db.connector_assets_import(record["id"], run_id, connector_type, findings)
+        error_msg = "; ".join(result.errors)
+        status = "done" if result.ok else "error"
+        db.connector_run_finish(run_id, status=status, assets_imported=imported, findings_count=len(findings), error=error_msg)
+        broadcast("connector_update", {"connector_type": connector_type, "run_id": run_id, "status": status, "assets_imported": imported, "error": error_msg})
+        return ok({"id": run_id, "connector_type": connector_type, "status": status, "assets_imported": imported, "findings_count": len(findings), "errors": result.errors, "metadata": result.metadata})
+    except Exception as e:
+        db.connector_run_finish(run_id, status="error", error=str(e))
+        broadcast("connector_update", {"connector_type": connector_type, "run_id": run_id, "status": "error", "error": str(e)})
+        return err(f"Connector run failed: {e}", 500)
+
+
+@api.get("/connectors/runs")
+def connector_runs_list():
+    limit = _safe_int(request.args.get("limit", 50), 50, min_value=1, max_value=200)
+    return ok({"rows": db.connector_runs_list(limit=limit)})
 
 @api.get("/logs")
 def list_logs():
