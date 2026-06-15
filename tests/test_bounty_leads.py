@@ -110,6 +110,33 @@ def test_collect_bounty_leads_requires_httpx_valid_active_hosts(tmp_path, monkey
     assert [row["hostname"] for row in data["rows"]] == ["admin.example.com"]
     assert "ProjectDiscovery httpx" in data["method"]
 
+
+def test_bounty_copilot_builds_copy_ready_playbooks(tmp_path, monkeypatch):
+    reset_db(tmp_path, monkeypatch)
+    project = db.project_create("copilot-program")
+    job_id = db.subfinder_job_create(project["id"], "example.com", by="manual")
+    db.subfinder_hosts_add_batch(project["id"], ["admin-api.example.com"])
+    db.subfinder_httpx_results_upsert_batch(project["id"], job_id, [{
+        "hostname": "admin-api.example.com",
+        "status_code": 403,
+        "page_title": "OpenAPI Admin Login",
+        "final_url": "https://admin-api.example.com/swagger",
+        "scheme": "https",
+        "is_active": True,
+    }])
+
+    from api.routes import _collect_bounty_copilot
+
+    copilot = _collect_bounty_copilot(project_id=project["id"], limit=5)
+
+    assert copilot["playbooks"]
+    playbook = copilot["playbooks"][0]
+    assert playbook["hostname"] == "admin-api.example.com"
+    assert "senior bug-bounty triage copilot" in playbook["copy_prompt"]
+    assert any(cmd["label"] == "Safe Nuclei validation" for cmd in playbook["commands"])
+    assert "Verify the hostname is in written scope" in playbook["validation_checklist"][0]
+    assert "evidence_to_attach" in playbook["report_draft"]
+
 def test_bounty_summary_rolls_up_company_attack_surface(tmp_path, monkeypatch):
     reset_db(tmp_path, monkeypatch)
     project = db.project_create("enterprise-program")

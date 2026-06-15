@@ -22,6 +22,7 @@ import signal
 import functools
 import hmac
 import re
+import shlex
 from urllib.parse import urlparse
 from flask import Blueprint, request, jsonify, Response, stream_with_context
 
@@ -783,6 +784,72 @@ def _hypotheses_for_leads(leads: list[dict]) -> list[dict]:
         })
     return selected
 
+
+
+def _bounty_copilot_prompt(lead: dict, brief: dict) -> str:
+    evidence = "; ".join((lead.get("evidence") or [])[:6]) or "active asset from authorized discovery"
+    steps = "; ".join((lead.get("next_steps") or [])[:5]) or "capture status, title, redirects, and screenshots"
+    chains = "; ".join(c.get("title", "") for c in (brief.get("attack_chains") or [])[:3] if c.get("title"))
+    host = lead.get("hostname") or lead.get("http_final_url") or "selected asset"
+    return (
+        "Act as a senior bug-bounty triage copilot for authorized testing only. "
+        f"Target: {host}. Project: {lead.get('project_name') or 'unknown'}. "
+        f"Signals: {evidence}. Recommended safe first steps: {steps}. "
+        f"Relevant attack-chain hypotheses: {chains or 'baseline recon and exposure review'}. "
+        "Produce a concrete validation checklist, exact evidence to collect, stop conditions, false-positive checks, "
+        "and a concise report draft without claiming a vulnerability until manually verified."
+    )
+
+
+def _bounty_copilot_commands(lead: dict) -> list[dict]:
+    host = lead.get("hostname") or "example.com"
+    url = lead.get("http_final_url") or (f"{lead.get('http_scheme') or 'https'}://{host}")
+    qhost = shlex.quote(str(host))
+    qurl = shlex.quote(str(url))
+    return [
+        {"label": "HTTP fingerprint", "command": f"httpx -u {qurl} -title -status-code -tech-detect -follow-redirects -silent", "purpose": "Confirm reachability, title, redirect path, and technologies before manual testing."},
+        {"label": "TLS evidence", "command": f"openssl s_client -connect {qhost}:443 -servername {qhost} </dev/null 2>/dev/null | openssl x509 -noout -subject -issuer -dates -ext subjectAltName", "purpose": "Capture certificate CN/SAN, issuer, and expiry evidence for routing or mismatch reports."},
+        {"label": "Safe Nuclei validation", "command": f"nuclei -u {qurl} -severity critical,high,medium -tags exposure,misconfig,cves,files,takeover,technologies -rate-limit 5 -retries 1", "purpose": "Run rate-limited, non-destructive templates as supporting signal only."},
+    ]
+
+
+def _collect_bounty_copilot(project_id: str = "", search: str = "", limit: int = 10) -> dict:
+    leads_data = _collect_bounty_leads(project_id=project_id, search=search, limit=limit)
+    brief = _collect_bounty_brief(project_id=project_id, search=search, limit=limit)
+    playbooks = []
+    for idx, lead in enumerate(leads_data.get("rows", [])[:limit], start=1):
+        playbooks.append({
+            "rank": idx,
+            "hostname": lead.get("hostname"),
+            "score": lead.get("score"),
+            "severity": lead.get("severity"),
+            "lead_type": lead.get("lead_type"),
+            "url": lead.get("http_final_url") or (f"{lead.get('http_scheme') or 'https'}://{lead.get('hostname')}" if lead.get("hostname") else ""),
+            "evidence": (lead.get("evidence") or [])[:8],
+            "validation_checklist": [
+                "Verify the hostname is in written scope and record the program rule permitting this test.",
+                *((lead.get("next_steps") or [])[:5]),
+                "Collect timestamped screenshots and one minimal request/response proof for any verified issue.",
+                "Stop testing if you encounter third-party data, destructive functionality, or unclear authorization.",
+            ],
+            "copy_prompt": _bounty_copilot_prompt(lead, brief),
+            "commands": _bounty_copilot_commands(lead),
+            "report_draft": {
+                "title": f"[{lead.get('hostname')}] {lead.get('lead_type') or 'Exposure'} requires validation",
+                "impact_hypothesis": "Potential externally reachable high-value surface based on recon signals; impact must be proven with safe manual validation.",
+                "evidence_to_attach": ["Program scope citation", "URL/status/title screenshot", "Relevant request/response pairs", "TLS/DNS evidence where applicable"],
+            },
+        })
+    return {
+        "generated_at": db.now(),
+        "project_id": project_id,
+        "search": search,
+        "total": leads_data.get("total", len(playbooks)),
+        "returned": len(playbooks),
+        "scope_guardrails": brief.get("scope_guardrails", []),
+        "playbooks": playbooks,
+        "method": "Converts ranked active bounty leads into copy-ready prompts, safe validation commands, checklists, and report drafts for manual authorized testing.",
+    }
 
 def _collect_bounty_brief(project_id: str = "", search: str = "", limit: int = 25) -> dict:
     """Build a bug-bounty operator brief from ranked authorized attack-surface leads."""
@@ -1620,6 +1687,14 @@ def bounty_brief():
     search = (request.args.get("search") or "").strip()
     limit = _safe_int(request.args.get("limit", 25), 25, min_value=1, max_value=100)
     return ok(_collect_bounty_brief(project_id=project_id, search=search, limit=limit))
+
+
+@api.get("/bounty/copilot")
+def bounty_copilot():
+    project_id = (request.args.get("project_id") or "").strip()
+    search = (request.args.get("search") or "").strip()
+    limit = _safe_int(request.args.get("limit", 10), 10, min_value=1, max_value=50)
+    return ok(_collect_bounty_copilot(project_id=project_id, search=search, limit=limit))
 
 
 @api.get("/bounty/v5")
