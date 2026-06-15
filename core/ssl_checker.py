@@ -5,7 +5,6 @@ Original script preserved as-is; wrapped for programmatic use.
 
 import ssl
 import socket
-import fnmatch
 import ipaddress
 import logging
 import os
@@ -72,18 +71,55 @@ def base_domain(hostname: str) -> str:
         return ".".join(parts[-2:]) if len(parts) >= 2 else hostname
 
 
+def _normalize_cert_name(value: str) -> str:
+    return (value or "").strip().lower().rstrip(".")
+
+
+def _dnsname_matches(hostname: str, cert_name: str) -> bool:
+    """Return True when a DNS certificate name covers hostname.
+
+    Certificate mismatch detection is the core purpose of SSL Sentinel, so keep
+    wildcard handling intentionally strict: RFC-style wildcards are only valid
+    as the entire left-most label (``*.example.com``) and cover exactly one
+    subdomain label (``api.example.com``), not the apex or deeper names.
+    """
+    host = _normalize_cert_name(hostname)
+    name = _normalize_cert_name(cert_name)
+    if not host or not name:
+        return False
+    if "*" not in name:
+        return host == name
+    if not name.startswith("*.") or name.count("*") != 1:
+        return False
+    suffix = name[2:]
+    if not suffix or host == suffix or not host.endswith(f".{suffix}"):
+        return False
+    left = host[: -(len(suffix) + 1)]
+    return bool(left) and "." not in left
+
+
 def is_hostname_match(hostname: str, cert_names: List[str]) -> bool:
     if not cert_names:
         return False
+
+    host = _normalize_cert_name(hostname)
+    try:
+        host_ip = ipaddress.ip_address(host)
+    except ValueError:
+        host_ip = None
+
     for name in cert_names:
-        try:
-            ipaddress.ip_address(hostname)
-            if hostname == name:
-                return True
-        except ValueError:
-            pattern = name.replace("*.", "*")
-            if fnmatch.fnmatch(hostname.lower(), pattern.lower()):
-                return True
+        cert_name = _normalize_cert_name(str(name))
+        if not cert_name:
+            continue
+        if host_ip is not None:
+            try:
+                if host_ip == ipaddress.ip_address(cert_name):
+                    return True
+            except ValueError:
+                continue
+        elif _dnsname_matches(host, cert_name):
+            return True
     return False
 
 
@@ -151,6 +187,7 @@ def get_cert_info(hostname: str) -> Dict:
                 try:
                     ext = cert.extensions.get_extension_for_class(x509.SubjectAlternativeName)
                     sans = list(ext.value.get_values_for_type(x509.DNSName))
+                    sans.extend(str(ip) for ip in ext.value.get_values_for_type(x509.IPAddress))
                 except Exception:
                     pass
 
