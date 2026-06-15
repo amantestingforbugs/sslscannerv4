@@ -205,7 +205,7 @@ def _ensure_nuclei_templates(nuclei_bin: str) -> tuple[bool, str]:
     Returns (ok, message). Non-empty message is informational/warning text.
     """
     templates_dir = _nuclei_templates_dir()
-    if _directory_has_files(templates_dir):
+    if _nuclei_template_count(templates_dir) > 0:
         return True, "templates already present"
 
     try:
@@ -219,7 +219,7 @@ def _ensure_nuclei_templates(nuclei_bin: str) -> tuple[bool, str]:
             capture_output=True,
             timeout=300,
         )
-        if init_run.returncode == 0 and _directory_has_files(templates_dir):
+        if init_run.returncode == 0 and _nuclei_template_count(templates_dir) > 0:
             return True, "Nuclei templates were missing and have been downloaded."
         detail = (init_run.stderr or init_run.stdout or "").strip()
         if not detail:
@@ -2150,6 +2150,15 @@ def _nuclei_public_state(scan_id: str) -> dict:
         return state
 
 
+def _nuclei_state_for_public(scan_id: str) -> dict:
+    """Return a public nuclei scan state from memory or durable job storage."""
+    state = _nuclei_public_state_locked(scan_id)
+    if state.get("id"):
+        return state
+    job = jobs.get_job(scan_id)
+    return jobs.public_state(job) if job else {}
+
+
 def _nuclei_append_log(scan_id: str, line: str, stream: str = "stdout"):
     text = (line or "").strip()
     if not text:
@@ -2228,7 +2237,7 @@ def _nuclei_list_public(project_id: str | None = None, limit: int = 20, active_o
             states = [s for s in states if s.get("status") in active]
         states.sort(key=_nuclei_scan_sort_key, reverse=True)
         ids = [s.get("id") for s in states[:limit] if s.get("id")]
-        return [_nuclei_public_state_locked(scan_id) for scan_id in ids]
+    return [state for state in (_nuclei_state_for_public(scan_id) for scan_id in ids) if state]
 
 
 def _run_nuclei_sync(pid: str, project_name: str, mode: str, hosts: list[str]) -> tuple[dict | None, str | None, int]:
