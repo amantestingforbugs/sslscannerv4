@@ -98,6 +98,20 @@ def test_bruteforce_dns_hosts_filters_to_resolvable_entries(monkeypatch):
     assert found == ["admin.api.example.com", "www.example.com"]
 
 
+def test_scheduled_project_subfinder_scans_all_discovered_hosts(monkeypatch):
+    monkeypatch.delenv("SUBFINDER_SCAN_ALL_DISCOVERED", raising=False)
+
+    assert runner._subfinder_ssl_scan_targets(
+        ["api.example.com", "www.example.com"],
+        ["api.example.com"],
+        triggered_by="manual",
+    ) == ["api.example.com"]
+    assert runner._subfinder_ssl_scan_targets(
+        ["api.example.com", "www.example.com"],
+        ["api.example.com"],
+        triggered_by="scheduler",
+    ) == ["api.example.com", "www.example.com"]
+
 def test_query_crtsh_for_root_parses_name_value_lines(monkeypatch):
     class _FakeResponse:
         def __enter__(self):
@@ -607,6 +621,11 @@ def test_domain_enumeration_and_project_subfinder_share_same_pipeline(monkeypatc
 
     assert calls == [("example.com",), ("example.com",)]
     assert enum_result["total_found"] == 2
-    assert sorted(enum_rows) == [("example.com", ("api.example.com",), "subfinder"), ("example.com", ("www.example.com",), "passive")]
+    assert sorted(enum_rows) == [
+        ("example.com", ("api.example.com",), "subfinder"),
+        ("example.com", ("api.example.com",), "subfinder"),
+        ("example.com", ("www.example.com",), "passive"),
+        ("example.com", ("www.example.com",), "passive"),
+    ]
     assert inserted["hosts"] == ("api.example.com", "www.example.com")
     assert job_id == "job1"

@@ -1606,8 +1606,29 @@ def _run_subdomain_enumeration(root_domains: List[str]) -> Dict[str, object]:
     }
 
 
-def _subfinder_ssl_scan_targets(discovered: List[str], new_hosts: List[str]) -> List[str]:
-    targets = discovered if _env_bool("SUBFINDER_SCAN_ALL_DISCOVERED", False) else new_hosts
+def _store_project_domain_enumeration_results(root_domains: List[str], enumeration: Dict, triggered_by: str) -> None:
+    """Persist scheduled project enumeration results into the domain enumeration history."""
+    import db.database as db
+
+    source_map = {source: set(hosts) for source, hosts in (enumeration.get("source_map") or {}).items()}
+    for root in root_domains:
+        scan_id = db.domain_enum_scan_create(
+            root,
+            triggered_by=triggered_by,
+            tool_summary=_tool_summary(),
+        )
+        total_found = 0
+        for src, hosts in source_map.items():
+            root_hosts = sorted(h for h in hosts if _is_host_within_root(h, root))
+            if root_hosts:
+                db.domain_enum_results_add_batch(scan_id, root, root_hosts, source=src)
+                total_found += len(root_hosts)
+        db.domain_enum_scan_finish(scan_id, "done", total_found=total_found)
+
+
+def _subfinder_ssl_scan_targets(discovered: List[str], new_hosts: List[str], triggered_by: str = "manual") -> List[str]:
+    scan_all = _env_bool("SUBFINDER_SCAN_ALL_DISCOVERED", False) or (triggered_by or "").strip().lower() == "scheduler"
+    targets = discovered if scan_all else new_hosts
     return sorted(set(targets))
 
 
@@ -1617,7 +1638,7 @@ def run_subfinder_for_project(project_id: str, triggered_by: str = "scheduler") 
       - extract root domains from project host list
       - run subfinder
       - store new hosts
-      - trigger SSL scan on new hosts
+      - trigger SSL scans for new hosts (manual) or all discovered hosts (scheduled)
     Returns job_id or None on failure.
     """
     from db.database import (
@@ -1664,6 +1685,7 @@ def run_subfinder_for_project(project_id: str, triggered_by: str = "scheduler") 
 
     try:
         enumeration = _run_subdomain_enumeration(root_domains)
+        _store_project_domain_enumeration_results(root_domains, enumeration, triggered_by)
         discovered = enumeration["found"]
         source_counts = enumeration["source_counts"]
         raw_records = enumeration["raw_records"]
@@ -1722,11 +1744,11 @@ def run_subfinder_for_project(project_id: str, triggered_by: str = "scheduler") 
                  new_count, project["name"])
         log_event("subfinder", "info", f"Discovered {new_count} new hosts", project_id=project_id, job_id=job_id, status="running")
 
-        # SSL scan only newly discovered hosts by default. Re-scanning every
-        # previously known host on each enumeration run can make subfinder jobs
-        # appear stuck for very large projects. Operators who want the old
-        # behavior can opt in with SUBFINDER_SCAN_ALL_DISCOVERED=1.
-        scan_hosts = _subfinder_ssl_scan_targets(discovered, new_hosts)
+        # Manual runs scan only newly discovered hosts by default. Scheduled
+        # runs scan the full enumerated set so previously discovered project
+        # subdomains are periodically checked for SSL mismatches. Operators can
+        # opt manual runs into the same behavior with SUBFINDER_SCAN_ALL_DISCOVERED=1.
+        scan_hosts = _subfinder_ssl_scan_targets(discovered, new_hosts, triggered_by=triggered_by)
         if scan_hosts:
             _ssl_scan_subfinder_hosts(project_id, scan_hosts, job_id)
 
