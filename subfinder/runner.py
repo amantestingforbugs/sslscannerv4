@@ -1955,20 +1955,30 @@ def run_domain_enumeration_scan(domain: str, triggered_by: str = "manual", depth
     if not root or "." not in root:
         raise ValueError("Invalid domain")
 
+    # The standalone enumeration endpoint can be the first database-touching
+    # path in fresh deployments, worker processes, or direct CLI/test usage.
+    # Ensure the domain enumeration tables exist before writing the scan row so
+    # users do not see a generic "Enumeration failed: no such table" error.
+    db.init_db()
+
     scan_id = db.domain_enum_scan_create(
         root,
         triggered_by=triggered_by,
         tool_summary=_tool_summary(),
     )
-    enumeration = _run_subdomain_enumeration([root], depth_mode=depth_mode)
-    all_found = set(enumeration["found"])
-    source_map = {source: set(hosts) for source, hosts in enumeration["source_map"].items()}
+    try:
+        enumeration = _run_subdomain_enumeration([root], depth_mode=depth_mode)
+        all_found = set(enumeration["found"])
+        source_map = {source: set(hosts) for source, hosts in enumeration["source_map"].items()}
 
-    for src, hosts in source_map.items():
-        if hosts:
-            db.domain_enum_results_add_batch(scan_id, root, sorted(hosts), source=src)
-    db.domain_enum_scan_finish(scan_id, "done", total_found=len(all_found))
-    return {"scan_id": scan_id, "domain": root, "total_found": len(all_found)}
+        for src, hosts in source_map.items():
+            if hosts:
+                db.domain_enum_results_add_batch(scan_id, root, sorted(hosts), source=src)
+        db.domain_enum_scan_finish(scan_id, "done", total_found=len(all_found))
+        return {"scan_id": scan_id, "domain": root, "total_found": len(all_found)}
+    except Exception:
+        db.domain_enum_scan_finish(scan_id, "failed", total_found=0)
+        raise
 
 
 # ── Subfinder Scheduler ───────────────────────────────────────────────────────
