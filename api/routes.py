@@ -23,6 +23,7 @@ import functools
 import hmac
 import re
 import shlex
+import sqlite3
 from urllib.parse import urlparse
 from flask import Blueprint, request, jsonify, Response, stream_with_context
 
@@ -70,6 +71,29 @@ QUICK_SCAN_ROWS_BUFFER = 500
 STARTED_AT_TS = time.time()
 
 
+
+
+
+def _create_project_or_error(name: str, description: str = "", scan_interval=60, subfinder_interval=30):
+    """Create a project and convert DB uniqueness races into API errors."""
+    try:
+        return db.project_create(name, description, scan_interval, subfinder_interval), None
+    except sqlite3.IntegrityError as ex:
+        if "projects.name" in str(ex) or "UNIQUE" in str(ex).upper():
+            return None, "A project with that name already exists"
+        log.exception("Project creation failed for %r", name)
+        return None, "Unable to create project"
+
+
+def _next_available_project_name(base_name: str) -> str:
+    base = (base_name or "Project").strip() or "Project"
+    if not db.project_get_by_name(base):
+        return base
+    for i in range(2, 1000):
+        candidate = f"{base} ({i})"
+        if not db.project_get_by_name(candidate):
+            return candidate
+    return f"{base} ({int(time.time())})"
 
 def _safe_int(value, default: int, min_value: int | None = None, max_value: int | None = None) -> int:
     try:
@@ -1259,12 +1283,14 @@ def create_project():
         return err("name is required")
     if db.project_get_by_name(name):
         return err("A project with that name already exists")
-    p = db.project_create(
+    p, create_error = _create_project_or_error(
         name,
         d.get("description", ""),
         _safe_int(d.get("scan_interval", 60), 60, min_value=5, max_value=10080),
         _safe_int(d.get("subfinder_interval", 30), 30, min_value=5, max_value=10080),
     )
+    if create_error:
+        return err(create_error, 400)
     broadcast("project_created", {"id": p["id"], "name": p["name"]})
     return ok(p)
 
@@ -1894,15 +1920,16 @@ def domain_enumeration_scan_create_project(scan_id):
     project_name = (payload.get("name") or payload.get("project_name") or f"Enum {scan.get('domain', '')}").strip()
     if not project_name:
         return err("Project name is required", 400)
-    if db.project_get_by_name(project_name):
-        return err("A project with that name already exists", 400)
+    project_name = _next_available_project_name(project_name)
 
-    p = db.project_create(
+    p, create_error = _create_project_or_error(
         project_name,
         payload.get("description", f"Created from enumeration scan {scan_id[:8]} for {scan.get('domain', '')}"),
         _safe_int(payload.get("scan_interval", 60), 60, min_value=5, max_value=10080),
         _safe_int(payload.get("subfinder_interval", 30), 30, min_value=5, max_value=10080),
     )
+    if create_error:
+        return err(create_error, 400)
     db.project_save_hosts(p["id"], hosts)
     broadcast("project_created", {"id": p["id"], "name": p["name"]})
     return ok({"project": db.project_get(p["id"]), "host_count": len(hosts), "scan_id": scan_id})
