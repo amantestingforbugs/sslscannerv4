@@ -81,7 +81,7 @@ def _chunked(items, size=500):
         yield chunk
 
 
-def init_db():
+def ensure_schema():
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
     _conn().executescript("""
     CREATE TABLE IF NOT EXISTS projects (
@@ -431,7 +431,6 @@ def init_db():
         x("CREATE UNIQUE INDEX IF NOT EXISTS idx_sfnew_project_host_unique ON subfinder_new_discoveries(project_id, hostname)")
     except sqlite3.IntegrityError:
         pass
-    x("UPDATE jobs SET status='stopped', finished_at=COALESCE(finished_at, ?), updated_at=? WHERE status IN ('queued','preparing','running','paused','stopping')", (now(), now()))
     x(
         """
         INSERT OR IGNORE INTO alert_settings(
@@ -442,6 +441,18 @@ def init_db():
         ) VALUES(1,0,'','',0,'',0,'',1,1,1,0,'all',30,?)
         """,
         (now(),),
+    )
+    commit()
+    log.info("DB schema ready at %s", DB_PATH)
+
+
+def init_db():
+    ensure_schema()
+    n = now()
+    x(
+        "UPDATE jobs SET status='stopped', finished_at=COALESCE(finished_at, ?), updated_at=? "
+        "WHERE status IN ('queued','preparing','running','paused','stopping')",
+        (n, n),
     )
     commit()
     log.info("DB ready at %s", DB_PATH)
