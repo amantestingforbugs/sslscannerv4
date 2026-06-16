@@ -1340,11 +1340,24 @@ def preview_hosts(pid):
 def trigger_scan(pid):
     p = db.project_get(pid)
     if not p: return err("Project not found", 404)
-    if int(p.get("host_count") or 0) <= 0:
+    hosts = db.project_hosts(pid)
+    if not hosts:
         return err("Upload a host list first")
     if not run_project_scan_async(pid, triggered_by="manual"):
         return err("A scan is already running for this project")
-    return ok({"message": "Scan started"})
+    # The scan row/job is created inside the background worker.  Give the
+    # worker a short chance to publish its durable scan id so every "Scan Now"
+    # button can immediately attach polling/progress to the new scan instead
+    # of racing an empty /scans response on slower hosts.
+    scan = None
+    deadline = time.time() + 1.0
+    while time.time() < deadline:
+        scans = db.scan_list(pid, limit=1)
+        if scans and scans[0].get("status") in {"running", "paused", "stopping"}:
+            scan = scans[0]
+            break
+        time.sleep(0.05)
+    return ok({"message": "Scan started", "scan": scan, "scan_id": scan.get("id") if scan else ""})
 
 
 @api.get("/projects/<pid>/scans")

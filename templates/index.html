@@ -3518,11 +3518,21 @@ dz.addEventListener('drop', e=>{
 // SCAN
 // ════════════════════════════════════════════════════════════
 async function doScan() {
-  const { ok, error } = await fetch(`/api/projects/${curPid}/scan`,{method:'POST'}).then(r=>r.json());
+  if (!curPid) {
+    toast('Choose a project before starting a scan', 'err');
+    return;
+  }
+  const { ok, data, error } = await fetch(`/api/projects/${curPid}/scan`,{method:'POST'}).then(r=>r.json());
   if (!ok) { toast(error,'err'); return; }
-  const { data: scans } = await fetch(`/api/projects/${curPid}/scans`).then(r=>r.json());
-  const latest = (scans || []).find(s => ['running','paused','stopping'].includes(s.status));
-  if (latest) curSid = latest.id;
+  const latest = data?.scan || null;
+  if (latest?.id) {
+    curSid = latest.id;
+    updateScanProgress(latest);
+  } else {
+    const { data: scans } = await fetch(`/api/projects/${curPid}/scans`).then(r=>r.json());
+    const active = (scans || []).find(s => ['running','paused','stopping'].includes(s.status));
+    if (active) curSid = active.id;
+  }
   toast('Scan started!','ok');
   activeScanStatus = 'running';
   syncScanActionButtons();

@@ -115,3 +115,37 @@ def test_project_update_validates_missing_and_duplicate_names(tmp_path, monkeypa
     assert valid.status_code == 200
     assert database.project_get(first["id"])["name"] == "renamed"
     assert database.project_get(second["id"])["name"] == "second"
+
+
+def test_trigger_scan_uses_actual_saved_hosts_when_host_count_is_stale(tmp_path, monkeypatch):
+    import db.database as database
+
+    monkeypatch.setattr(database, "DB_PATH", tmp_path / "scan-route.sqlite3")
+    monkeypatch.setattr(database, "_local", __import__("threading").local())
+    database.init_db()
+
+    app = Flask(__name__)
+    app.register_blueprint(routes.api)
+    client = app.test_client()
+
+    project = database.project_create("scan-me")
+    database.project_update(project["id"], hosts_file="mismatch.example.com", host_count=0)
+
+    started = {}
+
+    def fake_run_project_scan_async(project_id, triggered_by="manual"):
+        started["project_id"] = project_id
+        started["triggered_by"] = triggered_by
+        scan = database.scan_create(project_id, 1, triggered_by)
+        return bool(scan)
+
+    monkeypatch.setattr(routes, "run_project_scan_async", fake_run_project_scan_async)
+
+    response = client.post(f"/api/projects/{project['id']}/scan")
+    payload = response.get_json()
+
+    assert response.status_code == 200
+    assert payload["ok"] is True
+    assert payload["data"]["scan_id"]
+    assert payload["data"]["scan"]["status"] == "running"
+    assert started == {"project_id": project["id"], "triggered_by": "manual"}
