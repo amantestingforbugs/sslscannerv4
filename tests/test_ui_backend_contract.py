@@ -78,6 +78,31 @@ def test_project_create_duplicate_returns_json_error(tmp_path, monkeypatch):
     assert duplicate.json == {"ok": False, "error": "A project with that name already exists"}
 
 
+def test_project_create_route_accepts_canonical_interval_fields(tmp_path, monkeypatch):
+    """API clients should be able to send the same interval field names returned by the API."""
+    sys.path.insert(0, str(ROOT))
+    from flask import Flask
+    import db.database as database
+    import api.routes as routes
+
+    monkeypatch.setattr(database, "DB_PATH", tmp_path / "projects_create_intervals.sqlite3")
+    monkeypatch.setattr(database, "_local", __import__("threading").local())
+    database.init_db()
+
+    app = Flask(__name__)
+    app.register_blueprint(routes.api)
+    client = app.test_client()
+
+    resp = client.post(
+        "/api/projects",
+        json={"name": "intervals", "scan_interval_minutes": 5, "subfinder_interval_minutes": 10080},
+    )
+
+    assert resp.status_code == 200
+    assert resp.json["data"]["scan_interval_minutes"] == 5
+    assert resp.json["data"]["subfinder_interval_minutes"] == 10080
+
+
 def test_enumeration_project_creation_uses_available_name(tmp_path, monkeypatch):
     sys.path.insert(0, str(ROOT))
     from flask import Flask

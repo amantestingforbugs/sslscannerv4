@@ -107,6 +107,14 @@ def _safe_int(value, default: int, min_value: int | None = None, max_value: int 
     return parsed
 
 
+def _json_first(d: dict, *keys: str, default=None):
+    """Return the first present JSON field, preserving explicit falsey values."""
+    for key in keys:
+        if key in d:
+            return d.get(key)
+    return default
+
+
 def _is_private_or_local_host(host: str) -> bool:
     h = (host or "").strip().lower()
     if h in {"localhost", "127.0.0.1", "::1"}:
@@ -1286,8 +1294,8 @@ def create_project():
     p, create_error = _create_project_or_error(
         name,
         d.get("description", ""),
-        _safe_int(d.get("scan_interval", 60), 60, min_value=5, max_value=10080),
-        _safe_int(d.get("subfinder_interval", 30), 30, min_value=5, max_value=10080),
+        _safe_int(_json_first(d, "scan_interval", "scan_interval_minutes", default=60), 60, min_value=5, max_value=10080),
+        _safe_int(_json_first(d, "subfinder_interval", "subfinder_interval_minutes", default=30), 30, min_value=5, max_value=10080),
     )
     if create_error:
         return err(create_error, 400)
