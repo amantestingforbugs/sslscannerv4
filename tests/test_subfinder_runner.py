@@ -818,3 +818,35 @@ def test_domain_enumeration_marks_scan_failed_on_pipeline_error(tmp_path, monkey
     assert len(scans) == 1
     assert scans[0]["status"] == "failed"
     assert scans[0]["total_found"] == 0
+
+
+def test_subdomain_enumeration_respects_configured_result_cap(monkeypatch):
+    monkeypatch.setenv("DOMAIN_ENUM_MAX_RESULTS", "2")
+    monkeypatch.setattr(
+        runner,
+        "_passive_enumeration_sources",
+        lambda: {"passive": lambda root: ["www.example.com", "app.example.com", "extra.example.com"]},
+    )
+    monkeypatch.setattr(
+        runner,
+        "_run_subfinder_for_root",
+        lambda root, timeout=180: {
+            "root_domain": root,
+            "status": "done",
+            "found": ["api.example.com", "dev.example.com"],
+            "found_count": 2,
+            "stderr": "",
+        },
+    )
+
+    def fail_late_stage(*_args, **_kwargs):
+        raise AssertionError("enumeration should stop once DOMAIN_ENUM_MAX_RESULTS is reached")
+
+    monkeypatch.setattr(runner, "_run_recursive_passive_enumeration", fail_late_stage)
+    monkeypatch.setattr(runner, "_bruteforce_dns_hosts", fail_late_stage)
+    monkeypatch.setattr(runner, "_permutation_dns_hosts", fail_late_stage)
+
+    result = runner._run_subdomain_enumeration(["example.com"], depth_mode="aggressive")
+
+    assert len(result["found"]) == 2
+    assert result["found"] == ["api.example.com", "dev.example.com"]

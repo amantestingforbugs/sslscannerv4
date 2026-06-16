@@ -68,6 +68,17 @@ def _cancel_pending_futures(futures: Iterable[object]) -> None:
             pass
 
 
+def _remaining_seconds(deadline: Optional[float], fallback: int, minimum: int = 1) -> int:
+    """Return seconds left before an absolute deadline, clamped for phase helpers."""
+    if deadline is None:
+        return max(minimum, int(fallback))
+    return max(minimum, min(int(fallback), int(deadline - time.monotonic())))
+
+
+def _deadline_expired(deadline: Optional[float]) -> bool:
+    return deadline is not None and time.monotonic() >= deadline
+
+
 def _iter_completed_with_deadline(future_map: Dict[object, object], timeout: int, phase_name: str):
     """Yield completed futures until a phase deadline, then cancel pending work.
 
@@ -1374,6 +1385,9 @@ def _run_recursive_passive_enumeration(
     root_domains: List[str],
     discovered: List[str],
     all_sources: Dict[str, EnumerationSource],
+    *,
+    deadline: Optional[float] = None,
+    max_results: int = 0,
 ) -> Dict[str, object]:
     """Recursively query passive sources against discovered sub-zones.
 
@@ -1396,11 +1410,16 @@ def _run_recursive_passive_enumeration(
 
     known = sorted(set(discovered))
     total_found: Set[str] = set()
+    remaining_capacity = max(0, int(max_results or 0) - len(known)) if max_results else 0
+    if max_results and remaining_capacity <= 0:
+        return {"found": [], "source_counts": {}, "raw_records": []}
     raw_records: List[Dict[str, object]] = []
     source_counts: Dict[str, int] = {}
     seen_targets: Set[str] = set(root_domains)
 
     for depth in range(1, max_depth + 1):
+        if _deadline_expired(deadline) or (max_results and len(known) >= max_results):
+            break
         target_zones: List[str] = []
         for root_domain in root_domains:
             target_zones.extend(_deep_scan_targets(root_domain, known, seen_targets, targets_per_root))
@@ -1414,6 +1433,9 @@ def _run_recursive_passive_enumeration(
             for target_zone in target_zones
             for source_name, source_fn in sources.items()
         ][:max_tasks]
+        if max_results:
+            remaining_capacity = max(0, max_results - len(known))
+            tasks = tasks[: max(1, min(len(tasks), remaining_capacity * max(1, len(sources))))]
         deep_workers = max(4, min(128, len(tasks)))
         pool = ThreadPoolExecutor(max_workers=deep_workers)
         depth_found: Set[str] = set()
@@ -1424,7 +1446,7 @@ def _run_recursive_passive_enumeration(
             }
             for future, source_info, timed_out in _iter_completed_with_deadline(
                 future_map,
-                phase_timeout,
+                _remaining_seconds(deadline, phase_timeout, minimum=1),
                 f"deep passive enumeration depth {depth}",
             ):
                 source_name, target_zone = source_info
@@ -1440,10 +1462,15 @@ def _run_recursive_passive_enumeration(
                 else:
                     run = future.result()
                 found = _filter_hosts_for_root(run.get("found") or [], target_zone)
+                if max_results:
+                    found = found[: max(0, max_results - len(known) - len(depth_found))]
                 if found:
                     depth_found.update(found)
                     source_counts[source_name] = source_counts.get(source_name, 0) + len(found)
                 raw_records.append(_compact_raw_record(run, sample_size=_env_int("SUBFINDER_RAW_SAMPLE_SIZE", 50, minimum=0)))
+                if max_results and len(known) + len(depth_found) >= max_results:
+                    _cancel_pending_futures(set(future_map) - {future})
+                    break
         finally:
             pool.shutdown(wait=False, cancel_futures=True)
 
@@ -1524,6 +1551,19 @@ def _run_subdomain_enumeration(root_domains: List[str], depth_mode: str = "aggre
     depth_mode = (depth_mode or "aggressive").strip().lower()
     aggressive = depth_mode == "aggressive"
     passive_sources = _passive_enumeration_sources()
+    total_timeout = _env_int(
+        "DOMAIN_ENUM_TOTAL_TIMEOUT_SECONDS" if aggressive else "DOMAIN_ENUM_STANDARD_TOTAL_TIMEOUT_SECONDS",
+        600 if aggressive else 120,
+        minimum=30,
+        maximum=7200,
+    )
+    deadline = time.monotonic() + total_timeout
+    max_results = _env_int(
+        "DOMAIN_ENUM_MAX_RESULTS" if aggressive else "DOMAIN_ENUM_STANDARD_MAX_RESULTS",
+        10000 if aggressive else 5000,
+        minimum=1,
+        maximum=1_000_000,
+    )
     if not aggressive:
         # The standalone UI defaults to standard depth and should return quickly.
         # Keep it to high-yield, low-latency public sources unless operators
@@ -1556,6 +1596,8 @@ def _run_subdomain_enumeration(root_domains: List[str], depth_mode: str = "aggre
     def add_hosts(source: str, root_domain: str, hosts: Iterable[str]) -> List[str]:
         accepted: List[str] = []
         for host in hosts or []:
+            if max_results and len(all_found) >= max_results:
+                break
             h = _normalize_host(str(host))
             if h and _HOST_RE.match(h) and _is_host_within_root(h, root_domain):
                 accepted.append(h)
@@ -1580,7 +1622,7 @@ def _run_subdomain_enumeration(root_domains: List[str], depth_mode: str = "aggre
             )
 
         phase_timeout = _env_int("DOMAIN_ENUM_PHASE_TIMEOUT_SECONDS" if aggressive else "DOMAIN_ENUM_STANDARD_PHASE_TIMEOUT_SECONDS", 360 if aggressive else 75, minimum=10, maximum=3600)
-        for fut, source_info, timed_out in _iter_completed_with_deadline(future_map, phase_timeout, "subdomain enumeration"):
+        for fut, source_info, timed_out in _iter_completed_with_deadline(future_map, _remaining_seconds(deadline, phase_timeout, minimum=1), "subdomain enumeration"):
             source_name, root_domain = source_info
             if timed_out:
                 run = {
@@ -1615,6 +1657,9 @@ def _run_subdomain_enumeration(root_domains: List[str], depth_mode: str = "aggre
             run["found"] = found
             run["found_count"] = len(found)
             raw_records.append(_compact_raw_record(run, sample_size=_env_int("SUBFINDER_RAW_SAMPLE_SIZE", 50, minimum=0)))
+            if max_results and len(all_found) >= max_results:
+                _cancel_pending_futures(set(future_map) - {fut})
+                break
     finally:
         enum_pool.shutdown(wait=False, cancel_futures=True)
 
@@ -1630,7 +1675,20 @@ def _run_subdomain_enumeration(root_domains: List[str], depth_mode: str = "aggre
     # pass discovers zones like ``dev.example.com`` or ``corp.example.com``,
     # query capable OSINT sources again for those sub-zones to uncover hosts
     # several labels below the root.
-    deep_result = _run_recursive_passive_enumeration(root_domains, sorted(all_found), passive_sources)
+    deep_result = {"found": [], "source_counts": {}, "raw_records": []}
+    if not _deadline_expired(deadline) and (not max_results or len(all_found) < max_results):
+        try:
+            deep_result = _run_recursive_passive_enumeration(
+                root_domains,
+                sorted(all_found),
+                passive_sources,
+                deadline=deadline,
+                max_results=max_results,
+            )
+        except TypeError:
+            # Keep tests and third-party monkeypatches that still use the older
+            # three-argument helper signature working.
+            deep_result = _run_recursive_passive_enumeration(root_domains, sorted(all_found), passive_sources)
     for record in deep_result.get("raw_records") or []:
         raw_records.append(record)
     for source_name, count in (deep_result.get("source_counts") or {}).items():
@@ -1645,6 +1703,14 @@ def _run_subdomain_enumeration(root_domains: List[str], depth_mode: str = "aggre
     # candidate generator can prepend labels to every newly discovered sub-zone,
     # not only apex-level names.
     seed_hosts = sorted(all_found) or root_domains
+    if _deadline_expired(deadline) or (max_results and len(all_found) >= max_results):
+        return {
+            "found": sorted(all_found),
+            "source_map": {source: sorted(hosts) for source, hosts in source_map.items()},
+            "source_counts": source_counts,
+            "raw_records": raw_records,
+        }
+
     dns_pool = ThreadPoolExecutor(max_workers=max(2, min(8, 2 * max(1, len(root_domains)))))
     try:
         future_map = {}
@@ -1652,7 +1718,7 @@ def _run_subdomain_enumeration(root_domains: List[str], depth_mode: str = "aggre
             future_map[dns_pool.submit(_bruteforce_dns_hosts, root_domain, seed_hosts, 0)] = ("dns_bruteforce", root_domain)
             future_map[dns_pool.submit(_permutation_dns_hosts, root_domain, seed_hosts, 0)] = ("dns_permutation", root_domain)
         phase_timeout = _env_int("DOMAIN_DNS_ENUM_PHASE_TIMEOUT_SECONDS", 180, minimum=15, maximum=3600)
-        for fut, source_info, timed_out in _iter_completed_with_deadline(future_map, phase_timeout, "subdomain DNS enumeration"):
+        for fut, source_info, timed_out in _iter_completed_with_deadline(future_map, _remaining_seconds(deadline, phase_timeout, minimum=1), "subdomain DNS enumeration"):
             source_name, root_domain = source_info
             if timed_out:
                 raw_records.append({"source": source_name, "root_domain": root_domain, "status": "timeout", "found_count": 0})
@@ -1664,6 +1730,9 @@ def _run_subdomain_enumeration(root_domains: List[str], depth_mode: str = "aggre
                 continue
             found = add_hosts(source_name, root_domain, hosts)
             raw_records.append({"source": source_name, "root_domain": root_domain, "status": "done", "found_count": len(found), "found_sample": found[:_env_int("SUBFINDER_RAW_SAMPLE_SIZE", 50, minimum=0)]})
+            if max_results and len(all_found) >= max_results:
+                _cancel_pending_futures(set(future_map) - {fut})
+                break
     finally:
         dns_pool.shutdown(wait=False, cancel_futures=True)
 
