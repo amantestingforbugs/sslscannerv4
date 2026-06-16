@@ -2145,6 +2145,22 @@ function clearApiMemo(pattern = '') {
   [...apiMemo.keys()].forEach(key => { if (key.includes(pattern)) apiMemo.delete(key); });
 }
 
+
+async function parseApiResponse(resp) {
+  const contentType = resp.headers.get('content-type') || '';
+  let out = null;
+  if (contentType.includes('application/json')) {
+    out = await resp.json().catch(() => null);
+  } else {
+    const text = await resp.text().catch(() => '');
+    out = { ok: false, error: text.trim() || resp.statusText || 'Request failed' };
+  }
+  if (!out || typeof out !== 'object') out = { ok: false, error: 'Invalid API response' };
+  if (!resp.ok && out.ok !== false) out = { ...out, ok: false };
+  if (!resp.ok && !out.error) out.error = resp.statusText || `HTTP ${resp.status}`;
+  return out;
+}
+
 async function apiJSON(url, opts) {
   const req = { cache: 'no-store', ...(opts || {}) };
   const readReq = isReadRequest(req);
@@ -2162,10 +2178,9 @@ async function apiJSON(url, opts) {
   if (hasBody) {
     req.headers = { 'Content-Type': 'application/json', ...(req.headers || {}) };
   }
-  const promise = trackNetworkActivity(fetch(url, req)).then(async resp => {
-    const out = await resp.json();
+  const promise = trackNetworkActivity(fetch(url, req)).then(parseApiResponse).then(out => {
     if (out?.ok !== false) setLastSyncStamp();
-    if (!resp.ok || out?.ok === false) apiMemo.delete(memoKey);
+    if (out?.ok === false) apiMemo.delete(memoKey);
     return out;
   }).catch(err => {
     if (memoKey) apiMemo.delete(memoKey);
@@ -2368,11 +2383,11 @@ async function saveAlertSettings() {
     mismatch_scope_filter: document.getElementById('set-mismatch-scope').value,
     minimum_days_left: Number(document.getElementById('set-min-days').value || 30),
   };
-  const { ok, error } = await fetch('/api/alert-settings', {
+  const { ok, error } = await apiJSON('/api/alert-settings', {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(payload),
-  }).then(r => r.json());
+  });
   if (!ok) {
     toast(error || 'Failed to save settings', 'err');
     return;
@@ -3209,11 +3224,11 @@ async function startQuickScan() {
   renderQuickRows();
   updateQuickProgress({ status: 'starting', total: 0, done: 0 });
   try {
-    const { ok, data, error } = await fetch('/api/quick-scan', {
+    const { ok, data, error } = await apiJSON('/api/quick-scan', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ hosts: dedupedHosts.join('\n') })
-    }).then(r => r.json());
+    });
     if (!ok) {
       btn.disabled = false;
       toast(error || 'Quick scan failed to start', 'err');
@@ -3307,10 +3322,10 @@ async function createProject() {
   const subfinder_interval = parseInt(document.getElementById('cp-sf-int').value)||30;
   if (!name) { toast('Name is required','err'); return; }
   try {
-    const { data: p, ok, error } = await fetch('/api/projects',{
-      method:'POST', headers:{'Content-Type':'application/json'},
+    const { data: p, ok, error } = await apiJSON('/api/projects',{
+      method:'POST',
       body: JSON.stringify({name,description:desc,scan_interval,subfinder_interval})
-    }).then(r=>r.json());
+    });
     if (!ok) { toast(error,'err'); return; }
     clearApiMemo();
     closeModal('createModal');
@@ -3327,7 +3342,7 @@ async function createProject() {
 async function openProject(pid, options = {}) {
   curPid = pid; nav('detail', { ...options, detailId: pid });
   try {
-    const { data: p } = await fetch(`/api/projects/${pid}`).then(r=>r.json());
+    const { data: p } = await apiJSON(`/api/projects/${pid}`);
     document.getElementById('det-name').textContent = p.name;
     document.getElementById('det-meta').textContent =
       `${fmt(p.host_count)} hosts · scan every ${p.scan_interval_minutes}min · subfinder every ${p.subfinder_interval_minutes}min`;
@@ -3406,7 +3421,7 @@ async function startOpenSSLContinuous() {
   const btn = document.getElementById('openssl-start-btn');
   btn.disabled = true;
   try {
-    const { ok, data, error } = await fetch(`/api/projects/${opensslPid}/openssl/start`, { method: 'POST' }).then(r => r.json());
+    const { ok, data, error } = await apiJSON(`/api/projects/${opensslPid}/openssl/start`, { method: 'POST' });
     if (!ok) {
       toast(error || 'Failed to start OpenSSL continuous scan', 'err');
       return;
@@ -3430,7 +3445,7 @@ async function loadOpenSSLRows() {
   }
   meta.textContent = 'Loading OpenSSL results...';
   try {
-    const { ok, data, error } = await fetch(`/api/projects/${opensslPid}/openssl?limit=5000`).then(r => r.json());
+    const { ok, data, error } = await apiJSON(`/api/projects/${opensslPid}/openssl?limit=5000`);
     if (!ok) {
       meta.textContent = error || 'Failed to load OpenSSL results.';
       renderOpenSSLRows([]);
@@ -3447,13 +3462,13 @@ async function loadOpenSSLRows() {
 
 async function delProject() {
   if (!confirm('Delete this project and all its scan data?')) return;
-  await fetch(`/api/projects/${curPid}`,{method:'DELETE'});
+  await apiJSON(`/api/projects/${curPid}`,{method:'DELETE'});
   clearApiMemo();
   toast('Project deleted','ok'); nav('projects');
 }
 
 function openEditModal() {
-  fetch(`/api/projects/${curPid}`).then(r=>r.json()).then(({data:p}) => {
+  apiJSON(`/api/projects/${curPid}`).then(({data:p}) => {
     document.getElementById('ep-id').value = p.id;
     document.getElementById('ep-name').value = p.name;
     document.getElementById('ep-desc').value = p.description||'';
@@ -3471,7 +3486,7 @@ async function saveEdit() {
     scan_interval_minutes: parseInt(document.getElementById('ep-scan-int').value)||60,
     subfinder_interval_minutes: parseInt(document.getElementById('ep-sf-int').value)||30,
   };
-  const { ok, error } = await fetch(`/api/projects/${pid}`,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}).then(r=>r.json());
+  const { ok, error } = await apiJSON(`/api/projects/${pid}`,{method:'PUT',body:JSON.stringify(body)});
   if (!ok) { toast(error,'err'); return; }
   clearApiMemo();
   closeModal('editModal');
@@ -3507,9 +3522,9 @@ async function uploadFile(input) {
 async function saveHosts() {
   const text = document.getElementById('paste-hosts').value.trim();
   if (!text) return;
-  const { data, ok, error } = await fetch(`/api/projects/${curPid}/hosts`,{
-    method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({hosts:text})
-  }).then(r=>r.json());
+  const { data, ok, error } = await apiJSON(`/api/projects/${curPid}/hosts`,{
+    method:'POST',body:JSON.stringify({hosts:text})
+  });
   if (!ok) { toast(error,'err'); return; }
   clearApiMemo();
   toast(`${fmt(data.count)} hosts saved`,'ok');
@@ -3534,14 +3549,14 @@ async function doScan() {
     toast('Choose a project before starting a scan', 'err');
     return;
   }
-  const { ok, data, error } = await fetch(`/api/projects/${curPid}/scan`,{method:'POST'}).then(r=>r.json());
+  const { ok, data, error } = await apiJSON(`/api/projects/${curPid}/scan`,{method:'POST'});
   if (!ok) { toast(error,'err'); return; }
   const latest = data?.scan || null;
   if (latest?.id) {
     curSid = latest.id;
     updateScanProgress(latest);
   } else {
-    const { data: scans } = await fetch(`/api/projects/${curPid}/scans`).then(r=>r.json());
+    const { data: scans } = await apiJSON(`/api/projects/${curPid}/scans`);
     const active = (scans || []).find(s => ['running','paused','stopping'].includes(s.status));
     if (active) curSid = active.id;
   }
@@ -3557,7 +3572,7 @@ function startPoll() {
   if (scanPollTimer) clearInterval(scanPollTimer);
   scanPollTimer = setInterval(async () => {
     try {
-      const { data: scans } = await fetch(`/api/projects/${curPid}/scans`).then(r=>r.json());
+      const { data: scans } = await apiJSON(`/api/projects/${curPid}/scans`);
       const run = (scans||[]).find(s=>['running','paused','stopping'].includes(s.status));
       const done = (scans||[]).find(s=>s.status==='done');
       const stopped = (scans||[]).find(s=>s.status==='stopped');

@@ -170,3 +170,39 @@ def test_host_upload_dropzone_uses_file_directly_when_datatransfer_is_unavailabl
     assert "async function uploadHostFile(file)" in TEMPLATE
     assert "if (f) uploadHostFile(f);" in TEMPLATE
     assert "input.value = '';" in TEMPLATE
+
+
+def test_host_preview_accepts_multipart_files(tmp_path, monkeypatch):
+    sys.path.insert(0, str(ROOT))
+    from flask import Flask
+    import io
+    import db.database as database
+    import api.routes as routes
+
+    monkeypatch.setattr(database, "DB_PATH", tmp_path / "host_preview.sqlite3")
+    monkeypatch.setattr(database, "_local", __import__("threading").local())
+    monkeypatch.setattr(routes, "is_target_allowed", lambda host, check_dns=True: True)
+    database.init_db()
+
+    app = Flask(__name__)
+    app.register_blueprint(routes.api)
+    client = app.test_client()
+    project = database.project_create("preview-hosts")
+
+    resp = client.post(
+        f"/api/projects/{project['id']}/hosts/preview",
+        data={"file": (io.BytesIO(b"https://www.example.com/path\napi.example.com:443\n"), "hosts.txt")},
+        content_type="multipart/form-data",
+    )
+
+    assert resp.status_code == 200
+    assert resp.json["data"]["hosts"] == ["www.example.com", "api.example.com"]
+
+
+def test_frontend_project_and_host_flows_use_shared_api_service():
+    assert "async function parseApiResponse(resp)" in TEMPLATE
+    assert "const { data: p, ok, error } = await apiJSON('/api/projects'" in TEMPLATE
+    assert "await apiJSON(`/api/projects/${curPid}/hosts`, { method: 'POST', body: fd })" in TEMPLATE
+    assert "await apiJSON(`/api/projects/${curPid}/scan`,{method:'POST'})" in TEMPLATE
+    assert "apiJSON('/api/projects',{\n      method:'POST'" in TEMPLATE
+    assert "apiJSON('/api/projects',{\n      method:'POST', headers" not in TEMPLATE

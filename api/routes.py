@@ -1285,7 +1285,7 @@ def list_projects():
 
 @api.post("/projects")
 def create_project():
-    d = request.get_json(silent=True) or {}
+    d = request.get_json(silent=True) or request.form.to_dict() or {}
     name = (d.get("name") or "").strip()
     if not name:
         return err("name is required")
@@ -1367,6 +1367,7 @@ def upload_hosts(pid):
     if not hosts:
         return err("No valid hostnames found")
     db.project_save_hosts(pid, hosts)
+    broadcast("project_hosts_updated", {"id": pid, "count": len(hosts)})
     return ok({"count": len(hosts), "analysis": analysis})
 
 
@@ -1379,7 +1380,7 @@ def get_hosts(pid):
 def preview_hosts(pid):
     if not db.project_get(pid):
         return err("Project not found", 404)
-    content = (request.json or {}).get("hosts", "") or (request.data or b"").decode(errors="ignore")
+    content = _read_hosts_upload_payload()
     return ok(_analyze_hosts_text(content))
 
 
