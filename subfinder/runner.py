@@ -1524,6 +1524,30 @@ def _run_subdomain_enumeration(root_domains: List[str], depth_mode: str = "aggre
     depth_mode = (depth_mode or "aggressive").strip().lower()
     aggressive = depth_mode == "aggressive"
     passive_sources = _passive_enumeration_sources()
+    if not aggressive:
+        # The standalone UI defaults to standard depth and should return quickly.
+        # Keep it to high-yield, low-latency public sources unless operators
+        # explicitly choose a different source list. Aggressive/project runs still
+        # use every integration plus recursive/DNS expansion.
+        default_standard = (
+            "crtsh",
+            "certspotter",
+            "anubis",
+            "subdomain_center",
+            "hackertarget",
+            "rapiddns",
+            "alienvault_otx",
+            "urlscan",
+        )
+        raw_standard = os.getenv("DOMAIN_ENUM_STANDARD_SOURCES", "").strip()
+        if raw_standard:
+            requested = [item.strip() for item in raw_standard.split(",") if item.strip()]
+            if not any(item.lower() == "all" for item in requested):
+                passive_sources = {name: passive_sources[name] for name in requested if name in passive_sources}
+        else:
+            fast_sources = {name: passive_sources[name] for name in default_standard if name in passive_sources}
+            if fast_sources:
+                passive_sources = fast_sources
     all_found: Set[str] = set()
     source_map: Dict[str, Set[str]] = {}
     source_counts: Dict[str, int] = {}
@@ -1547,7 +1571,7 @@ def _run_subdomain_enumeration(root_domains: List[str], depth_mode: str = "aggre
     try:
         future_map = {}
         for root_domain in root_domains:
-            future_map[enum_pool.submit(_run_subfinder_for_root, root_domain, 360)] = ("subfinder", root_domain)
+            future_map[enum_pool.submit(_run_subfinder_for_root, root_domain, 360 if aggressive else _env_int("DOMAIN_ENUM_STANDARD_SUBFINDER_TIMEOUT_SECONDS", 90, minimum=10, maximum=600))] = ("subfinder", root_domain)
             future_map.update(
                 {
                     enum_pool.submit(_run_passive_source, source_name, source_fn, root_domain): (source_name, root_domain)
@@ -1555,7 +1579,7 @@ def _run_subdomain_enumeration(root_domains: List[str], depth_mode: str = "aggre
                 }
             )
 
-        phase_timeout = _env_int("DOMAIN_ENUM_PHASE_TIMEOUT_SECONDS", 360, minimum=30, maximum=3600)
+        phase_timeout = _env_int("DOMAIN_ENUM_PHASE_TIMEOUT_SECONDS" if aggressive else "DOMAIN_ENUM_STANDARD_PHASE_TIMEOUT_SECONDS", 360 if aggressive else 75, minimum=10, maximum=3600)
         for fut, source_info, timed_out in _iter_completed_with_deadline(future_map, phase_timeout, "subdomain enumeration"):
             source_name, root_domain = source_info
             if timed_out:
