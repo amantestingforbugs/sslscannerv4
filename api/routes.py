@@ -1932,9 +1932,9 @@ def run_domain_enumeration():
     if not root_domain or not is_target_allowed(domain):
         return err("Domain is outside configured scan scope or targets a disallowed network", 403)
     try:
-        depth_mode = (payload.get("depth_mode") or "standard").strip().lower()
+        depth_mode = (payload.get("depth_mode") or "aggressive").strip().lower()
         if depth_mode not in {"standard", "aggressive"}:
-            depth_mode = "standard"
+            depth_mode = "aggressive"
         verbose = bool(payload.get("verbose") or payload.get("verbose_logs") or request.values.get("verbose"))
         data = run_domain_enumeration_scan(root_domain, triggered_by="manual", depth_mode=depth_mode, verbose=verbose)
         return ok(data)
