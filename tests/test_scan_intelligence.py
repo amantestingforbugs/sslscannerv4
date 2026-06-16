@@ -101,3 +101,44 @@ def test_results_metadata_is_persisted_and_compare_detects_renewal(tmp_path, mon
     assert comparison["summary"]["changed_status"] == 1
     assert comparison["summary"]["renewed_certificates"] == 1
     assert comparison["renewed_certificates"][0]["hostname"] == "www.example.com"
+
+
+def test_project_scan_defers_asset_backfill_until_after_batches(tmp_path, monkeypatch):
+    reset_db(tmp_path, monkeypatch)
+    project = db.project_create("large-scan")
+    db.project_save_hosts(project["id"], [f"www{i}.example.com" for i in range(3)])
+
+    import core.ssl_checker as ssl_checker
+    import scheduler.runner as runner
+
+    backfill_calls = []
+    original_backfill = db.asset_backfill_project
+
+    def fake_backfill(project_id):
+        backfill_calls.append(project_id)
+        return original_backfill(project_id)
+
+    def fake_run_checker(hosts, max_workers=50, progress_callback=None, **kwargs):
+        for idx, host in enumerate(hosts, start=1):
+            progress_callback(idx, len(hosts), {
+                "hostname": host,
+                "cn": host,
+                "sans": [host],
+                "issuer": "Test CA",
+                "expiry": "2027-01-01",
+                "days_left": 365,
+                "match_found": True,
+                "same_base": True,
+                "is_ok": True,
+            })
+        return []
+
+    monkeypatch.setattr(runner, "BATCH_SIZE", 1)
+    monkeypatch.setattr(ssl_checker, "run_checker", fake_run_checker)
+    monkeypatch.setattr(db, "asset_backfill_project", fake_backfill)
+
+    sid = runner.run_project_scan(project["id"], triggered_by="test")
+
+    assert sid
+    assert len(db.scan_results_all(sid)) == 3
+    assert backfill_calls == [project["id"]]
