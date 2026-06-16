@@ -44,3 +44,48 @@ def test_prune_finished_scan_state_bounds_completed_entries(monkeypatch):
         assert "recent" in runner._scan_state
         assert "active" in runner._scan_state
         runner._scan_state.clear()
+
+
+def test_scheduler_limits_automatic_project_scan_starts(monkeypatch):
+    import scheduler.runner as runner
+
+    scheduler = runner.ContinuousScheduler()
+    projects = [
+        {"id": "p1", "enabled": 1, "scan_interval_minutes": 1},
+        {"id": "p2", "enabled": 1, "scan_interval_minutes": 1},
+    ]
+    started = []
+
+    monkeypatch.setattr(runner, "prune_finished_scan_state", lambda now_ts=None: 0)
+    monkeypatch.setattr(runner, "active_ssl_scan_count", lambda: 0)
+    monkeypatch.setattr(runner, "MAX_CONCURRENT_PROJECT_SCANS", 1)
+    monkeypatch.setattr("db.database.storage_prune", lambda **kwargs: {})
+    monkeypatch.setattr("db.database.project_list", lambda: projects)
+    monkeypatch.setattr(runner, "run_project_scan_async", lambda pid, triggered_by="scheduler": started.append((pid, triggered_by)) or True)
+
+    scheduler._last_retention_run = 1.0
+    scheduler._tick()
+
+    assert started == [("p1", "scheduler")]
+    assert scheduler._last_run["p1"] > 0
+    assert "p2" not in scheduler._last_run
+
+
+def test_scheduler_waits_when_scan_capacity_is_full(monkeypatch):
+    import scheduler.runner as runner
+
+    scheduler = runner.ContinuousScheduler()
+    started = []
+
+    monkeypatch.setattr(runner, "prune_finished_scan_state", lambda now_ts=None: 0)
+    monkeypatch.setattr(runner, "active_ssl_scan_count", lambda: 1)
+    monkeypatch.setattr(runner, "MAX_CONCURRENT_PROJECT_SCANS", 1)
+    monkeypatch.setattr("db.database.storage_prune", lambda **kwargs: {})
+    monkeypatch.setattr("db.database.project_list", lambda: [{"id": "p1", "enabled": 1, "scan_interval_minutes": 1}])
+    monkeypatch.setattr(runner, "run_project_scan_async", lambda pid, triggered_by="scheduler": started.append(pid) or True)
+
+    scheduler._last_retention_run = 1.0
+    scheduler._tick()
+
+    assert started == []
+    assert scheduler._last_run == {}
