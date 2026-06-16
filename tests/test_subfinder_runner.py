@@ -850,3 +850,38 @@ def test_subdomain_enumeration_respects_configured_result_cap(monkeypatch):
 
     assert len(result["found"]) == 2
     assert result["found"] == ["api.example.com", "dev.example.com"]
+
+
+def test_domain_enumeration_verbose_log_persists_source_hosts_and_errors(tmp_path, monkeypatch):
+    import db.database as db
+
+    monkeypatch.setattr(db, "DB_PATH", tmp_path / "verbose-enum.sqlite3")
+    if getattr(db._local, "c", None):
+        db._local.c.close()
+        db._local.c = None
+    monkeypatch.setattr(
+        runner,
+        "_run_subdomain_enumeration",
+        lambda roots, depth_mode="standard": {
+            "found": ["api.example.com"],
+            "source_map": {"subfinder": ["api.example.com"]},
+            "source_counts": {"subfinder": 1},
+            "raw_records": [
+                {
+                    "source": "subfinder",
+                    "root_domain": "example.com",
+                    "status": "error",
+                    "found_count": 1,
+                    "found_sample": ["api.example.com"],
+                    "stderr_preview": "provider timeout",
+                }
+            ],
+        },
+    )
+
+    result = runner.run_domain_enumeration_scan("example.com", verbose=True)
+    scan = db.domain_enum_scan_get(result["scan_id"])
+
+    assert result["verbose_log"][0]["hosts"] == ["api.example.com"]
+    assert scan["verbose_log"][0]["error"] == "provider timeout"
+    assert scan["verbose_log"][0]["hosts"] == ["api.example.com"]

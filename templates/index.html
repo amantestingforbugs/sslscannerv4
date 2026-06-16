@@ -1764,6 +1764,9 @@ body::before{content:'';position:fixed;inset:0;pointer-events:none;background:ra
             <option value="aggressive">Aggressive</option>
           </select>
         </div>
+        <label class="form-label" style="display:flex;align-items:center;gap:8px;height:36px;margin-top:20px;white-space:nowrap">
+          <input type="checkbox" id="enum-verbose-option"> Verbose output
+        </label>
         <button class="btn btn-primary" style="height:36px" onclick="runDomainEnumeration()">▶ Enumerate</button>
       </div>
       <div class="stats-grid" style="margin-bottom:14px">
@@ -1779,6 +1782,10 @@ body::before{content:'';position:fixed;inset:0;pointer-events:none;background:ra
             <tbody id="sf-raw-page-body"></tbody>
           </table>
         </div>
+      </div>
+      <div class="card" id="enum-verbose-card" style="display:none">
+        <div class="card-header"><span class="card-title">Verbose Enumeration Output & Errors</span></div>
+        <div id="enum-verbose-body" class="card-body" style="display:grid;gap:10px"></div>
       </div>
       <div class="card">
         <div class="card-header" style="display:flex;align-items:center;justify-content:space-between;gap:10px">
@@ -4234,15 +4241,44 @@ async function deleteEnumScan(scanId) {
   await loadSfRawPage();
 }
 
+function renderEnumVerbose(scan) {
+  const card = document.getElementById('enum-verbose-card');
+  const body = document.getElementById('enum-verbose-body');
+  const records = Array.isArray(scan?.verbose_log) ? scan.verbose_log : [];
+  if (!records.length) {
+    card.style.display = 'none';
+    body.innerHTML = '';
+    return;
+  }
+  card.style.display = '';
+  body.innerHTML = records.map(r => {
+    const hosts = Array.isArray(r.hosts) ? r.hosts : [];
+    const err = r.error ? `<pre style="white-space:pre-wrap;overflow:auto;max-height:180px;background:var(--bg-raised);border:1px solid var(--border);border-radius:8px;padding:10px;color:var(--red);font-family:var(--mono);font-size:11px">${esc(r.error)}</pre>` : '<div style="font-size:12px;color:var(--text-muted)">No errors reported.</div>';
+    const hostList = hosts.length ? `<pre style="white-space:pre-wrap;overflow:auto;max-height:240px;background:var(--bg-raised);border:1px solid var(--border);border-radius:8px;padding:10px;font-family:var(--mono);font-size:11px">${esc(hosts.join('\n'))}</pre>` : '<div style="font-size:12px;color:var(--text-muted)">No hosts returned by this source.</div>';
+    return `<section style="border:1px solid var(--border);border-radius:10px;padding:12px;background:var(--bg-surface)">
+      <div style="display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap;margin-bottom:8px">
+        <b>${esc(r.source || 'unknown')}</b>
+        <span class="badge ${r.status==='done'?'badge-done':r.status==='running'?'badge-running':'badge-error'}">${esc(r.status || 'unknown')}</span>
+      </div>
+      <div style="font-size:12px;color:var(--text-secondary);margin-bottom:8px">Root: ${esc(r.root_domain || '—')} · Found: ${fmt(r.found_count || hosts.length || 0)}${r.exit_code != null ? ` · Exit: ${esc(String(r.exit_code))}` : ''}</div>
+      ${r.command ? `<div style="font-size:11px;color:var(--text-muted);font-family:var(--mono);margin-bottom:8px">${esc(r.command)}</div>` : ''}
+      <div style="font-size:12px;font-weight:600;margin-bottom:4px">Enumerated hosts</div>${hostList}
+      <div style="font-size:12px;font-weight:600;margin:8px 0 4px">Errors</div>${err}
+    </section>`;
+  }).join('');
+}
+
 async function runDomainEnumeration() {
   const domain = (document.getElementById('enum-domain-input').value||'').trim();
   if (!domain) return toast('Enter a domain', 'err');
   toast('Enumeration scan started', 'ok');
   const depthMode = document.getElementById('enum-depth-mode').value;
-  const { ok, error } = await apiJSON('/api/subfinder/enumeration/run', { method:'POST', body: JSON.stringify({ domain, depth_mode: depthMode }) });
+  const verbose = document.getElementById('enum-verbose-option')?.checked || false;
+  const { ok, data, error } = await apiJSON('/api/subfinder/enumeration/run', { method:'POST', body: JSON.stringify({ domain, depth_mode: depthMode, verbose }) });
   if (!ok) return toast(error || 'Enumeration failed', 'err');
   toast('Enumeration finished', 'ok');
   await loadSfRawPage();
+  if (data?.scan_id) await openEnumScan(data.scan_id);
 }
 
 async function openEnumScan(scanId) {
@@ -4254,6 +4290,7 @@ async function openEnumScan(scanId) {
   filter.innerHTML = '<option value="all">All sources</option>' + sources.map(s => `<option value="${esc(s)}">${esc(s)}</option>`).join('');
   document.getElementById('sf-enum-search').value = '';
   updateEnumStats(enumCurrentRows, enumCurrentScan);
+  renderEnumVerbose(enumCurrentScan);
   renderEnumResults();
   updateEnumActiveHostCount(enumCurrentRows);
   const createBtn = document.getElementById('enum-create-project-btn');
