@@ -149,12 +149,12 @@ def test_domain_enumeration_accepts_authorized_subdomain_scope(tmp_path, monkeyp
     database.init_db()
 
     calls = []
-    monkeypatch.setattr(
-        runner,
-        "run_domain_enumeration_scan",
-        lambda domain, triggered_by="manual", depth_mode="standard", verbose=False: calls.append(domain)
-        or {"scan_id": "scan1", "domain": domain, "total_found": 0, "verbose_log": []},
-    )
+
+    def fake_run(domain, triggered_by="manual", depth_mode="standard", verbose=False):
+        calls.append({"domain": domain, "depth_mode": depth_mode})
+        return {"scan_id": "scan1", "domain": domain, "total_found": 0, "verbose_log": []}
+
+    monkeypatch.setattr(runner, "run_domain_enumeration_scan", fake_run)
 
     app = Flask(__name__)
     app.register_blueprint(routes.api)
@@ -164,7 +164,7 @@ def test_domain_enumeration_accepts_authorized_subdomain_scope(tmp_path, monkeyp
 
     assert resp.status_code == 200
     assert resp.json["ok"] is True
-    assert calls == ["example.com"]
+    assert calls == [{"domain": "example.com", "depth_mode": "standard"}]
 
 
 def test_host_upload_accepts_multipart_files_and_raw_text(tmp_path, monkeypatch):
@@ -284,3 +284,10 @@ def test_domain_enumeration_request_does_not_pin_global_progress_bar():
     assert "trackActivity:false" in TEMPLATE
     assert "results will appear here when the scan completes" in TEMPLATE
     assert "button.textContent = '⏳ Enumerating…';" in TEMPLATE
+    assert "const timeout = setTimeout(() => controller.abort(), 180000);" in TEMPLATE
+    assert "Enumeration timed out in the browser after 180 seconds" in TEMPLATE
+
+
+def test_domain_enumeration_ui_defaults_to_standard_mode():
+    assert '<option value="standard" selected>Standard (all passive sources)</option>' in TEMPLATE
+    assert '<option value="aggressive">Aggressive (all sources + DNS expansion)</option>' in TEMPLATE

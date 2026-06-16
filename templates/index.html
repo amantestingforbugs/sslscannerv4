@@ -1760,8 +1760,8 @@ body::before{content:'';position:fixed;inset:0;pointer-events:none;background:ra
         <div class="form-group" style="max-width:180px">
           <label class="form-label">Depth Mode</label>
           <select class="form-input" id="enum-depth-mode">
-            <option value="aggressive" selected>Aggressive (all sources + DNS expansion)</option>
-            <option value="standard">Standard (all passive sources)</option>
+            <option value="standard" selected>Standard (all passive sources)</option>
+            <option value="aggressive">Aggressive (all sources + DNS expansion)</option>
           </select>
         </div>
         <label class="form-label" style="display:flex;align-items:center;gap:8px;height:36px;margin-top:20px;white-space:nowrap">
@@ -4332,7 +4332,10 @@ async function runDomainEnumeration() {
   try {
     const depthMode = document.getElementById('enum-depth-mode').value;
     const verbose = document.getElementById('enum-verbose-option')?.checked || false;
-    const { ok, data, error } = await apiJSON('/api/subfinder/enumeration/run', { method:'POST', trackActivity:false, body: JSON.stringify({ domain, depth_mode: depthMode, verbose }) });
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 180000);
+    const { ok, data, error } = await apiJSON('/api/subfinder/enumeration/run', { method:'POST', trackActivity:false, signal: controller.signal, body: JSON.stringify({ domain, depth_mode: depthMode, verbose }) });
+    clearTimeout(timeout);
     if (!ok) {
       if (body) body.innerHTML = `<tr><td colspan="3" style="text-align:center;padding:16px;color:var(--red)">${esc(error || 'Enumeration failed')}</td></tr>`;
       document.getElementById('enum-stat-active').textContent = '0';
@@ -4341,6 +4344,12 @@ async function runDomainEnumeration() {
     toast('Enumeration finished', 'ok');
     await loadSfRawPage();
     if (data?.scan_id) await openEnumScan(data.scan_id);
+  } catch (err) {
+    const msg = err?.name === 'AbortError' ? 'Enumeration timed out in the browser after 180 seconds. Try Standard mode or reduce enabled sources.' : (err?.message || 'Enumeration failed');
+    if (body) body.innerHTML = `<tr><td colspan="3" style="text-align:center;padding:16px;color:var(--red)">${esc(msg)}</td></tr>`;
+    if (count) count.textContent = '0 rows';
+    document.getElementById('enum-stat-active').textContent = '0';
+    toast(msg, 'err');
   } finally {
     if (button) {
       button.disabled = false;
