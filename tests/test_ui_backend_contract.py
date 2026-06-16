@@ -26,6 +26,11 @@ def test_subfinder_interval_hint_matches_backend_limits():
     assert "Discovery interval (10–30 minutes)" not in TEMPLATE
 
 
+def test_subfinder_job_history_shows_root_domains():
+    assert "Root Domain(s)" in TEMPLATE
+    assert "j.domains_input || '—'" in TEMPLATE
+
+
 def test_project_interval_persistence_matches_ui_contract(tmp_path, monkeypatch):
     """Database project helpers should preserve the interval range shown in the UI."""
     sys.path.insert(0, str(ROOT))
