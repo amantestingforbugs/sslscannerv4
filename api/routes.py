@@ -1331,14 +1331,29 @@ def delete_project(pid):
     return ok()
 
 
+def _read_hosts_upload_payload() -> str:
+    """Read host inventory text from multipart, JSON, form, or raw request bodies."""
+    for field_name in ("file", "hosts_file", "host_file"):
+        upload = request.files.get(field_name)
+        if upload:
+            return upload.read().decode("utf-8-sig", errors="ignore")
+
+    payload = request.get_json(silent=True) or {}
+    if isinstance(payload, dict) and payload.get("hosts") is not None:
+        return str(payload.get("hosts") or "")
+
+    form_hosts = request.form.get("hosts")
+    if form_hosts is not None:
+        return form_hosts
+
+    return (request.get_data(cache=False) or b"").decode("utf-8-sig", errors="ignore")
+
+
 @api.post("/projects/<pid>/hosts")
 def upload_hosts(pid):
     if not db.project_get(pid):
         return err("Project not found", 404)
-    if "file" in request.files:
-        content = request.files["file"].read().decode("utf-8", errors="ignore")
-    else:
-        content = (request.json or {}).get("hosts", "") or (request.data or b"").decode()
+    content = _read_hosts_upload_payload()
     analysis = _analyze_hosts_text(content)
     hosts = analysis["hosts"]
     if not hosts:
