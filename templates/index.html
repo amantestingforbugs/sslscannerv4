@@ -607,6 +607,10 @@ tbody tr:last-child td{border-bottom:none}
   border-color:var(--accent);background:var(--accent-dim);
   color:var(--accent);
 }
+.dropzone.is-uploading{
+  border-color:var(--green);background:var(--green-dim);
+  color:var(--green);cursor:progress;
+}
 .dropzone-icon{font-size:26px;margin-bottom:8px}
 .dropzone p{font-size:12.5px}
 .dropzone .hint{font-size:11px;color:var(--text-muted);margin-top:4px}
@@ -3482,19 +3486,36 @@ async function saveEdit() {
 // ════════════════════════════════════════════════════════════
 // HOSTS
 // ════════════════════════════════════════════════════════════
+function updateProjectHostCount(count) {
+  const formatted = fmt(count);
+  document.getElementById('host-count').textContent = formatted;
+  const meta = document.getElementById('det-meta');
+  if (meta) {
+    meta.textContent = meta.textContent.replace(/^.*? hosts/, `${formatted} hosts`);
+  }
+}
+
 async function uploadHostFile(file) {
   if (!curPid) return toast('Choose a project before uploading hosts', 'err');
   if (!file) return;
   const fd = new FormData();
   fd.append('file', file, file.name || 'hosts.txt');
+  const input = document.getElementById('fi');
+  const dropzone = document.getElementById('dz');
+  input && (input.disabled = true);
+  dropzone?.classList.add('is-uploading');
+  toast(`Uploading ${file.name || 'host list'}…`, 'ok');
   try {
     const { data, ok, error } = await apiJSON(`/api/projects/${curPid}/hosts`, { method: 'POST', body: fd });
     if (!ok) { toast(error || 'Host upload failed', 'err'); return; }
     clearApiMemo();
     toast(`${fmt(data.count)} hosts saved`, 'ok');
-    document.getElementById('host-count').textContent = fmt(data.count);
+    updateProjectHostCount(data.count);
   } catch (err) {
     toast(`Host upload failed: ${err.message || err}`, 'err');
+  } finally {
+    input && (input.disabled = false);
+    dropzone?.classList.remove('is-uploading');
   }
 }
 
@@ -3513,7 +3534,7 @@ async function saveHosts() {
   if (!ok) { toast(error,'err'); return; }
   clearApiMemo();
   toast(`${fmt(data.count)} hosts saved`,'ok');
-  document.getElementById('host-count').textContent = fmt(data.count);
+  updateProjectHostCount(data.count);
   document.getElementById('paste-hosts').value='';
 }
 
