@@ -1861,24 +1861,40 @@ def run_subfinder_for_project(project_id: str, triggered_by: str = "scheduler") 
         source_counts = enumeration["source_counts"]
         raw_records = enumeration["raw_records"]
 
+        records_by_root: Dict[str, List[Dict[str, object]]] = {root: [] for root in root_domains}
         for record in raw_records:
             root_domain = str(record.get("root_domain") or "")
-            source_name = str(record.get("source") or "subfinder")
-            command = str(record.get("command") or f"{source_name}:{root_domain}")
+            if root_domain:
+                records_by_root.setdefault(root_domain, []).append(record)
+
+        for root_domain in root_domains:
+            root_records = records_by_root.get(root_domain) or []
+            root_hosts = sorted({h for h in discovered if _is_host_within_root(h, root_domain)})
+            failed_records = [r for r in root_records if str(r.get("status") or "done") != "done"]
+            command = f"enumeration:{root_domain}"
+            if root_records:
+                command = ", ".join(
+                    str(r.get("command") or f"{r.get('source') or 'source'}:{root_domain}")
+                    for r in root_records[:8]
+                )
+                if len(root_records) > 8:
+                    command += f", … +{len(root_records) - 8} more"
             rid = subfinder_raw_result_add(
                 job_id=job_id,
                 project_id=project_id,
                 root_domain=root_domain,
                 command=command,
             )
-            found_sample = record.get("found_sample") or []
             subfinder_raw_result_finish(
                 rid,
-                str(record.get("status") or "done"),
-                0 if record.get("status") in (None, "done") else 1,
-                int(record.get("found_count") or 0),
-                "\n".join(found_sample),
-                str(record.get("stderr_preview") or ""),
+                "error" if failed_records else "done",
+                1 if failed_records else 0,
+                len(root_hosts),
+                "\n".join(root_hosts),
+                "\n".join(
+                    f"{r.get('source') or 'source'}: {r.get('stderr_preview') or r.get('error') or r.get('status')}"
+                    for r in failed_records
+                ),
             )
         new_count, new_hosts = subfinder_hosts_add_batch(project_id, discovered)
         subfinder_new_discoveries_add_batch(job_id, project_id, new_hosts)
