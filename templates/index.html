@@ -4239,16 +4239,22 @@ async function runDomainEnumeration() {
   if (!domain) return toast('Enter a domain', 'err');
   toast('Enumeration scan started', 'ok');
   const depthMode = document.getElementById('enum-depth-mode').value;
-  const { ok, error } = await apiJSON('/api/subfinder/enumeration/run', { method:'POST', body: JSON.stringify({ domain, depth_mode: depthMode }) });
+  const { ok, data, error } = await apiJSON('/api/subfinder/enumeration/run', { method:'POST', body: JSON.stringify({ domain, depth_mode: depthMode }) });
   if (!ok) return toast(error || 'Enumeration failed', 'err');
-  toast('Enumeration finished', 'ok');
+  toast(`Enumeration finished: ${fmt(data?.total_found || 0)} subdomains found`, 'ok');
   await loadSfRawPage();
+  if (data?.scan_id) {
+    if (data?.scan && Array.isArray(data?.results)) {
+      showEnumScan(data.scan, data.results);
+    } else {
+      await openEnumScan(data.scan_id);
+    }
+  }
 }
 
-async function openEnumScan(scanId) {
-  const { data } = await apiJSON(`/api/subfinder/enumeration/scans/${scanId}`);
-  enumCurrentScan = data?.scan || null;
-  enumCurrentRows = data?.results || [];
+function showEnumScan(scan, results) {
+  enumCurrentScan = scan || null;
+  enumCurrentRows = results || [];
   const sources = [...new Set(enumCurrentRows.flatMap(r => String(r.source || 'mixed').split(',').map(s => s.trim()).filter(Boolean)))].sort();
   const filter = document.getElementById('sf-enum-source-filter');
   filter.innerHTML = '<option value="all">All sources</option>' + sources.map(s => `<option value="${esc(s)}">${esc(s)}</option>`).join('');
@@ -4258,6 +4264,11 @@ async function openEnumScan(scanId) {
   updateEnumActiveHostCount(enumCurrentRows);
   const createBtn = document.getElementById('enum-create-project-btn');
   if (createBtn) createBtn.disabled = !enumCurrentScan || !enumCurrentRows.length;
+}
+
+async function openEnumScan(scanId) {
+  const { data } = await apiJSON(`/api/subfinder/enumeration/scans/${scanId}`);
+  showEnumScan(data?.scan || null, data?.results || []);
 }
 
 async function createProjectFromEnumScan() {

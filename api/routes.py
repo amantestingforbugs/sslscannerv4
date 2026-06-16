@@ -1930,6 +1930,11 @@ def run_domain_enumeration():
         if depth_mode not in {"standard", "aggressive"}:
             depth_mode = "standard"
         data = run_domain_enumeration_scan(root_domain, triggered_by="manual", depth_mode=depth_mode)
+        scan_id = data.get("scan_id")
+        if scan_id:
+            scan = db.domain_enum_scan_get(scan_id)
+            results = db.domain_enum_results_by_scan(scan_id)
+            data = {**data, "scan": scan, "results": results}
         return ok(data)
     except ValueError as ve:
         return err(str(ve))
