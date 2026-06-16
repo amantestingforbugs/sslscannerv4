@@ -720,3 +720,53 @@ def test_shared_enumeration_runs_deep_passive_before_dns(monkeypatch):
     ]
     assert result["source_map"]["deep_recursive_passive"] == ["api.internal.dev.example.com"]
     assert result["source_map"]["dns_bruteforce"] == ["admin.api.internal.dev.example.com"]
+
+
+def test_domain_enumeration_initializes_database_before_scan(tmp_path, monkeypatch):
+    import db.database as db
+
+    monkeypatch.setattr(db, "DB_PATH", tmp_path / "fresh-enum.sqlite3")
+    if getattr(db._local, "c", None):
+        db._local.c.close()
+        db._local.c = None
+    monkeypatch.setattr(
+        runner,
+        "_run_subdomain_enumeration",
+        lambda roots, depth_mode="standard": {
+            "found": ["api.example.com"],
+            "source_map": {"passive": ["api.example.com"]},
+            "source_counts": {"passive": 1},
+            "raw_records": [],
+        },
+    )
+
+    result = runner.run_domain_enumeration_scan("example.com")
+
+    assert result["total_found"] == 1
+    scan = db.domain_enum_scan_get(result["scan_id"])
+    rows = db.domain_enum_results_by_scan(result["scan_id"])
+    assert scan["status"] == "done"
+    assert rows[0]["hostname"] == "api.example.com"
+
+
+def test_domain_enumeration_marks_scan_failed_on_pipeline_error(tmp_path, monkeypatch):
+    import db.database as db
+    import pytest
+
+    monkeypatch.setattr(db, "DB_PATH", tmp_path / "failed-enum.sqlite3")
+    if getattr(db._local, "c", None):
+        db._local.c.close()
+        db._local.c = None
+
+    def raise_pipeline_error(*_args, **_kwargs):
+        raise RuntimeError("source crash")
+
+    monkeypatch.setattr(runner, "_run_subdomain_enumeration", raise_pipeline_error)
+
+    with pytest.raises(RuntimeError, match="source crash"):
+        runner.run_domain_enumeration_scan("example.com")
+
+    scans = db.domain_enum_scans_list()
+    assert len(scans) == 1
+    assert scans[0]["status"] == "failed"
+    assert scans[0]["total_found"] == 0
