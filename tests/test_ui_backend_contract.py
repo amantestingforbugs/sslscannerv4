@@ -50,14 +50,14 @@ def test_project_interval_persistence_matches_ui_contract(tmp_path, monkeypatch)
     assert updated["subfinder_interval_minutes"] == 5
 
 
-def test_dashboard_uses_minimal_saas_workspace():
+def test_dashboard_replaces_hunter_mission_board_with_ai_copilot():
     assert "Bug Bounty Launchpad" not in TEMPLATE
     assert "Hunter mission board" not in TEMPLATE
-    assert "AI Bounty Copilot" not in TEMPLATE
-    assert "Clean certificate operations without the noise." in TEMPLATE
-    assert "sass-hero" in TEMPLATE
-    assert "sass-kpi-grid" in TEMPLATE
-    assert "sass-main-grid" in TEMPLATE
+    assert "AI Bounty Copilot" in TEMPLATE
+    assert "Prompt workbench" in TEMPLATE
+    assert "AI prompt pack" in TEMPLATE
+    assert "Actionable bounty copilot" in TEMPLATE
+    assert "/api/bounty/copilot" in TEMPLATE
 
 
 def test_project_create_duplicate_returns_json_error(tmp_path, monkeypatch):
