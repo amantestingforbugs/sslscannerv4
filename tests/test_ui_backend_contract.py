@@ -53,3 +53,53 @@ def test_dashboard_replaces_hunter_mission_board_with_ai_copilot():
     assert "AI prompt pack" in TEMPLATE
     assert "Actionable bounty copilot" in TEMPLATE
     assert "/api/bounty/copilot" in TEMPLATE
+
+
+def test_project_create_duplicate_returns_json_error(tmp_path, monkeypatch):
+    sys.path.insert(0, str(ROOT))
+    from flask import Flask
+    import db.database as database
+    import api.routes as routes
+
+    monkeypatch.setattr(database, "DB_PATH", tmp_path / "projects_create.sqlite3")
+    monkeypatch.setattr(database, "_local", __import__("threading").local())
+    database.init_db()
+
+    app = Flask(__name__)
+    app.register_blueprint(routes.api)
+    client = app.test_client()
+
+    first = client.post("/api/projects", json={"name": "dupe"})
+    duplicate = client.post("/api/projects", json={"name": "dupe"})
+
+    assert first.status_code == 200
+    assert duplicate.status_code == 400
+    assert duplicate.is_json
+    assert duplicate.json == {"ok": False, "error": "A project with that name already exists"}
+
+
+def test_enumeration_project_creation_uses_available_name(tmp_path, monkeypatch):
+    sys.path.insert(0, str(ROOT))
+    from flask import Flask
+    import db.database as database
+    import api.routes as routes
+
+    monkeypatch.setattr(database, "DB_PATH", tmp_path / "enum_project.sqlite3")
+    monkeypatch.setattr(database, "_local", __import__("threading").local())
+    database.init_db()
+
+    existing = database.project_create("Enum example.com")
+    scan_id = database.domain_enum_scan_create("example.com")
+    database.domain_enum_results_add_batch(scan_id, "example.com", ["www.example.com", "api.example.com"])
+    database.domain_enum_scan_finish(scan_id, "done", 2)
+
+    app = Flask(__name__)
+    app.register_blueprint(routes.api)
+    client = app.test_client()
+
+    resp = client.post(f"/api/subfinder/enumeration/scans/{scan_id}/project", json={"name": "Enum example.com"})
+
+    assert resp.status_code == 200
+    assert resp.json["data"]["project"]["id"] != existing["id"]
+    assert resp.json["data"]["project"]["name"] == "Enum example.com (2)"
+    assert resp.json["data"]["host_count"] == 2
