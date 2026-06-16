@@ -2197,6 +2197,8 @@ function clearApiMemo(pattern = '') {
 
 async function apiJSON(url, opts) {
   const req = { cache: 'no-store', ...(opts || {}) };
+  const trackActivity = req.trackActivity !== false;
+  delete req.trackActivity;
   const readReq = isReadRequest(req);
   const memoKey = readReq ? url : '';
   const now = performance.now();
@@ -2212,7 +2214,8 @@ async function apiJSON(url, opts) {
   if (hasBody) {
     req.headers = { 'Content-Type': 'application/json', ...(req.headers || {}) };
   }
-  const promise = trackNetworkActivity(fetch(url, req)).then(async resp => {
+  const fetchPromise = fetch(url, req);
+  const promise = (trackActivity ? trackNetworkActivity(fetchPromise) : fetchPromise).then(async resp => {
     const out = await parseApiResponse(resp);
     if (out?.ok !== false) setLastSyncStamp();
     if (!resp.ok || out?.ok === false) apiMemo.delete(memoKey);
@@ -4271,14 +4274,39 @@ function renderEnumVerbose(scan) {
 async function runDomainEnumeration() {
   const domain = (document.getElementById('enum-domain-input').value||'').trim();
   if (!domain) return toast('Enter a domain', 'err');
+  const button = document.querySelector('button[onclick="runDomainEnumeration()"]');
+  const body = document.getElementById('sf-enum-results-body');
+  const count = document.getElementById('sf-enum-results-count');
+  enumCurrentScan = { domain, status: 'running' };
+  enumCurrentRows = [];
+  updateEnumStats(enumCurrentRows, enumCurrentScan);
+  document.getElementById('enum-stat-active').textContent = '…';
+  if (count) count.textContent = 'Running…';
+  if (body) body.innerHTML = `<tr><td colspan="3" style="text-align:center;padding:16px;color:var(--text-muted)">Enumerating ${esc(domain)}… results will appear here when the scan completes.</td></tr>`;
+  if (button) {
+    button.disabled = true;
+    button.dataset.originalText = button.dataset.originalText || button.textContent;
+    button.textContent = '⏳ Enumerating…';
+  }
   toast('Enumeration scan started', 'ok');
-  const depthMode = document.getElementById('enum-depth-mode').value;
-  const verbose = document.getElementById('enum-verbose-option')?.checked || false;
-  const { ok, data, error } = await apiJSON('/api/subfinder/enumeration/run', { method:'POST', body: JSON.stringify({ domain, depth_mode: depthMode, verbose }) });
-  if (!ok) return toast(error || 'Enumeration failed', 'err');
-  toast('Enumeration finished', 'ok');
-  await loadSfRawPage();
-  if (data?.scan_id) await openEnumScan(data.scan_id);
+  try {
+    const depthMode = document.getElementById('enum-depth-mode').value;
+    const verbose = document.getElementById('enum-verbose-option')?.checked || false;
+    const { ok, data, error } = await apiJSON('/api/subfinder/enumeration/run', { method:'POST', trackActivity:false, body: JSON.stringify({ domain, depth_mode: depthMode, verbose }) });
+    if (!ok) {
+      if (body) body.innerHTML = `<tr><td colspan="3" style="text-align:center;padding:16px;color:var(--red)">${esc(error || 'Enumeration failed')}</td></tr>`;
+      document.getElementById('enum-stat-active').textContent = '0';
+      return toast(error || 'Enumeration failed', 'err');
+    }
+    toast('Enumeration finished', 'ok');
+    await loadSfRawPage();
+    if (data?.scan_id) await openEnumScan(data.scan_id);
+  } finally {
+    if (button) {
+      button.disabled = false;
+      button.textContent = button.dataset.originalText || '▶ Enumerate';
+    }
+  }
 }
 
 async function openEnumScan(scanId) {

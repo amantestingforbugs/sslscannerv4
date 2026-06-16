@@ -245,3 +245,10 @@ def test_api_key_gate_accepts_sse_query_token(tmp_path, monkeypatch):
     assert unauthorized.status_code == 401
     assert authorized_header.status_code == 200
     assert authorized_query.status_code == 200
+
+
+def test_domain_enumeration_request_does_not_pin_global_progress_bar():
+    assert "const trackActivity = req.trackActivity !== false;" in TEMPLATE
+    assert "trackActivity:false" in TEMPLATE
+    assert "results will appear here when the scan completes" in TEMPLATE
+    assert "button.textContent = '⏳ Enumerating…';" in TEMPLATE
