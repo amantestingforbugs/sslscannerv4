@@ -749,6 +749,32 @@ def test_domain_enumeration_initializes_database_before_scan(tmp_path, monkeypat
     assert rows[0]["hostname"] == "api.example.com"
 
 
+def test_domain_enumeration_schema_init_preserves_active_jobs(tmp_path, monkeypatch):
+    import db.database as db
+
+    monkeypatch.setattr(db, "DB_PATH", tmp_path / "active-job-enum.sqlite3")
+    if getattr(db._local, "c", None):
+        db._local.c.close()
+        db._local.c = None
+    db.ensure_schema()
+    active_job = db.job_create("ssl_scan", status="running", project_id="project-1")
+    monkeypatch.setattr(
+        runner,
+        "_run_subdomain_enumeration",
+        lambda roots, depth_mode="standard": {
+            "found": ["api.example.com"],
+            "source_map": {"passive": ["api.example.com"]},
+            "source_counts": {"passive": 1},
+            "raw_records": [],
+        },
+    )
+
+    result = runner.run_domain_enumeration_scan("example.com")
+
+    assert result["total_found"] == 1
+    assert db.job_get(active_job["id"])["status"] == "running"
+
+
 def test_domain_enumeration_marks_scan_failed_on_pipeline_error(tmp_path, monkeypatch):
     import db.database as db
     import pytest
