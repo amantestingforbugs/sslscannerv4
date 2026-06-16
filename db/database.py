@@ -201,6 +201,7 @@ def init_db():
         status TEXT DEFAULT 'running',
         triggered_by TEXT DEFAULT 'manual',
         tool_summary TEXT DEFAULT '',
+        verbose_log TEXT DEFAULT '',
         total_found INTEGER DEFAULT 0,
         started_at TEXT NOT NULL,
         finished_at TEXT
@@ -339,6 +340,11 @@ def init_db():
     # Lightweight migrations for existing DBs
     try:
         x("ALTER TABLE subfinder_jobs ADD COLUMN raw_output_path TEXT DEFAULT ''")
+        commit()
+    except sqlite3.OperationalError:
+        pass
+    try:
+        x("ALTER TABLE domain_enum_scans ADD COLUMN verbose_log TEXT DEFAULT ''")
         commit()
     except sqlite3.OperationalError:
         pass
@@ -1286,11 +1292,19 @@ def domain_enum_scan_create(domain, triggered_by="manual", tool_summary=""):
     return sid
 
 
-def domain_enum_scan_finish(scan_id, status, total_found):
-    x(
-        "UPDATE domain_enum_scans SET status=?, total_found=?, finished_at=? WHERE id=?",
-        (status, int(total_found or 0), now(), scan_id),
-    )
+def domain_enum_scan_finish(scan_id, status, total_found, verbose_log=None):
+    if verbose_log is None:
+        x(
+            "UPDATE domain_enum_scans SET status=?, total_found=?, finished_at=? WHERE id=?",
+            (status, int(total_found or 0), now(), scan_id),
+        )
+    else:
+        if not isinstance(verbose_log, str):
+            verbose_log = json.dumps(verbose_log, sort_keys=True)
+        x(
+            "UPDATE domain_enum_scans SET status=?, total_found=?, verbose_log=?, finished_at=? WHERE id=?",
+            (status, int(total_found or 0), verbose_log, now(), scan_id),
+        )
     commit()
 
 
@@ -1322,9 +1336,24 @@ def domain_enum_scans_list():
     return [dict(r) for r in x("SELECT * FROM domain_enum_scans ORDER BY started_at DESC LIMIT 300").fetchall()]
 
 
+def _decode_domain_enum_scan(row):
+    if not row:
+        return None
+    d = dict(row)
+    raw_verbose = d.get("verbose_log") or ""
+    if raw_verbose:
+        try:
+            d["verbose_log"] = json.loads(raw_verbose)
+        except Exception:
+            d["verbose_log"] = raw_verbose
+    else:
+        d["verbose_log"] = []
+    return d
+
+
 def domain_enum_scan_get(scan_id):
     row = x("SELECT * FROM domain_enum_scans WHERE id=?", (scan_id,)).fetchone()
-    return dict(row) if row else None
+    return _decode_domain_enum_scan(row)
 
 
 def domain_enum_results_by_scan(scan_id):

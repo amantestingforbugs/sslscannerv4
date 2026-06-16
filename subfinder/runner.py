@@ -1744,6 +1744,39 @@ def _run_subdomain_enumeration(root_domains: List[str], depth_mode: str = "aggre
     }
 
 
+def _domain_enum_verbose_log(enumeration: Dict[str, object]) -> List[Dict[str, object]]:
+    """Build UI-friendly verbose details for every enumeration source."""
+    source_map = {source: set(hosts or []) for source, hosts in (enumeration.get("source_map") or {}).items()}
+    records: List[Dict[str, object]] = []
+    for record in enumeration.get("raw_records") or []:
+        source = str(record.get("source") or "unknown")
+        hosts = sorted(source_map.get(source, []))
+        records.append({
+            "source": source,
+            "root_domain": record.get("root_domain") or "",
+            "status": record.get("status") or "unknown",
+            "exit_code": record.get("exit_code"),
+            "command": record.get("command") or "",
+            "found_count": len(hosts) if hosts else int(record.get("found_count") or 0),
+            "hosts": hosts or list(record.get("found_sample") or []),
+            "error": record.get("stderr_preview") or record.get("stderr") or "",
+        })
+    recorded_sources = {str(r.get("source") or "unknown") for r in records}
+    for source, hosts in sorted(source_map.items()):
+        if source not in recorded_sources:
+            records.append({
+                "source": source,
+                "root_domain": "",
+                "status": "done",
+                "exit_code": None,
+                "command": "",
+                "found_count": len(hosts),
+                "hosts": sorted(hosts),
+                "error": "",
+            })
+    return records
+
+
 def _store_project_domain_enumeration_results(root_domains: List[str], enumeration: Dict, triggered_by: str) -> None:
     """Persist scheduled project enumeration results into the domain enumeration history."""
     import db.database as db
@@ -2041,7 +2074,7 @@ def get_sf_state(project_id: str) -> dict:
         return _sf_state.get(project_id, {}).copy()
 
 
-def run_domain_enumeration_scan(domain: str, triggered_by: str = "manual", depth_mode: str = "standard") -> dict:
+def run_domain_enumeration_scan(domain: str, triggered_by: str = "manual", depth_mode: str = "standard", verbose: bool = False) -> dict:
     import db.database as db
 
     root = _normalize_host(domain)
@@ -2067,10 +2100,18 @@ def run_domain_enumeration_scan(domain: str, triggered_by: str = "manual", depth
         for src, hosts in source_map.items():
             if hosts:
                 db.domain_enum_results_add_batch(scan_id, root, sorted(hosts), source=src)
-        db.domain_enum_scan_finish(scan_id, "done", total_found=len(all_found))
-        return {"scan_id": scan_id, "domain": root, "total_found": len(all_found)}
-    except Exception:
-        db.domain_enum_scan_finish(scan_id, "failed", total_found=0)
+        verbose_log = _domain_enum_verbose_log(enumeration) if verbose else []
+        db.domain_enum_scan_finish(scan_id, "done", total_found=len(all_found), verbose_log=verbose_log)
+        return {"scan_id": scan_id, "domain": root, "total_found": len(all_found), "verbose_log": verbose_log}
+    except Exception as exc:
+        db.domain_enum_scan_finish(scan_id, "failed", total_found=0, verbose_log=[{
+            "source": "pipeline",
+            "root_domain": root,
+            "status": "error",
+            "found_count": 0,
+            "hosts": [],
+            "error": str(exc),
+        }] if verbose else None)
         raise
 
 
