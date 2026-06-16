@@ -623,7 +623,7 @@ def test_domain_enumeration_and_project_subfinder_share_same_pipeline(monkeypatc
         ],
     }
     calls = []
-    monkeypatch.setattr(runner, "_run_subdomain_enumeration", lambda roots: calls.append(tuple(roots)) or shared)
+    monkeypatch.setattr(runner, "_run_subdomain_enumeration", lambda roots, depth_mode="aggressive": calls.append((tuple(roots), depth_mode)) or shared)
     monkeypatch.setattr(runner, "subfinder_available", lambda: True)
     monkeypatch.setattr(runner, "_resolve_active_hosts_with_httpx", lambda hosts: [])
     monkeypatch.setattr(runner, "_ssl_scan_subfinder_hosts", lambda *args, **kwargs: None)
@@ -646,7 +646,7 @@ def test_domain_enumeration_and_project_subfinder_share_same_pipeline(monkeypatc
     enum_result = runner.run_domain_enumeration_scan("example.com")
     job_id = runner.run_subfinder_for_project("project1", triggered_by="manual")
 
-    assert calls == [("example.com",), ("example.com",)]
+    assert calls == [(("example.com",), "standard"), (("example.com",), "aggressive")]
     assert enum_result["total_found"] == 2
     assert sorted(enum_rows) == [
         ("example.com", ("api.example.com",), "subfinder"),
@@ -657,6 +657,31 @@ def test_domain_enumeration_and_project_subfinder_share_same_pipeline(monkeypatc
     assert inserted["hosts"] == ("api.example.com", "www.example.com")
     assert job_id == "job1"
 
+
+
+def test_standard_domain_enumeration_skips_deep_dns_stages(monkeypatch):
+    monkeypatch.setattr(
+        runner,
+        "_passive_enumeration_sources",
+        lambda: {"passive": lambda root: ["www.example.com"]},
+    )
+    monkeypatch.setattr(
+        runner,
+        "_run_subfinder_for_root",
+        lambda root, timeout=180: {"root_domain": root, "status": "done", "found": ["api.example.com"], "found_count": 1, "stderr": ""},
+    )
+
+    def fail_expensive_stage(*_args, **_kwargs):
+        raise AssertionError("standard depth should not run expensive deep/DNS stages")
+
+    monkeypatch.setattr(runner, "_run_recursive_passive_enumeration", fail_expensive_stage)
+    monkeypatch.setattr(runner, "_bruteforce_dns_hosts", fail_expensive_stage)
+    monkeypatch.setattr(runner, "_permutation_dns_hosts", fail_expensive_stage)
+
+    result = runner._run_subdomain_enumeration(["example.com"], depth_mode="standard")
+
+    assert result["found"] == ["api.example.com", "www.example.com"]
+    assert result["source_map"] == {"passive": ["www.example.com"], "subfinder": ["api.example.com"]}
 
 def test_shared_enumeration_runs_deep_passive_before_dns(monkeypatch):
     monkeypatch.setattr(

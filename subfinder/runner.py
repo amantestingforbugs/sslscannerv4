@@ -1508,13 +1508,15 @@ def _permutation_dns_hosts(root_domain: str, known_hosts: List[str], max_candida
 
 
 
-def _run_subdomain_enumeration(root_domains: List[str]) -> Dict[str, object]:
+def _run_subdomain_enumeration(root_domains: List[str], depth_mode: str = "aggressive") -> Dict[str, object]:
     """Run the shared subdomain enumeration pipeline used by both UI flows.
 
     Keeping this logic in one place makes the continuous Subfinder integration
     produce the same host set as the standalone Subfinder Enumeration tab for
     the same root domain(s).
     """
+    depth_mode = (depth_mode or "aggressive").strip().lower()
+    aggressive = depth_mode == "aggressive"
     passive_sources = _passive_enumeration_sources()
     all_found: Set[str] = set()
     source_map: Dict[str, Set[str]] = {}
@@ -1585,6 +1587,14 @@ def _run_subdomain_enumeration(root_domains: List[str]) -> Dict[str, object]:
             raw_records.append(_compact_raw_record(run, sample_size=_env_int("SUBFINDER_RAW_SAMPLE_SIZE", 50, minimum=0)))
     finally:
         enum_pool.shutdown(wait=False, cancel_futures=True)
+
+    if not aggressive:
+        return {
+            "found": sorted(all_found),
+            "source_map": {source: sorted(hosts) for source, hosts in source_map.items()},
+            "source_counts": source_counts,
+            "raw_records": raw_records,
+        }
 
     # Recursive passive enumeration is the deep-scan stage: after the apex
     # pass discovers zones like ``dev.example.com`` or ``corp.example.com``,
@@ -1713,7 +1723,7 @@ def run_subfinder_for_project(project_id: str, triggered_by: str = "scheduler") 
         _sf_state[project_id] = {"status": "running", "job_id": job_id, "new_count": 0}
 
     try:
-        enumeration = _run_subdomain_enumeration(root_domains)
+        enumeration = _run_subdomain_enumeration(root_domains, depth_mode="aggressive")
         _store_project_domain_enumeration_results(root_domains, enumeration, triggered_by)
         discovered = enumeration["found"]
         source_counts = enumeration["source_counts"]
@@ -1915,7 +1925,7 @@ def get_sf_state(project_id: str) -> dict:
         return _sf_state.get(project_id, {}).copy()
 
 
-def run_domain_enumeration_scan(domain: str, triggered_by: str = "manual") -> dict:
+def run_domain_enumeration_scan(domain: str, triggered_by: str = "manual", depth_mode: str = "standard") -> dict:
     import db.database as db
 
     root = _normalize_host(domain)
@@ -1927,7 +1937,7 @@ def run_domain_enumeration_scan(domain: str, triggered_by: str = "manual") -> di
         triggered_by=triggered_by,
         tool_summary=_tool_summary(),
     )
-    enumeration = _run_subdomain_enumeration([root])
+    enumeration = _run_subdomain_enumeration([root], depth_mode=depth_mode)
     all_found = set(enumeration["found"])
     source_map = {source: set(hosts) for source, hosts in enumeration["source_map"].items()}
 
