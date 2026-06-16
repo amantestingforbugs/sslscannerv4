@@ -210,3 +210,38 @@ def test_host_upload_dropzone_uses_file_directly_when_datatransfer_is_unavailabl
     assert "input.value = '';" in TEMPLATE
     assert "function updateProjectHostCount(count)" in TEMPLATE
     assert "dropzone?.classList.add('is-uploading')" in TEMPLATE
+
+
+def test_ui_api_client_supports_configurable_backend_and_api_key():
+    assert "SSL_SENTINEL_API_BASE_URL" in TEMPLATE
+    assert "ssl_sentinel_api_base_url" in TEMPLATE
+    assert "ssl_sentinel_api_key" in TEMPLATE
+    assert "function apiUrl(url)" in TEMPLATE
+    assert "X-API-Key" in TEMPLATE
+    assert "function parseApiResponse(resp)" in TEMPLATE
+    assert "sseUrl.searchParams.set('api_key', API_KEY)" in TEMPLATE
+
+
+def test_api_key_gate_accepts_sse_query_token(tmp_path, monkeypatch):
+    sys.path.insert(0, str(ROOT))
+    from flask import Flask
+    import db.database as database
+    import api.routes as routes
+
+    monkeypatch.setattr(database, "DB_PATH", tmp_path / "api_key.sqlite3")
+    monkeypatch.setattr(database, "_local", __import__("threading").local())
+    monkeypatch.setenv("API_REQUIRE_KEY", "true")
+    monkeypatch.setenv("API_KEY", "secret")
+    database.init_db()
+
+    app = Flask(__name__)
+    app.register_blueprint(routes.api)
+    client = app.test_client()
+
+    unauthorized = client.get("/api/projects")
+    authorized_header = client.get("/api/projects", headers={"X-API-Key": "secret"})
+    authorized_query = client.get("/api/projects?api_key=secret")
+
+    assert unauthorized.status_code == 401
+    assert authorized_header.status_code == 200
+    assert authorized_query.status_code == 200

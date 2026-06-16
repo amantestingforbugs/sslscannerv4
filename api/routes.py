@@ -349,7 +349,7 @@ def require_api_key():
     expected = _configured_api_key()
     if not expected:
         return err("API key enforcement is enabled but API_KEY is not configured", 503)
-    supplied = (request.headers.get("X-API-Key") or "").strip()
+    supplied = (request.headers.get("X-API-Key") or request.args.get("api_key") or "").strip()
     auth = (request.headers.get("Authorization") or "").strip()
     if auth.lower().startswith("bearer "):
         supplied = auth.split(None, 1)[1].strip()
