@@ -371,9 +371,9 @@ def err(msg, code=400):
     return jsonify({"ok": False, "error": msg}), code
 
 
-def _normalize_hostname(raw: str) -> str:
+def _normalize_hostname(raw: str, *, check_dns: bool = True) -> str:
     host = normalize_target_hostname(raw)
-    if not host or not is_target_allowed(host, check_dns=True):
+    if not host or not is_target_allowed(host, check_dns=check_dns):
         return ""
     return host
 
@@ -392,7 +392,7 @@ def _analyze_hosts_text(content: str) -> dict:
     seen = set()
     duplicates = []
     for raw in raw_items:
-        host = _normalize_hostname(raw)
+        host = _normalize_hostname(raw, check_dns=False)
         if not host:
             invalid.append(raw)
             continue

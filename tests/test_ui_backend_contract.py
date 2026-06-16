@@ -166,7 +166,42 @@ def test_host_upload_accepts_multipart_files_and_raw_text(tmp_path, monkeypatch)
     assert database.project_hosts(project["id"]) == ["raw.example.com"]
 
 
+def test_host_upload_does_not_wait_for_dns_resolution(tmp_path, monkeypatch):
+    sys.path.insert(0, str(ROOT))
+    from flask import Flask
+    import io
+    import db.database as database
+    import api.routes as routes
+
+    monkeypatch.setattr(database, "DB_PATH", tmp_path / "host_upload_no_dns.sqlite3")
+    monkeypatch.setattr(database, "_local", __import__("threading").local())
+
+    def fail_dns(*args, **kwargs):
+        raise AssertionError("host upload should not perform DNS resolution")
+
+    routes.resolves_to_disallowed_ip.cache_clear()
+    monkeypatch.setattr("core.target_policy.socket.getaddrinfo", fail_dns)
+    database.init_db()
+
+    app = Flask(__name__)
+    app.register_blueprint(routes.api)
+    client = app.test_client()
+    project = database.project_create("upload-hosts-no-dns")
+
+    resp = client.post(
+        f"/api/projects/{project['id']}/hosts",
+        data={"file": (io.BytesIO(b"one.example.com\ntwo.example.com\n"), "hosts.list")},
+        content_type="multipart/form-data",
+    )
+
+    assert resp.status_code == 200
+    assert resp.json["data"]["count"] == 2
+    assert database.project_hosts(project["id"]) == ["one.example.com", "two.example.com"]
+
+
 def test_host_upload_dropzone_uses_file_directly_when_datatransfer_is_unavailable():
     assert "async function uploadHostFile(file)" in TEMPLATE
     assert "if (f) uploadHostFile(f);" in TEMPLATE
     assert "input.value = '';" in TEMPLATE
+    assert "function updateProjectHostCount(count)" in TEMPLATE
+    assert "dropzone?.classList.add('is-uploading')" in TEMPLATE
