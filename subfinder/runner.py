@@ -434,7 +434,13 @@ def _extract_project_root_domains(hosts: List[str]) -> List[str]:
     roots: Set[str] = set()
     for h in normalized:
         root = _registrable_domain(h)
-        if root and is_target_allowed(root):
+        # A configured host can be narrower than its registrable domain when
+        # SCAN_ALLOWED_DOMAINS is set (for example app.example.com).  The
+        # subfinder CLI still needs the registrable domain passed to -d, so
+        # derive it from the already-authorized host instead of re-checking
+        # the broader root against the global allow-list.  Discovered results
+        # are still filtered by _is_host_within_root()/is_target_allowed().
+        if root:
             roots.add(root)
 
     return sorted(roots)
@@ -1805,7 +1811,8 @@ def _ssl_scan_subfinder_hosts(project_id: str, hostnames: List[str], job_id: str
         alerts_unseen_count, alerts_unsent, alert_mark_sent, alert_settings_get, project_get
     )
     from core.ssl_checker import run_checker
-    from scheduler.runner import BATCH_SIZE, PROGRESS_UPDATE_EVERY, _scan_lock, _scan_state
+    from core import jobs
+    from scheduler.runner import BATCH_SIZE, PROGRESS_UPDATE_EVERY, MAX_WORKERS, _scan_lock, _scan_state
     from core.observability import publish
     from alerts.notifiers import AlertManager
 
@@ -1824,6 +1831,17 @@ def _ssl_scan_subfinder_hosts(project_id: str, hostnames: List[str], job_id: str
     total = len(hostnames)
     scan = scan_create(project_id, total, by=f"subfinder:{job_id}")
     scan_id = scan["id"]
+    project = project_get(project_id) or {}
+    jobs.create_job(
+        "ssl_scan",
+        id=scan_id,
+        project_id=project_id,
+        status="running",
+        total=total,
+        source=f"subfinder:{job_id}",
+        payload={"project_name": project.get("name") or f"subfinder-{project_id[:8]}", "triggered_by": f"subfinder:{job_id}"},
+    )
+    publish("scan_update", jobs.public_state(jobs.get_job(scan_id)))
 
     with _scan_lock:
         _scan_state[scan_id] = {
@@ -1862,17 +1880,22 @@ def _ssl_scan_subfinder_hosts(project_id: str, hostnames: List[str], job_id: str
                 results_batch_save(scan_id, project_id, batch)
             if done_count[0] % PROGRESS_UPDATE_EVERY == 0:
                 scan_progress(scan_id, done_count[0])
+                jobs.update_progress(scan_id, done=done_count[0], total=total)
+                publish("scan_update", jobs.public_state(jobs.get_job(scan_id)))
                 with _scan_lock:
                     if scan_id in _scan_state:
                         _scan_state[scan_id]["progress"] = done_count[0]
 
-    run_checker(hostnames, max_workers=200, progress_callback=on_result)
+    run_checker(hostnames, max_workers=MAX_WORKERS, progress_callback=on_result)
 
     with lock:
         if result_batch:
             results_batch_save(scan_id, project_id, result_batch)
 
+    scan_progress(scan_id, done_count[0])
     scan_finish(scan_id)
+    jobs.update_state(scan_id, status="done", progress=total, done=done_count[0], total=total)
+    publish("scan_update", jobs.public_state(jobs.get_job(scan_id)))
     subfinder_hosts_mark_scanned(project_id, scanned_hosts)
     publish("alert_update", {"unseen_count": alerts_unseen_count()})
 
