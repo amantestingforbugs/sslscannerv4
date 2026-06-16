@@ -136,6 +136,37 @@ def test_enumeration_project_creation_uses_available_name(tmp_path, monkeypatch)
     assert resp.json["data"]["host_count"] == 2
 
 
+def test_domain_enumeration_accepts_authorized_subdomain_scope(tmp_path, monkeypatch):
+    sys.path.insert(0, str(ROOT))
+    from flask import Flask
+    import db.database as database
+    import api.routes as routes
+    import subfinder.runner as runner
+
+    monkeypatch.setattr(database, "DB_PATH", tmp_path / "enum_scoped.sqlite3")
+    monkeypatch.setattr(database, "_local", __import__("threading").local())
+    monkeypatch.setenv("SCAN_ALLOWED_DOMAINS", "portal.example.com")
+    database.init_db()
+
+    calls = []
+    monkeypatch.setattr(
+        runner,
+        "run_domain_enumeration_scan",
+        lambda domain, triggered_by="manual", depth_mode="standard", verbose=False: calls.append(domain)
+        or {"scan_id": "scan1", "domain": domain, "total_found": 0, "verbose_log": []},
+    )
+
+    app = Flask(__name__)
+    app.register_blueprint(routes.api)
+    client = app.test_client()
+
+    resp = client.post("/api/subfinder/enumeration/run", json={"domain": "portal.example.com"})
+
+    assert resp.status_code == 200
+    assert resp.json["ok"] is True
+    assert calls == ["example.com"]
+
+
 def test_host_upload_accepts_multipart_files_and_raw_text(tmp_path, monkeypatch):
     sys.path.insert(0, str(ROOT))
     from flask import Flask
