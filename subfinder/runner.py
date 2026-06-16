@@ -154,10 +154,11 @@ def _subfinder_supports_flag(subfinder_bin: str, flag: str) -> bool:
 
 
 def _build_subfinder_cmd(subfinder_bin: str, root_domain: str) -> List[str]:
-    cmd = [subfinder_bin, "-d", root_domain, "-silent", "-timeout", "30"]
+    tool_timeout = _env_int("SUBFINDER_TOOL_TIMEOUT_SECONDS", 60, minimum=10, maximum=600)
+    cmd = [subfinder_bin, "-d", root_domain, "-silent", "-timeout", str(tool_timeout)]
 
     # Aggressive defaults to maximize enumeration yield where supported.
-    preferred_flags = ["-all", "-recursive"]
+    preferred_flags = ["-all", "-recursive", "-active"]
 
     # Optional env override to add additional flags without code changes. Keep
     # value tokens that belong to supported flags (for example: "-rate-limit 50").
@@ -264,6 +265,12 @@ def _run_subfinder_for_root(root_domain: str, timeout: int = 180) -> Dict[str, o
         }
 
 
+def _run_subfinder_hosts_for_root(root_domain: str, timeout: int = 180) -> List[str]:
+    """EnumerationSource adapter that returns only normalized subfinder hosts."""
+    result = _run_subfinder_for_root(root_domain, timeout=timeout)
+    return list(result.get("found") or [])
+
+
 _HOST_RE = re.compile(r"^(?:\*\.)?(?=.{1,253}$)(?!-)[a-z0-9-]+(?:\.[a-z0-9-]+)+$", re.IGNORECASE)
 _DEFAULT_BRUTE_LABELS = (
     # A compact built-in "top subdomains" list used before any custom files/URLs.
@@ -355,7 +362,7 @@ def _labels_from_wordlist_url(url: str, limit: int, timeout: int = 30) -> List[s
 
 
 def _brute_labels() -> List[str]:
-    top_n = _env_int("DNS_BRUTEFORCE_TOP_N", 1000, minimum=1, maximum=1_000_000)
+    top_n = _env_int("DNS_BRUTEFORCE_TOP_N", 2000, minimum=1, maximum=1_000_000)
     raw = os.getenv("DNS_BRUTEFORCE_LABELS", "")
     custom = _dedupe_labels(raw.split(","), limit=top_n)
     if custom:
@@ -556,7 +563,7 @@ def _ordered_bruteforce_candidates(root_domain: str, seed_hosts: List[str]) -> L
 
 def _bruteforce_dns_hosts(root_domain: str, seed_hosts: List[str], max_candidates: int = 0) -> List[str]:
     if max_candidates <= 0:
-        max_candidates = _env_int("DNS_BRUTEFORCE_MAX_CANDIDATES", 5000, minimum=1, maximum=1_000_000)
+        max_candidates = _env_int("DNS_BRUTEFORCE_MAX_CANDIDATES", 20000, minimum=1, maximum=1_000_000)
     candidates = _ordered_bruteforce_candidates(root_domain, seed_hosts)
     if max_candidates > 0:
         candidates = candidates[:max_candidates]
@@ -565,8 +572,8 @@ def _bruteforce_dns_hosts(root_domain: str, seed_hosts: List[str], max_candidate
     keep_wildcards = os.getenv("DNS_BRUTEFORCE_KEEP_WILDCARD", "0").strip().lower() in {"1", "true", "yes", "on"}
     if not keep_wildcards:
         wildcard_ips = _wildcard_dns_ips(root_domain)
-    workers = max(8, min(128, len(candidates) or 1))
-    phase_timeout = _env_int("DNS_BRUTEFORCE_RESOLVE_TIMEOUT_SECONDS", 120, minimum=1, maximum=3600)
+    workers = max(8, min(256, len(candidates) or 1))
+    phase_timeout = _env_int("DNS_BRUTEFORCE_RESOLVE_TIMEOUT_SECONDS", 180, minimum=1, maximum=3600)
     rows = _resolve_hosts_with_deadline(candidates, workers=workers, timeout=phase_timeout, phase_name="DNS brute-force resolution")
     for host, ips in rows.items():
         if ips and (keep_wildcards or not wildcard_ips or not ips.issubset(wildcard_ips)):
@@ -1319,6 +1326,7 @@ def _deep_scan_enabled() -> bool:
 def _configured_deep_sources(all_sources: Dict[str, EnumerationSource]) -> Dict[str, EnumerationSource]:
     """Select passive sources used for recursive sub-zone enumeration."""
     default_names = (
+        "subfinder",
         "crtsh",
         "certspotter",
         "wayback",
@@ -1329,14 +1337,17 @@ def _configured_deep_sources(all_sources: Dict[str, EnumerationSource]) -> Dict[
         "subdomain_center",
         "alienvault_otx",
         "bufferover",
+        "web_artifacts",
+        "tls_san",
     )
+    available = {"subfinder": _run_subfinder_hosts_for_root, **all_sources}
     raw = os.getenv("SUBDOMAIN_DEEP_SOURCES", "").strip()
     if raw:
         requested = [item.strip() for item in raw.split(",") if item.strip()]
         if any(item.lower() == "all" for item in requested):
-            return dict(all_sources)
-        return {name: all_sources[name] for name in requested if name in all_sources}
-    return {name: all_sources[name] for name in default_names if name in all_sources}
+            return dict(available)
+        return {name: available[name] for name in requested if name in available}
+    return {name: available[name] for name in default_names if name in available}
 
 
 def _deep_scan_targets(root_domain: str, discovered: List[str], seen_targets: Set[str], limit: int) -> List[str]:
@@ -1372,10 +1383,10 @@ def _run_recursive_passive_enumeration(
     if not sources:
         return {"found": [], "source_counts": {}, "raw_records": []}
 
-    max_depth = _env_int("SUBDOMAIN_DEEP_SCAN_DEPTH", 3, minimum=1, maximum=10)
-    targets_per_root = _env_int("SUBDOMAIN_DEEP_TARGETS_PER_ROOT", 40, minimum=1, maximum=500)
-    max_tasks = _env_int("SUBDOMAIN_DEEP_MAX_TASKS", 500, minimum=1, maximum=5000)
-    phase_timeout = _env_int("SUBDOMAIN_DEEP_PHASE_TIMEOUT_SECONDS", 300, minimum=30, maximum=7200)
+    max_depth = _env_int("SUBDOMAIN_DEEP_SCAN_DEPTH", 4, minimum=1, maximum=10)
+    targets_per_root = _env_int("SUBDOMAIN_DEEP_TARGETS_PER_ROOT", 80, minimum=1, maximum=1000)
+    max_tasks = _env_int("SUBDOMAIN_DEEP_MAX_TASKS", 1200, minimum=1, maximum=10000)
+    phase_timeout = _env_int("SUBDOMAIN_DEEP_PHASE_TIMEOUT_SECONDS", 420, minimum=30, maximum=7200)
 
     known = sorted(set(discovered))
     total_found: Set[str] = set()
@@ -1397,7 +1408,7 @@ def _run_recursive_passive_enumeration(
             for target_zone in target_zones
             for source_name, source_fn in sources.items()
         ][:max_tasks]
-        deep_workers = max(4, min(64, len(tasks)))
+        deep_workers = max(4, min(128, len(tasks)))
         pool = ThreadPoolExecutor(max_workers=deep_workers)
         depth_found: Set[str] = set()
         try:
@@ -1482,13 +1493,13 @@ def _generate_permutation_candidates(root_domain: str, known_hosts: List[str], m
 
 def _permutation_dns_hosts(root_domain: str, known_hosts: List[str], max_candidates: int = 0) -> List[str]:
     if max_candidates <= 0:
-        max_candidates = _env_int("DNS_PERMUTATION_MAX_CANDIDATES", 5000, minimum=1, maximum=1_000_000)
+        max_candidates = _env_int("DNS_PERMUTATION_MAX_CANDIDATES", 20000, minimum=1, maximum=1_000_000)
     candidates = sorted(_generate_permutation_candidates(root_domain, known_hosts, max_candidates=max_candidates))
     if not candidates:
         return []
     resolved: List[str] = []
-    workers = max(8, min(96, len(candidates)))
-    phase_timeout = _env_int("DNS_PERMUTATION_RESOLVE_TIMEOUT_SECONDS", 120, minimum=1, maximum=3600)
+    workers = max(8, min(256, len(candidates)))
+    phase_timeout = _env_int("DNS_PERMUTATION_RESOLVE_TIMEOUT_SECONDS", 180, minimum=1, maximum=3600)
     rows = _resolve_hosts_with_deadline(candidates, workers=workers, timeout=phase_timeout, phase_name="DNS permutation resolution")
     for host, ips in rows.items():
         if ips:
@@ -1523,12 +1534,12 @@ def _run_subdomain_enumeration(root_domains: List[str]) -> Dict[str, object]:
             source_counts[source] = source_counts.get(source, 0) + len(unique)
         return unique
 
-    max_workers = max(8, min(64, (len(passive_sources) + 1) * max(1, len(root_domains))))
+    max_workers = max(8, min(128, (len(passive_sources) + 1) * max(1, len(root_domains))))
     enum_pool = ThreadPoolExecutor(max_workers=max_workers)
     try:
         future_map = {}
         for root_domain in root_domains:
-            future_map[enum_pool.submit(_run_subfinder_for_root, root_domain, 220)] = ("subfinder", root_domain)
+            future_map[enum_pool.submit(_run_subfinder_for_root, root_domain, 360)] = ("subfinder", root_domain)
             future_map.update(
                 {
                     enum_pool.submit(_run_passive_source, source_name, source_fn, root_domain): (source_name, root_domain)
@@ -1536,7 +1547,7 @@ def _run_subdomain_enumeration(root_domains: List[str]) -> Dict[str, object]:
                 }
             )
 
-        phase_timeout = _env_int("DOMAIN_ENUM_PHASE_TIMEOUT_SECONDS", 240, minimum=30, maximum=3600)
+        phase_timeout = _env_int("DOMAIN_ENUM_PHASE_TIMEOUT_SECONDS", 360, minimum=30, maximum=3600)
         for fut, source_info, timed_out in _iter_completed_with_deadline(future_map, phase_timeout, "subdomain enumeration"):
             source_name, root_domain = source_info
             if timed_out:

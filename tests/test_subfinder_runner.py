@@ -269,6 +269,15 @@ def test_build_subfinder_cmd_adds_aggressive_supported_flags(monkeypatch):
     cmd = runner._build_subfinder_cmd("subfinder", "example.com")
     assert "-all" in cmd
     assert "-recursive" in cmd
+    assert "-active" in cmd
+    assert cmd[cmd.index("-timeout") + 1] == "60"
+
+
+def test_build_subfinder_cmd_allows_deeper_timeout_override(monkeypatch):
+    monkeypatch.setenv("SUBFINDER_TOOL_TIMEOUT_SECONDS", "120")
+    monkeypatch.setattr(runner, "_subfinder_supports_flag", lambda *_args, **_kwargs: False)
+    cmd = runner._build_subfinder_cmd("subfinder", "example.com")
+    assert cmd[cmd.index("-timeout") + 1] == "120"
 
 
 def test_build_subfinder_cmd_skips_unsupported_extra_flags(monkeypatch):
@@ -510,6 +519,24 @@ def test_recursive_passive_enumeration_walks_newly_found_subzones(monkeypatch):
     assert result["found"] == ["admin.api.dev.example.com", "api.dev.example.com"]
     assert result["source_counts"]["deep:fake:d1"] == 1
     assert result["source_counts"]["deep:fake:d2"] == 1
+
+
+def test_deep_enumeration_includes_subfinder_recursion_by_default(monkeypatch):
+    monkeypatch.delenv("SUBDOMAIN_DEEP_SOURCES", raising=False)
+    monkeypatch.setattr(
+        runner,
+        "_run_subfinder_hosts_for_root",
+        lambda zone: ["admin.dev.example.com"] if zone == "dev.example.com" else [],
+    )
+
+    result = runner._run_recursive_passive_enumeration(
+        ["example.com"],
+        ["dev.example.com"],
+        {},
+    )
+
+    assert result["found"] == ["admin.dev.example.com"]
+    assert result["source_counts"]["deep:subfinder:d1"] == 1
 
 
 def test_bruteforce_dns_hosts_returns_partial_results_when_resolver_wedges(monkeypatch):
