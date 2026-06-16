@@ -2120,6 +2120,45 @@ let nucleiStatsRenderTimer = null;
 let nucleiPendingStats = null;
 const apiMemo = new Map();
 const API_MEMO_TTL = 3500;
+const API_BASE_URL = (window.SSL_SENTINEL_API_BASE_URL || localStorage.getItem('ssl_sentinel_api_base_url') || '').replace(/\/+$/, '');
+const API_KEY = window.SSL_SENTINEL_API_KEY || localStorage.getItem('ssl_sentinel_api_key') || '';
+
+function apiUrl(url) {
+  if (typeof url !== 'string' || !url.startsWith('/api/')) return url;
+  return `${API_BASE_URL}${url}`;
+}
+
+function withApiAuthHeaders(headers = {}) {
+  const next = new Headers(headers || {});
+  if (API_KEY && !next.has('X-API-Key')) next.set('X-API-Key', API_KEY);
+  return next;
+}
+
+const nativeFetch = window.fetch.bind(window);
+window.fetch = (resource, options = {}) => {
+  const req = { ...options };
+  if (typeof resource === 'string' && resource.startsWith('/api/')) {
+    resource = apiUrl(resource);
+    req.headers = withApiAuthHeaders(req.headers);
+  } else if (resource instanceof Request && new URL(resource.url).pathname.startsWith('/api/')) {
+    req.headers = withApiAuthHeaders(req.headers || resource.headers);
+  }
+  return nativeFetch(resource, req);
+};
+
+async function parseApiResponse(resp) {
+  const text = await resp.text();
+  let out = null;
+  try {
+    out = text ? JSON.parse(text) : {};
+  } catch {
+    out = { ok: false, error: text || `Backend returned HTTP ${resp.status}` };
+  }
+  if (!resp.ok && out?.ok !== false) {
+    out = { ok: false, error: out?.error || `Backend returned HTTP ${resp.status}`, data: out };
+  }
+  return out;
+}
 
 
 let activeNetworkRequests = 0;
@@ -2167,7 +2206,7 @@ async function apiJSON(url, opts) {
     req.headers = { 'Content-Type': 'application/json', ...(req.headers || {}) };
   }
   const promise = trackNetworkActivity(fetch(url, req)).then(async resp => {
-    const out = await resp.json();
+    const out = await parseApiResponse(resp);
     if (out?.ok !== false) setLastSyncStamp();
     if (!resp.ok || out?.ok === false) apiMemo.delete(memoKey);
     return out;
@@ -2633,7 +2672,9 @@ function connectSSE() {
   if (sseConnection || document.hidden) return;
   clearTimeout(sseReconnectTimer);
   sseReconnectTimer = null;
-  const es = new EventSource('/api/sse');
+  const sseUrl = new URL(apiUrl('/api/sse'), window.location.href);
+  if (API_KEY) sseUrl.searchParams.set('api_key', API_KEY);
+  const es = new EventSource(sseUrl.toString());
   sseConnection = es;
 
   es.addEventListener('connected', () => {
