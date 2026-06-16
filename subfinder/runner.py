@@ -1311,6 +1311,39 @@ def _tool_summary() -> str:
     return ",".join(sources)
 
 
+def _select_standard_passive_sources(passive_sources: Dict[str, EnumerationSource]) -> Dict[str, EnumerationSource]:
+    """Select passive sources for standard/manual enumeration.
+
+    Standard mode used to silently trim the source set to a small "fast" list,
+    which made UI/manual scans look incomplete even when many integrations were
+    configured.  Prefer breadth by default now, while keeping an escape hatch
+    for operators who need the previous quick-scan behavior.
+    """
+    raw_standard = os.getenv("DOMAIN_ENUM_STANDARD_SOURCES", "").strip()
+    if raw_standard:
+        requested = [item.strip() for item in raw_standard.split(",") if item.strip()]
+        if any(item.lower() == "all" for item in requested):
+            return dict(passive_sources)
+        return {name: passive_sources[name] for name in requested if name in passive_sources}
+
+    if _env_bool("DOMAIN_ENUM_STANDARD_FAST_ONLY", False):
+        default_standard = (
+            "crtsh",
+            "certspotter",
+            "anubis",
+            "subdomain_center",
+            "hackertarget",
+            "rapiddns",
+            "alienvault_otx",
+            "urlscan",
+        )
+        fast_sources = {name: passive_sources[name] for name in default_standard if name in passive_sources}
+        if fast_sources:
+            return fast_sources
+
+    return dict(passive_sources)
+
+
 def _run_passive_source(source_name: str, source_fn: EnumerationSource, root_domain: str) -> Dict[str, object]:
     started = time.time()
     try:
@@ -1565,29 +1598,9 @@ def _run_subdomain_enumeration(root_domains: List[str], depth_mode: str = "aggre
         maximum=1_000_000,
     )
     if not aggressive:
-        # The standalone UI defaults to standard depth and should return quickly.
-        # Keep it to high-yield, low-latency public sources unless operators
-        # explicitly choose a different source list. Aggressive/project runs still
-        # use every integration plus recursive/DNS expansion.
-        default_standard = (
-            "crtsh",
-            "certspotter",
-            "anubis",
-            "subdomain_center",
-            "hackertarget",
-            "rapiddns",
-            "alienvault_otx",
-            "urlscan",
-        )
-        raw_standard = os.getenv("DOMAIN_ENUM_STANDARD_SOURCES", "").strip()
-        if raw_standard:
-            requested = [item.strip() for item in raw_standard.split(",") if item.strip()]
-            if not any(item.lower() == "all" for item in requested):
-                passive_sources = {name: passive_sources[name] for name in requested if name in passive_sources}
-        else:
-            fast_sources = {name: passive_sources[name] for name in default_standard if name in passive_sources}
-            if fast_sources:
-                passive_sources = fast_sources
+        # Standard mode skips recursive/DNS expansion, but should still use all
+        # configured passive/tool integrations unless explicitly narrowed.
+        passive_sources = _select_standard_passive_sources(passive_sources)
     all_found: Set[str] = set()
     source_map: Dict[str, Set[str]] = {}
     source_counts: Dict[str, int] = {}
@@ -2090,7 +2103,7 @@ def get_sf_state(project_id: str) -> dict:
         return _sf_state.get(project_id, {}).copy()
 
 
-def run_domain_enumeration_scan(domain: str, triggered_by: str = "manual", depth_mode: str = "standard", verbose: bool = False) -> dict:
+def run_domain_enumeration_scan(domain: str, triggered_by: str = "manual", depth_mode: str = "aggressive", verbose: bool = False) -> dict:
     import db.database as db
 
     root = _normalize_host(domain)

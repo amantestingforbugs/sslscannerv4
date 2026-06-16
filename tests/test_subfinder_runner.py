@@ -646,7 +646,7 @@ def test_domain_enumeration_and_project_subfinder_share_same_pipeline(monkeypatc
     enum_result = runner.run_domain_enumeration_scan("example.com")
     job_id = runner.run_subfinder_for_project("project1", triggered_by="manual")
 
-    assert calls == [(("example.com",), "standard"), (("example.com",), "aggressive")]
+    assert calls == [(("example.com",), "aggressive"), (("example.com",), "aggressive")]
     assert enum_result["total_found"] == 2
     assert sorted(enum_rows) == [
         ("example.com", ("api.example.com",), "subfinder"),
@@ -684,8 +684,34 @@ def test_standard_domain_enumeration_skips_deep_dns_stages(monkeypatch):
     assert result["source_map"] == {"passive": ["www.example.com"], "subfinder": ["api.example.com"]}
 
 
-def test_standard_domain_enumeration_uses_fast_source_subset(monkeypatch):
+def test_standard_domain_enumeration_uses_all_passive_sources_by_default(monkeypatch):
     calls = []
+
+    monkeypatch.setattr(
+        runner,
+        "_passive_enumeration_sources",
+        lambda: {
+            "crtsh": lambda root: calls.append("crtsh") or ["ct.example.com"],
+            "slow_optional": lambda root: calls.append("slow_optional") or ["slow.example.com"],
+        },
+    )
+    monkeypatch.setattr(
+        runner,
+        "_run_subfinder_for_root",
+        lambda root, timeout=180: calls.append(("subfinder", timeout)) or {"root_domain": root, "status": "done", "found": [], "found_count": 0, "stderr": ""},
+    )
+
+    result = runner._run_subdomain_enumeration(["example.com"], depth_mode="standard")
+
+    assert result["found"] == ["ct.example.com", "slow.example.com"]
+    assert "crtsh" in calls
+    assert "slow_optional" in calls
+    assert ("subfinder", 90) in calls
+
+
+def test_standard_domain_enumeration_can_use_fast_source_subset(monkeypatch):
+    calls = []
+    monkeypatch.setenv("DOMAIN_ENUM_STANDARD_FAST_ONLY", "1")
 
     monkeypatch.setattr(
         runner,
