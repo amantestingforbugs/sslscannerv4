@@ -683,6 +683,54 @@ def test_standard_domain_enumeration_skips_deep_dns_stages(monkeypatch):
     assert result["found"] == ["api.example.com", "www.example.com"]
     assert result["source_map"] == {"passive": ["www.example.com"], "subfinder": ["api.example.com"]}
 
+
+def test_standard_domain_enumeration_uses_fast_source_subset(monkeypatch):
+    calls = []
+
+    monkeypatch.setattr(
+        runner,
+        "_passive_enumeration_sources",
+        lambda: {
+            "crtsh": lambda root: calls.append("crtsh") or ["ct.example.com"],
+            "slow_optional": lambda root: calls.append("slow_optional") or ["slow.example.com"],
+        },
+    )
+    monkeypatch.setattr(
+        runner,
+        "_run_subfinder_for_root",
+        lambda root, timeout=180: calls.append(("subfinder", timeout)) or {"root_domain": root, "status": "done", "found": [], "found_count": 0, "stderr": ""},
+    )
+
+    result = runner._run_subdomain_enumeration(["example.com"], depth_mode="standard")
+
+    assert result["found"] == ["ct.example.com"]
+    assert "crtsh" in calls
+    assert "slow_optional" not in calls
+    assert ("subfinder", 90) in calls
+
+
+def test_standard_domain_enumeration_allows_source_override(monkeypatch):
+    calls = []
+    monkeypatch.setenv("DOMAIN_ENUM_STANDARD_SOURCES", "slow_optional")
+    monkeypatch.setattr(
+        runner,
+        "_passive_enumeration_sources",
+        lambda: {
+            "crtsh": lambda root: calls.append("crtsh") or ["ct.example.com"],
+            "slow_optional": lambda root: calls.append("slow_optional") or ["slow.example.com"],
+        },
+    )
+    monkeypatch.setattr(
+        runner,
+        "_run_subfinder_for_root",
+        lambda root, timeout=180: {"root_domain": root, "status": "done", "found": [], "found_count": 0, "stderr": ""},
+    )
+
+    result = runner._run_subdomain_enumeration(["example.com"], depth_mode="standard")
+
+    assert result["found"] == ["slow.example.com"]
+    assert calls == ["slow_optional"]
+
 def test_shared_enumeration_runs_deep_passive_before_dns(monkeypatch):
     monkeypatch.setattr(
         runner,
