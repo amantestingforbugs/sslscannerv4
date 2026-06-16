@@ -10,7 +10,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 log = logging.getLogger(__name__)
-DB_PATH = Path("data/sentinel.db")
+DB_PATH = Path(os.getenv("SENTINEL_DB_PATH", "data/sentinel.db"))
 _local = threading.local()
 
 

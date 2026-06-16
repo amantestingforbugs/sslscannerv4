@@ -5,8 +5,7 @@ from pathlib import Path
 from flask import Flask, render_template
 
 # ✅ PRO SAFE log path setup
-log_path = Path("data/sentinel.log")
-log_path.parent.mkdir(parents=True, exist_ok=True)
+log_path = Path(os.getenv("SENTINEL_LOG_PATH", "data/sentinel.log"))
 
 sys.path.insert(0, str(Path(__file__).parent))
 
@@ -16,13 +15,22 @@ from scheduler.runner import start_scheduler
 from subfinder.runner import start_subfinder_scheduler
 
 # ✅ Logging setup
+def _logging_handlers() -> list[logging.Handler]:
+    handlers: list[logging.Handler] = [logging.StreamHandler(sys.stdout)]
+    try:
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        handlers.append(logging.FileHandler(log_path))
+    except OSError as exc:
+        # Some deployment targets mount the application directory read-only.
+        # Keep the web process alive and continue logging to stdout/stderr.
+        print(f"Warning: file logging disabled for {log_path}: {exc}", file=sys.stderr)
+    return handlers
+
+
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-    handlers=[
-        logging.StreamHandler(sys.stdout),
-        logging.FileHandler(log_path)
-    ],
+    handlers=_logging_handlers(),
 )
 
 app = Flask(__name__, template_folder="templates", static_folder="static")
