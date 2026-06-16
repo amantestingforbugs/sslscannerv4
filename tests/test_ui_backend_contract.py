@@ -103,3 +103,45 @@ def test_enumeration_project_creation_uses_available_name(tmp_path, monkeypatch)
     assert resp.json["data"]["project"]["id"] != existing["id"]
     assert resp.json["data"]["project"]["name"] == "Enum example.com (2)"
     assert resp.json["data"]["host_count"] == 2
+
+
+def test_host_upload_accepts_multipart_files_and_raw_text(tmp_path, monkeypatch):
+    sys.path.insert(0, str(ROOT))
+    from flask import Flask
+    import io
+    import db.database as database
+    import api.routes as routes
+
+    monkeypatch.setattr(database, "DB_PATH", tmp_path / "host_upload.sqlite3")
+    monkeypatch.setattr(database, "_local", __import__("threading").local())
+    monkeypatch.setattr(routes, "is_target_allowed", lambda host, check_dns=True: True)
+    database.init_db()
+
+    app = Flask(__name__)
+    app.register_blueprint(routes.api)
+    client = app.test_client()
+    project = database.project_create("upload-hosts")
+
+    multipart = client.post(
+        f"/api/projects/{project['id']}/hosts",
+        data={"file": (io.BytesIO(b"example.com\nhttps://api.example.com\n"), "hosts.list")},
+        content_type="multipart/form-data",
+    )
+    assert multipart.status_code == 200
+    assert multipart.json["data"]["count"] == 2
+    assert database.project_hosts(project["id"]) == ["example.com", "api.example.com"]
+
+    raw = client.post(
+        f"/api/projects/{project['id']}/hosts",
+        data="raw.example.com\n",
+        content_type="text/plain",
+    )
+    assert raw.status_code == 200
+    assert raw.json["data"]["count"] == 1
+    assert database.project_hosts(project["id"]) == ["raw.example.com"]
+
+
+def test_host_upload_dropzone_uses_file_directly_when_datatransfer_is_unavailable():
+    assert "async function uploadHostFile(file)" in TEMPLATE
+    assert "if (f) uploadHostFile(f);" in TEMPLATE
+    assert "input.value = '';" in TEMPLATE

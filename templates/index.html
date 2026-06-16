@@ -1455,7 +1455,7 @@ body::before{content:'';position:fixed;inset:0;pointer-events:none;background:ra
               <p>Drop .txt file or click to browse</p>
               <p class="hint">One hostname or URL per line</p>
             </div>
-            <input type="file" id="fi" accept=".txt" style="display:none" onchange="uploadFile(this)">
+            <input type="file" id="fi" accept=".txt,.list,.csv,text/plain,text/csv" style="display:none" onchange="uploadFile(this)">
           </div>
         </div>
         <div class="card" style="margin-bottom:0">
@@ -3482,14 +3482,26 @@ async function saveEdit() {
 // ════════════════════════════════════════════════════════════
 // HOSTS
 // ════════════════════════════════════════════════════════════
+async function uploadHostFile(file) {
+  if (!curPid) return toast('Choose a project before uploading hosts', 'err');
+  if (!file) return;
+  const fd = new FormData();
+  fd.append('file', file, file.name || 'hosts.txt');
+  try {
+    const { data, ok, error } = await apiJSON(`/api/projects/${curPid}/hosts`, { method: 'POST', body: fd });
+    if (!ok) { toast(error || 'Host upload failed', 'err'); return; }
+    clearApiMemo();
+    toast(`${fmt(data.count)} hosts saved`, 'ok');
+    document.getElementById('host-count').textContent = fmt(data.count);
+  } catch (err) {
+    toast(`Host upload failed: ${err.message || err}`, 'err');
+  }
+}
+
 async function uploadFile(input) {
-  const file = input.files[0]; if (!file) return;
-  const fd = new FormData(); fd.append('file', file);
-  const { data, ok, error } = await fetch(`/api/projects/${curPid}/hosts`,{method:'POST',body:fd}).then(r=>r.json());
-  if (!ok) { toast(error,'err'); return; }
-  clearApiMemo();
-  toast(`${fmt(data.count)} hosts saved`,'ok');
-  document.getElementById('host-count').textContent = fmt(data.count);
+  const file = input?.files?.[0];
+  await uploadHostFile(file);
+  if (input) input.value = '';
 }
 
 async function saveHosts() {
@@ -3511,7 +3523,7 @@ dz.addEventListener('dragleave',()=>dz.classList.remove('over'));
 dz.addEventListener('drop', e=>{
   e.preventDefault();dz.classList.remove('over');
   const f=e.dataTransfer.files[0];
-  if(f){const i=document.getElementById('fi');try{const dt=new DataTransfer();dt.items.add(f);i.files=dt.files;}catch{}uploadFile(i);}
+  if (f) uploadHostFile(f);
 });
 
 // ════════════════════════════════════════════════════════════
