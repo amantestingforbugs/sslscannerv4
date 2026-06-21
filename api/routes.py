@@ -2054,6 +2054,7 @@ def run_domain_enumeration():
                 root_domain,
                 triggered_by="manual",
                 tool_summary="background enumeration starting",
+                depth_mode=depth_mode,
             )
 
             def _run_background_domain_enum():
