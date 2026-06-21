@@ -1936,6 +1936,33 @@ def run_domain_enumeration():
         if depth_mode not in {"standard", "aggressive"}:
             depth_mode = "standard"
         verbose = bool(payload.get("verbose") or payload.get("verbose_logs") or request.values.get("verbose"))
+        async_requested = bool(payload.get("async") or payload.get("background") or request.values.get("async"))
+        if async_requested:
+            scan_id = db.domain_enum_scan_create(
+                root_domain,
+                triggered_by="manual",
+                tool_summary="background enumeration starting",
+            )
+
+            def _run_background_domain_enum():
+                try:
+                    run_domain_enumeration_scan(
+                        root_domain,
+                        triggered_by="manual",
+                        depth_mode=depth_mode,
+                        verbose=verbose,
+                        scan_id=scan_id,
+                    )
+                except Exception:
+                    log.exception("Background domain enumeration failed for %s", root_domain)
+
+            threading.Thread(
+                target=_run_background_domain_enum,
+                daemon=True,
+                name=f"domain-enum-{scan_id[:8]}",
+            ).start()
+            return ok({"scan_id": scan_id, "domain": root_domain, "status": "running"}), 202
+
         data = run_domain_enumeration_scan(root_domain, triggered_by="manual", depth_mode=depth_mode, verbose=verbose)
         return ok(data)
     except ValueError as ve:

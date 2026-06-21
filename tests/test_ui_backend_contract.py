@@ -282,10 +282,10 @@ def test_api_key_gate_accepts_sse_query_token(tmp_path, monkeypatch):
 def test_domain_enumeration_request_does_not_pin_global_progress_bar():
     assert "const trackActivity = req.trackActivity !== false;" in TEMPLATE
     assert "trackActivity:false" in TEMPLATE
-    assert "results will appear here when the scan completes" in TEMPLATE
+    assert "results will appear here automatically when the background scan completes" in TEMPLATE
     assert "button.textContent = '⏳ Enumerating…';" in TEMPLATE
-    assert "const timeout = setTimeout(() => controller.abort(), 180000);" in TEMPLATE
-    assert "Enumeration timed out in the browser after 180 seconds" in TEMPLATE
+    assert "async:true" in TEMPLATE
+    assert "Enumeration is still running in the background" in TEMPLATE
 
 
 def test_domain_enumeration_ui_defaults_to_standard_mode():
