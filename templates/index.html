@@ -1097,6 +1097,21 @@ body::before{content:'';position:fixed;inset:0;pointer-events:none;background:ra
 .dash-priority-list{display:grid;gap:8px;margin-top:12px}.dash-priority-item{display:flex;gap:9px;align-items:flex-start;padding:9px;border:1px solid var(--border);border-radius:14px;background:color-mix(in srgb,var(--bg-raised) 72%,transparent)}
 .dash-priority-item b{display:block;font-size:12px}.dash-priority-item small{display:block;color:var(--text-muted);font-size:11px;margin-top:1px}.dash-priority-icon{width:26px;height:26px;border-radius:10px;display:grid;place-items:center;background:var(--accent-dim);flex:0 0 auto}
 .dash-focus-actions{display:grid;gap:8px;margin-top:12px}.dash-focus-actions .btn{justify-content:space-between;border-radius:14px;min-height:38px}.dash-focus-actions .btn::after{content:'→';opacity:.55}
+
+
+/* Dashboard command center upgrade: live posture, coverage and operator queue */
+.dash-command-board{display:grid;grid-template-columns:minmax(0,1.35fr) minmax(320px,.9fr);gap:16px;margin:0 0 16px}
+.dash-posture-card,.dash-action-card,.dash-coverage-card{position:relative;overflow:hidden;border:1px solid color-mix(in srgb,var(--border) 72%,var(--accent));border-radius:22px;background:linear-gradient(145deg,color-mix(in srgb,var(--bg-surface) 96%,transparent),color-mix(in srgb,var(--bg-raised) 82%,transparent));box-shadow:0 18px 48px rgba(2,6,23,.13)}
+.dash-posture-card{padding:18px;display:grid;grid-template-columns:190px 1fr;gap:18px;align-items:center}.dash-posture-card::after,.dash-action-card::after{content:'';position:absolute;right:-70px;top:-80px;width:180px;height:180px;border-radius:999px;background:radial-gradient(circle,color-mix(in srgb,var(--accent) 18%,transparent),transparent 70%);pointer-events:none}
+.dash-posture-ring{--risk:0;width:174px;height:174px;border-radius:999px;display:grid;place-items:center;background:conic-gradient(var(--red) calc(var(--risk)*1%),var(--amber) 0 60%,var(--green) 0 100%);box-shadow:inset 0 0 0 1px color-mix(in srgb,#fff 8%,transparent),0 20px 44px rgba(2,6,23,.2)}
+.dash-posture-ring-inner{width:132px;height:132px;border-radius:inherit;background:var(--bg-surface);display:grid;place-items:center;text-align:center;border:1px solid var(--border)}
+.dash-posture-score{font-size:38px;font-weight:950;letter-spacing:-.07em;line-height:1}.dash-posture-label{font-size:10px;font-weight:900;letter-spacing:.12em;text-transform:uppercase;color:var(--text-muted)}
+.dash-posture-copy{position:relative;z-index:1}.dash-posture-copy h2{font-size:20px;letter-spacing:-.04em;margin:5px 0}.dash-posture-copy p{color:var(--text-secondary);font-size:12.5px;line-height:1.5;max-width:62ch}.dash-posture-meta{display:flex;flex-wrap:wrap;gap:7px;margin-top:12px}
+.dash-mini-pill{border:1px solid var(--border);background:color-mix(in srgb,var(--bg-raised) 72%,transparent);border-radius:999px;padding:5px 9px;font-size:11px;font-weight:800;color:var(--text-secondary)}
+.dash-action-card{padding:18px}.dash-action-card h2,.dash-coverage-card h2{font-size:16px;letter-spacing:-.03em;margin:3px 0 6px}.dash-action-list{display:grid;gap:9px;margin-top:13px;position:relative;z-index:1}.dash-action-item{display:grid;grid-template-columns:34px 1fr auto;gap:10px;align-items:center;padding:11px;border:1px solid var(--border);border-radius:15px;background:color-mix(in srgb,var(--bg-raised) 72%,transparent)}.dash-action-item-icon{width:34px;height:34px;border-radius:13px;display:grid;place-items:center;background:var(--accent-dim)}.dash-action-item strong{display:block;font-size:12.5px}.dash-action-item small{display:block;color:var(--text-muted);font-size:11px;margin-top:2px}.dash-action-item button{border:0;background:transparent;color:var(--accent);font-weight:900}
+.dash-coverage-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px;margin:0 0 16px}.dash-coverage-card{padding:16px}.dash-coverage-bar{height:9px;border-radius:999px;background:var(--bg-raised);border:1px solid var(--border);overflow:hidden;margin-top:12px}.dash-coverage-fill{height:100%;width:0;border-radius:inherit;background:linear-gradient(90deg,var(--accent),var(--purple));transition:width .45s ease}.dash-coverage-value{font-size:28px;font-weight:950;letter-spacing:-.05em}.dash-coverage-card p{font-size:12px;color:var(--text-secondary);line-height:1.45}.dash-coverage-card.good .dash-coverage-fill{background:var(--green)}.dash-coverage-card.warn .dash-coverage-fill{background:var(--amber)}.dash-coverage-card.bad .dash-coverage-fill{background:var(--red)}
+@media(max-width:980px){.dash-command-board,.dash-posture-card{grid-template-columns:1fr}.dash-posture-ring{margin:auto}.dash-coverage-grid{grid-template-columns:1fr}}
+
 @media(max-width:1050px){.dash-operator-cockpit{grid-template-columns:1fr 1fr}.dash-operator-cockpit .dash-cockpit-card:first-child{grid-column:1/-1}}
 @media(max-width:700px){.dash-operator-cockpit{grid-template-columns:1fr}.dash-operator-cockpit .dash-cockpit-card:first-child{grid-column:auto}}
 
@@ -1250,38 +1265,34 @@ body::before{content:'';position:fixed;inset:0;pointer-events:none;background:ra
 
 
 
-      <section class="dash-operator-cockpit" aria-label="Operator cockpit">
-        <article class="dash-cockpit-card">
-          <div class="dash-cockpit-kicker">Readiness score</div>
-          <h3>Three-step setup, visible at a glance</h3>
-          <p class="dash-cockpit-copy">A compact progress readout helps new operators understand whether scope, discovery, and alert review are in place before deeper testing.</p>
-          <div class="readiness-meter" aria-label="Readiness is three of four steps complete"><span></span><span></span><span></span><span></span></div>
-          <div class="dash-pill-row">
-            <span class="dash-soft-pill">✓ Project ready</span>
-            <span class="dash-soft-pill">✓ Discovery guided</span>
-            <span class="dash-soft-pill">✓ Alerts prioritized</span>
-            <span class="dash-soft-pill">Next: evidence review</span>
+      <section class="dash-command-board" aria-label="Live operations command board">
+        <article class="dash-posture-card">
+          <div class="dash-posture-ring" id="dashPostureRing" aria-label="Overall risk score"><div class="dash-posture-ring-inner"><div><div class="dash-posture-score" id="dashPostureScore">—</div><div class="dash-posture-label" id="dashPostureLabel">Loading</div></div></div></div>
+          <div class="dash-posture-copy">
+            <span class="dash-card-kicker">Live posture</span>
+            <h2 id="dashPostureTitle">Building scanner picture…</h2>
+            <p id="dashPostureNarrative">Combining certificate health, active scan state, stale projects, and alert pressure into one operator-ready view.</p>
+            <div class="dash-posture-meta">
+              <span class="dash-mini-pill" id="dashMetaScanned">Scanned projects —</span>
+              <span class="dash-mini-pill" id="dashMetaStale">Needs first scan —</span>
+              <span class="dash-mini-pill" id="dashMetaAlerts">Open alerts —</span>
+            </div>
           </div>
         </article>
-        <article class="dash-cockpit-card">
-          <div class="dash-cockpit-kicker">Triage queue</div>
-          <h3>Recommended next checks</h3>
-          <p class="dash-cockpit-copy">Clear priority cards reduce decision fatigue when operators return to the dashboard.</p>
-          <div class="dash-priority-list">
-            <div class="dash-priority-item"><span class="dash-priority-icon">🔔</span><div><b>Review open certificate alerts</b><small>Mismatch and expiry issues stay first.</small></div></div>
-            <div class="dash-priority-item"><span class="dash-priority-icon">🛰️</span><div><b>Refresh subdomain discovery</b><small>Keep inventory fresh before scans.</small></div></div>
+        <article class="dash-action-card">
+          <span class="dash-card-kicker">Smart next actions</span>
+          <h2>Prioritized operator queue</h2>
+          <p class="dash-card-subtitle">Actions update from current risk, coverage, active scans, and unresolved certificate findings.</p>
+          <div class="dash-action-list" id="dashActionList">
+            <div class="dash-action-item"><span class="dash-action-item-icon">⏳</span><div><strong>Loading recommendations</strong><small>Analyzing dashboard telemetry…</small></div><button type="button">…</button></div>
           </div>
         </article>
-        <article class="dash-cockpit-card">
-          <div class="dash-cockpit-kicker">Fast paths</div>
-          <h3>One-click workflows</h3>
-          <p class="dash-cockpit-copy">Operator shortcuts pair intent with destination so teams can move faster without memorizing navigation.</p>
-          <div class="dash-focus-actions">
-            <button class="btn" onclick="nav('projects')">Open project scans</button>
-            <button class="btn" onclick="nav('discoveries')">Review new hosts</button>
-            <button class="btn" onclick="nav('bounty-leads')">Prioritize bounty leads</button>
-          </div>
-        </article>
+      </section>
+
+      <section class="dash-coverage-grid" aria-label="Coverage health metrics">
+        <article class="dash-coverage-card good"><span class="dash-card-kicker">Certificate pass rate</span><h2><span class="dash-coverage-value" id="dashHealthyRate">—</span></h2><p>Healthy certificates compared with all tracked domains.</p><div class="dash-coverage-bar"><div class="dash-coverage-fill" id="dashHealthyFill"></div></div></article>
+        <article class="dash-coverage-card warn"><span class="dash-card-kicker">Scan coverage</span><h2><span class="dash-coverage-value" id="dashScanCoverage">—</span></h2><p>Projects with scan evidence available for triage.</p><div class="dash-coverage-bar"><div class="dash-coverage-fill" id="dashScanFill"></div></div></article>
+        <article class="dash-coverage-card bad"><span class="dash-card-kicker">Issue pressure</span><h2><span class="dash-coverage-value" id="dashIssueRate">—</span></h2><p>Mismatch, expiry, and error signals requiring review.</p><div class="dash-coverage-bar"><div class="dash-coverage-fill" id="dashIssueFill"></div></div></article>
       </section>
 
       <section class="dash-journey" aria-label="Guided scanner journey">
@@ -3028,6 +3039,57 @@ function actionChip(icon, title, desc, label, fn) {
   requestAnimationFrame(() => { window[id] = fn; });
   return `<div class="action-chip"><span class="emoji">${esc(icon)}</span><span><strong>${esc(title)}</strong>${esc(desc)}</span><button type="button" onclick="${id}()">${esc(label)}</button></div>`;
 }
+
+function setText(id, value) {
+  const el = document.getElementById(id);
+  if (el) el.textContent = value;
+}
+function setWidth(id, pct) {
+  const el = document.getElementById(id);
+  if (el) el.style.width = `${Math.max(0, Math.min(100, Math.round(pct)))}%`;
+}
+function dashboardAction(icon, title, copy, label, target) {
+  return `<div class="dash-action-item"><span class="dash-action-item-icon">${esc(icon)}</span><div><strong>${esc(title)}</strong><small>${esc(copy)}</small></div><button type="button" onclick="nav('${esc(target)}')">${esc(label)}</button></div>`;
+}
+function updateDashboardCommandBoard(stats = {}, projects = [], context = {}, riskIntel = null) {
+  const total = Number(context.total || stats.total_domains || stats.domains || stats.total || 0);
+  const ok = Number(stats.ok || 0);
+  const issueCount = Number(context.mismatches || 0) + Number(context.expired || 0) + Number(context.expiring || 0) + Number(context.errors || 0);
+  const risk = Number.isFinite(Number(riskIntel?.risk_score)) ? Number(riskIntel.risk_score) : calcRiskScore(stats, projects);
+  const severity = severityLabel(risk);
+  const scanned = Number(context.scannedProjects || 0);
+  const stale = Number(context.staleProjects || 0);
+  const alerts = Number(context.alerts || 0);
+  const running = projects.filter(p => p.latest_scan?.status === 'running').length;
+  const healthyRate = total ? Math.round((ok / total) * 100) : 0;
+  const scanCoverage = projects.length ? Math.round((scanned / projects.length) * 100) : 0;
+  const issueRate = total ? Math.round((issueCount / total) * 100) : 0;
+  const ring = document.getElementById('dashPostureRing');
+  if (ring) ring.style.setProperty('--risk', risk);
+  setText('dashPostureScore', risk);
+  setText('dashPostureLabel', `${severity} risk`);
+  setText('dashPostureTitle', running ? `${running} scan${running > 1 ? 's' : ''} actively updating evidence` : alerts ? `${alerts} alert${alerts > 1 ? 's' : ''} need review` : total ? 'Certificate posture is under control' : 'Add scope to activate monitoring');
+  setText('dashPostureNarrative', total ? `${fmt(total)} tracked domains, ${fmt(ok)} healthy certificates, and ${fmt(issueCount)} issue signals. Risk score weights mismatches, expired certificates, errors, unseen alerts, and projects without fresh scan evidence.` : 'Create a project, run a quick scan, or import discovered hosts to start live TLS posture tracking.');
+  setText('dashMetaScanned', `Scanned projects ${fmt(scanned)}/${fmt(projects.length)}`);
+  setText('dashMetaStale', `Needs first scan ${fmt(stale)}`);
+  setText('dashMetaAlerts', `Open alerts ${fmt(alerts)}`);
+  setText('dashHealthyRate', total ? `${healthyRate}%` : '—');
+  setText('dashScanCoverage', projects.length ? `${scanCoverage}%` : '—');
+  setText('dashIssueRate', total ? `${issueRate}%` : '—');
+  setWidth('dashHealthyFill', healthyRate);
+  setWidth('dashScanFill', scanCoverage);
+  setWidth('dashIssueFill', issueRate);
+  const actions = [];
+  if (!projects.length) actions.push(dashboardAction('➕', 'Create your first monitored project', 'Save domains, schedule scans, and unlock alert history.', 'Start', 'projects'));
+  if (alerts) actions.push(dashboardAction('🔔', 'Review unresolved certificate alerts', 'Mismatch, expiry, and scan-error findings should be triaged first.', 'Review', 'alerts'));
+  if (stale) actions.push(dashboardAction('▶️', 'Run first scans on uncovered projects', `${fmt(stale)} project${stale > 1 ? 's have' : ' has'} no scan evidence yet.`, 'Scan', 'projects'));
+  if (Number(stats.subfinder_hosts || 0) === 0 && projects.length) actions.push(dashboardAction('🛰️', 'Expand coverage with discovery', 'Run Subfinder to catch new in-scope hosts before they drift.', 'Discover', 'subfinder'));
+  if (issueCount) actions.push(dashboardAction('🤖', 'Package evidence for AI triage', 'Send high-signal findings to the bounty copilot prompt workbench.', 'Open', 'bounty-leads'));
+  if (!actions.length) actions.push(dashboardAction('✅', 'Maintain healthy posture', 'No urgent dashboard actions. Keep scans scheduled and discovery fresh.', 'Projects', 'projects'));
+  const list = document.getElementById('dashActionList');
+  if (list) list.innerHTML = actions.slice(0, 4).join('');
+}
+
 function updateMissionControl(stats = {}, projects = [], riskIntel = null) {
   const risk = Number.isFinite(Number(riskIntel?.risk_score)) ? Number(riskIntel.risk_score) : calcRiskScore(stats, projects);
   const total = Number(stats.total_domains ?? stats.domains ?? stats.total ?? stats.hosts ?? 0);
@@ -3051,7 +3113,9 @@ function updateMissionControl(stats = {}, projects = [], riskIntel = null) {
   if (state) state.textContent = runningProjects ? `${runningProjects} scan${runningProjects>1?'s':''} feeding chains` : alerts ? `${alerts} alert${alerts>1?'s':''} to validate` : 'Chain-ready';
   const narrative = document.getElementById('riskNarrative');
   if (narrative) narrative.textContent = riskIntel ? `${fmt(total)} hosts profiled · ${fmt(riskIntel.anomaly_count ?? (mismatches + expired + errors))} chainable anomaly signals · ${fmt(riskIntel.stale_projects || 0)} stale projects · posture ${riskIntel.posture || severity}.` : (total ? `${fmt(total)} hosts profiled · ${fmt(mismatches + expired + errors)} chainable anomaly signals · ${fmt(scannedProjects)}/${fmt(projects.length)} projects feeding evidence.` : 'Create or import a project to activate exploit-signal correlation.');
-  updateHunterDashboard(stats, projects, { total, mismatches, expired, expiring, errors, alerts, scannedProjects, staleProjects }, riskIntel);
+  const context = { total, mismatches, expired, expiring, errors, alerts, scannedProjects, staleProjects };
+  updateDashboardCommandBoard(stats, projects, context, riskIntel);
+  updateHunterDashboard(stats, projects, context, riskIntel);
 }
 
 function aiCopilotTile(label, value, copy, icon = '🤖', action = 'Copy prompt', tone = '') {
