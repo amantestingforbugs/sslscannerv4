@@ -976,6 +976,24 @@ def test_standard_domain_enumeration_uses_bounded_dns_fallback(monkeypatch):
     assert calls[0][3] <= 3
 
 
+
+def test_domain_enum_running_watchdog_allows_aggressive_cleanup(monkeypatch):
+    import db.database as db
+
+    monkeypatch.delenv("DOMAIN_ENUM_RUNNING_TIMEOUT_SECONDS", raising=False)
+    monkeypatch.setenv("DOMAIN_ENUM_TOTAL_TIMEOUT_SECONDS", "600")
+    monkeypatch.setenv("SUBDOMAIN_DEEP_PHASE_TIMEOUT_SECONDS", "420")
+
+    assert db._domain_enum_running_timeout_seconds() == 1320
+
+
+def test_domain_enum_running_watchdog_override_still_supported(monkeypatch):
+    import db.database as db
+
+    monkeypatch.setenv("DOMAIN_ENUM_RUNNING_TIMEOUT_SECONDS", "900")
+
+    assert db._domain_enum_running_timeout_seconds() == 900
+
 def test_domain_enum_scans_mark_stale_running(tmp_path, monkeypatch):
     import db.database as db
     from datetime import datetime, timedelta, timezone
