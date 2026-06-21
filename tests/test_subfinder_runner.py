@@ -911,3 +911,54 @@ def test_domain_enumeration_verbose_log_persists_source_hosts_and_errors(tmp_pat
     assert result["verbose_log"][0]["hosts"] == ["api.example.com"]
     assert scan["verbose_log"][0]["error"] == "provider timeout"
     assert scan["verbose_log"][0]["hosts"] == ["api.example.com"]
+
+
+def test_standard_domain_enumeration_uses_bounded_dns_fallback(monkeypatch):
+    monkeypatch.setenv("DOMAIN_ENUM_STANDARD_DNS_BRUTE_CANDIDATES", "5")
+    monkeypatch.setenv("DOMAIN_ENUM_STANDARD_DNS_TIMEOUT_SECONDS", "3")
+    monkeypatch.setattr(runner, "_passive_enumeration_sources", lambda: {})
+    monkeypatch.setattr(
+        runner,
+        "_run_subfinder_for_root",
+        lambda root, timeout=90: {
+            "root_domain": root,
+            "status": "error",
+            "found": [],
+            "found_count": 0,
+            "stderr": "missing",
+        },
+    )
+    calls = []
+
+    def fake_bruteforce(root, seeds, max_candidates=0, resolve_timeout=None):
+        calls.append((root, tuple(seeds), max_candidates, resolve_timeout))
+        return [f"www.{root}"]
+
+    monkeypatch.setattr(runner, "_bruteforce_dns_hosts", fake_bruteforce)
+
+    result = runner._run_subdomain_enumeration(["example.com"], depth_mode="standard")
+
+    assert result["found"] == ["www.example.com"]
+    assert result["source_map"]["dns_bruteforce"] == ["www.example.com"]
+    assert calls and calls[0][2] == 5
+    assert calls[0][3] <= 3
+
+
+def test_domain_enum_scans_mark_stale_running(tmp_path, monkeypatch):
+    import db.database as db
+    from datetime import datetime, timedelta, timezone
+
+    monkeypatch.setattr(db, "DB_PATH", tmp_path / "stale-enum.sqlite3")
+    if getattr(db._local, "c", None):
+        db._local.c.close()
+        db._local.c = None
+    db.init_db()
+    scan_id = db.domain_enum_scan_create("example.com")
+    old_started = (datetime.now(timezone.utc) - timedelta(seconds=120)).isoformat()
+    db.x("UPDATE domain_enum_scans SET started_at=? WHERE id=?", (old_started, scan_id))
+    db.commit()
+
+    assert db.domain_enum_scans_mark_stale_running(timeout_seconds=60) == 1
+    scan = db.domain_enum_scan_get(scan_id)
+    assert scan["status"] == "failed"
+    assert scan["verbose_log"][0]["source"] == "watchdog"
