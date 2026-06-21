@@ -1046,6 +1046,41 @@ body::before{content:'';position:fixed;inset:0;pointer-events:none;background:ra
 .dash-risk-panel,.dash-insight-rail{display:none}.dash-log-card{display:none}.dash-table-slot{min-height:160px}.dash-matrix{grid-template-columns:repeat(2,minmax(0,1fr));padding:16px}.visually-hidden{position:absolute!important;width:1px!important;height:1px!important;padding:0!important;margin:-1px!important;overflow:hidden!important;clip:rect(0,0,0,0)!important;white-space:nowrap!important;border:0!important}
 @media(max-width:900px){.dash-kpi-grid,.dash-simple-grid,.dash-secondary-grid,.dash-system-strip{grid-template-columns:1fr}.dash-hero-copy{padding:22px}}
 
+/* Product UX polish: clearer hierarchy, richer states, and guided next steps */
+.sidebar{border-right-color:color-mix(in srgb,var(--border) 82%,var(--accent));}
+.nav{padding:14px 10px}.nav-search{box-shadow:inset 0 1px 0 color-mix(in srgb,#fff 5%,transparent)}
+.nav-item{position:relative;border:1px solid transparent;border-radius:12px}
+.nav-item.active{border-color:color-mix(in srgb,var(--accent) 28%,transparent);box-shadow:inset 3px 0 0 var(--accent)}
+.topbar{position:sticky;top:0}.topbar-select{min-width:150px;max-width:220px}
+.content{padding:28px}
+.dash-hero-copy{display:grid;grid-template-columns:minmax(0,1fr) 292px;gap:24px;align-items:center;overflow:hidden}
+.dash-hero-copy::before{display:block;opacity:.5}
+.dash-hero-main{position:relative;z-index:1}
+.dash-hero-aside{position:relative;z-index:1;border:1px solid color-mix(in srgb,var(--accent) 24%,var(--border));background:color-mix(in srgb,var(--bg-base) 36%,transparent);border-radius:20px;padding:16px;backdrop-filter:blur(16px)}
+.dash-hero-aside-title{font-size:12px;font-weight:900;letter-spacing:.1em;text-transform:uppercase;color:var(--text-muted);margin-bottom:12px}
+.dash-status-list{display:grid;gap:10px}
+.dash-status-row{display:flex;align-items:center;gap:10px;padding:10px;border-radius:14px;background:color-mix(in srgb,var(--bg-raised) 66%,transparent);border:1px solid color-mix(in srgb,var(--border) 72%,transparent)}
+.dash-status-dot{width:10px;height:10px;border-radius:999px;background:var(--green);box-shadow:0 0 0 4px var(--green-dim)}
+.dash-status-dot.amber{background:var(--amber);box-shadow:0 0 0 4px var(--amber-dim)}
+.dash-status-dot.accent{background:var(--accent);box-shadow:0 0 0 4px var(--accent-dim)}
+.dash-status-row strong{display:block;font-size:13px}.dash-status-row span:not(.dash-status-dot){display:block;font-size:11px;color:var(--text-muted)}
+.dash-trust-row{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;margin-top:20px;max-width:none}
+.dash-trust-chip{background:color-mix(in srgb,var(--bg-raised) 72%,transparent)}
+.dash-kpi-card{min-height:104px}.dash-kpi-value{font-variant-numeric:tabular-nums}
+.dash-kpi-label::after{content:'Updated live';display:block;margin-top:3px;font-size:10px;font-weight:600;color:var(--text-muted)}
+.dash-card{border-color:color-mix(in srgb,var(--border) 82%,var(--accent));overflow:hidden}
+.dash-card-header{background:linear-gradient(180deg,color-mix(in srgb,var(--bg-raised) 48%,transparent),transparent)}
+.dash-help-list{grid-template-columns:repeat(2,minmax(0,1fr))}
+.dash-help-item{transition:transform var(--transition),border-color var(--transition),background var(--transition)}
+.dash-help-item:hover{transform:translateY(-2px);border-color:color-mix(in srgb,var(--accent) 36%,var(--border));background:color-mix(in srgb,var(--accent-dim) 42%,var(--bg-raised))}
+.dash-journey{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;margin:0 0 16px}
+.dash-journey-step{position:relative;padding:14px;border:1px solid var(--border);border-radius:18px;background:linear-gradient(180deg,color-mix(in srgb,var(--bg-surface) 94%,transparent),color-mix(in srgb,var(--bg-raised) 80%,transparent))}
+.dash-journey-step:not(:last-child)::after{content:'→';position:absolute;right:-11px;top:50%;transform:translateY(-50%);color:var(--text-muted);font-weight:900}
+.dash-journey-num{width:26px;height:26px;border-radius:10px;display:grid;place-items:center;background:var(--accent-dim);color:var(--accent);font-weight:900;margin-bottom:8px}
+.dash-journey-step strong{display:block}.dash-journey-step p{font-size:11.5px;color:var(--text-secondary);margin-top:3px}
+@media(max-width:1020px){.dash-hero-copy{grid-template-columns:1fr}.dash-help-list,.dash-journey{grid-template-columns:1fr 1fr}.dash-journey-step:not(:last-child)::after{display:none}}
+@media(max-width:620px){.content{padding:18px}.dash-trust-row,.dash-help-list,.dash-journey{grid-template-columns:1fr}.topbar-select{display:none}}
+
 </style>
 </head>
 <body>
@@ -1167,16 +1202,38 @@ body::before{content:'';position:fixed;inset:0;pointer-events:none;background:ra
     <div class="page active dashboard-redesign" id="page-dashboard">
       <section class="dash-command-center" aria-label="Dashboard overview">
         <div class="dash-hero-copy">
-          <div class="dash-eyebrow">Simple SSL Dashboard</div>
-          <h1>See what needs attention, then take action.</h1>
-          <p>A cleaner home screen for everyday SSL and recon work: create a project, run discovery, review alerts, and check recent certificate problems without navigating a complex command center.</p>
-          <div class="dash-cta-row" aria-label="Primary dashboard actions">
-            <button class="btn btn-primary" onclick="openModal('createModal')">+ Create Project</button>
-            <button class="btn" onclick="nav('subfinder')">Run Discovery</button>
-            <button class="btn" onclick="nav('alerts')">Review Alerts</button>
-            <button class="btn" onclick="loadDash()">Refresh</button>
+          <div class="dash-hero-main">
+            <div class="dash-eyebrow">Simple SSL Dashboard</div>
+            <h1>See what needs attention, then take action.</h1>
+            <p>A cleaner home screen for everyday SSL and recon work: create a project, run discovery, review alerts, and check recent certificate problems without navigating a complex command center.</p>
+            <div class="dash-cta-row" aria-label="Primary dashboard actions">
+              <button class="btn btn-primary" onclick="openModal('createModal')">+ Create Project</button>
+              <button class="btn" onclick="nav('subfinder')">Run Discovery</button>
+              <button class="btn" onclick="nav('alerts')">Review Alerts</button>
+              <button class="btn" onclick="loadDash()">Refresh</button>
+            </div>
+            <div class="dash-trust-row" aria-label="Dashboard assurances">
+              <div class="dash-trust-chip"><span>Guided</span><strong>Simple mode defaults</strong></div>
+              <div class="dash-trust-chip"><span>Realtime</span><strong>SSE updates enabled</strong></div>
+              <div class="dash-trust-chip"><span>Safe</span><strong>Scope-aware workflows</strong></div>
+            </div>
           </div>
+          <aside class="dash-hero-aside" aria-label="Recommended workflow">
+            <div class="dash-hero-aside-title">Recommended workflow</div>
+            <div class="dash-status-list">
+              <div class="dash-status-row"><span class="dash-status-dot"></span><div><strong>1. Add scope</strong><span>Create a project or quick scan.</span></div></div>
+              <div class="dash-status-row"><span class="dash-status-dot accent"></span><div><strong>2. Discover hosts</strong><span>Expand coverage with Subfinder.</span></div></div>
+              <div class="dash-status-row"><span class="dash-status-dot amber"></span><div><strong>3. Fix alerts</strong><span>Triage certificate risk first.</span></div></div>
+            </div>
+          </aside>
         </div>
+      </section>
+
+      <section class="dash-journey" aria-label="Guided scanner journey">
+        <div class="dash-journey-step"><div class="dash-journey-num">1</div><strong>Create</strong><p>Save domains and owners.</p></div>
+        <div class="dash-journey-step"><div class="dash-journey-num">2</div><strong>Discover</strong><p>Find approved subdomains.</p></div>
+        <div class="dash-journey-step"><div class="dash-journey-num">3</div><strong>Scan</strong><p>Validate TLS health.</p></div>
+        <div class="dash-journey-step"><div class="dash-journey-num">4</div><strong>Resolve</strong><p>Review alerts and evidence.</p></div>
       </section>
 
       <section class="dash-kpi-grid" aria-label="Key metrics">
