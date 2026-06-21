@@ -4322,7 +4322,7 @@ async function runDomainEnumeration() {
   updateEnumStats(enumCurrentRows, enumCurrentScan);
   document.getElementById('enum-stat-active').textContent = '…';
   if (count) count.textContent = 'Running…';
-  if (body) body.innerHTML = `<tr><td colspan="3" style="text-align:center;padding:16px;color:var(--text-muted)">Enumerating ${esc(domain)}… results will appear here when the scan completes.</td></tr>`;
+  if (body) body.innerHTML = `<tr><td colspan="3" style="text-align:center;padding:16px;color:var(--text-muted)">Enumerating ${esc(domain)}… results will appear here automatically when the background scan completes.</td></tr>`;
   if (button) {
     button.disabled = true;
     button.dataset.originalText = button.dataset.originalText || button.textContent;
@@ -4332,20 +4332,39 @@ async function runDomainEnumeration() {
   try {
     const depthMode = document.getElementById('enum-depth-mode').value;
     const verbose = document.getElementById('enum-verbose-option')?.checked || false;
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 180000);
-    const { ok, data, error } = await apiJSON('/api/subfinder/enumeration/run', { method:'POST', trackActivity:false, signal: controller.signal, body: JSON.stringify({ domain, depth_mode: depthMode, verbose }) });
-    clearTimeout(timeout);
+    const { ok, data, error } = await apiJSON('/api/subfinder/enumeration/run', { method:'POST', trackActivity:false, body: JSON.stringify({ domain, depth_mode: depthMode, verbose, async:true }) });
     if (!ok) {
       if (body) body.innerHTML = `<tr><td colspan="3" style="text-align:center;padding:16px;color:var(--red)">${esc(error || 'Enumeration failed')}</td></tr>`;
       document.getElementById('enum-stat-active').textContent = '0';
       return toast(error || 'Enumeration failed', 'err');
     }
-    toast('Enumeration finished', 'ok');
-    await loadSfRawPage();
-    if (data?.scan_id) await openEnumScan(data.scan_id);
+    const scanId = data?.scan_id;
+    if (!scanId) throw new Error('Enumeration did not return a scan id');
+    if (count) count.textContent = 'Processing…';
+    let completed = false;
+    for (let attempt = 0; attempt < 720; attempt++) {
+      await new Promise(resolve => setTimeout(resolve, 2500));
+      await loadSfRawPage();
+      const detail = await apiJSON(`/api/subfinder/enumeration/scans/${scanId}`, { trackActivity:false });
+      const scan = detail?.data?.scan;
+      if (scan?.status && scan.status !== 'running') {
+        completed = true;
+        await openEnumScan(scanId);
+        if (scan.status === 'done') {
+          toast('Enumeration finished', 'ok');
+        } else {
+          toast(`Enumeration ${scan.status}`, 'err');
+        }
+        break;
+      }
+      if (count) count.textContent = `Processing… ${Math.floor((attempt + 1) * 2.5)}s`;
+    }
+    if (!completed) {
+      await openEnumScan(scanId);
+      toast('Enumeration is still running in the background. You can reopen it from scan history.', 'warn');
+    }
   } catch (err) {
-    const msg = err?.name === 'AbortError' ? 'Enumeration timed out in the browser after 180 seconds. Try Standard mode or reduce enabled sources.' : (err?.message || 'Enumeration failed');
+    const msg = err?.name === 'AbortError' ? 'Enumeration request failed before the background scan could start.' : (err?.message || 'Enumeration failed');
     if (body) body.innerHTML = `<tr><td colspan="3" style="text-align:center;padding:16px;color:var(--red)">${esc(msg)}</td></tr>`;
     if (count) count.textContent = '0 rows';
     document.getElementById('enum-stat-active').textContent = '0';

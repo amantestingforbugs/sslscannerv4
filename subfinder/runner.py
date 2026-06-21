@@ -2103,7 +2103,7 @@ def get_sf_state(project_id: str) -> dict:
         return _sf_state.get(project_id, {}).copy()
 
 
-def run_domain_enumeration_scan(domain: str, triggered_by: str = "manual", depth_mode: str = "aggressive", verbose: bool = False) -> dict:
+def run_domain_enumeration_scan(domain: str, triggered_by: str = "manual", depth_mode: str = "aggressive", verbose: bool = False, scan_id: Optional[str] = None) -> dict:
     import db.database as db
 
     root = _normalize_host(domain)
@@ -2116,11 +2116,12 @@ def run_domain_enumeration_scan(domain: str, triggered_by: str = "manual", depth
     # users do not see a generic "Enumeration failed: no such table" error.
     db.init_db()
 
-    scan_id = db.domain_enum_scan_create(
-        root,
-        triggered_by=triggered_by,
-        tool_summary=_tool_summary(),
-    )
+    if scan_id is None:
+        scan_id = db.domain_enum_scan_create(
+            root,
+            triggered_by=triggered_by,
+            tool_summary=_tool_summary(),
+        )
     try:
         enumeration = _run_subdomain_enumeration([root], depth_mode=depth_mode)
         all_found = set(enumeration["found"])
