@@ -608,10 +608,12 @@ def _bounty_business_impact(row: dict, evidence: list[str]) -> dict:
         impacts.append("Possible stale routing, tenant confusion, reliability, or certificate-trust impact.")
     if not impacts:
         impacts.append("Externally reachable asset that may become higher value after technology and auth enrichment.")
+    confidence = min(99, 35 + len(evidence) * 7 + (15 if row.get("http_is_active") else 0) + (10 if row.get("checked_at") else 0))
     return {
         "primary": impacts[0],
         "hypotheses": impacts[:4],
-        "confidence": min(99, 35 + len(evidence) * 7 + (15 if row.get("http_is_active") else 0) + (10 if row.get("checked_at") else 0)),
+        "confidence": confidence,
+        "confidence_label": "High" if confidence >= 75 else "Medium" if confidence >= 55 else "Needs enrichment",
     }
 
 
@@ -666,6 +668,45 @@ def _bounty_lead_next_steps(row: dict, evidence: list[str]) -> list[str]:
         steps.append("Look for bypasses, alternate methods, path normalization, and misconfigured reverse-proxy routes.")
     return steps
 
+
+
+def _bounty_hunter_focus(row: dict, evidence: list[str], score: int) -> dict:
+    """Return concise operator guidance for the high-priority leads UI."""
+    text = " ".join([_lead_keywords(row), " ".join(evidence)]).lower()
+    if any(token in text for token in ("api", "graphql", "swagger", "openapi")):
+        return {
+            "icon": "🧬",
+            "lane": "API/Auth",
+            "question": "Can an owned low-privilege user read or mutate objects they should not access?",
+            "first_action": "Open the schema/docs, capture auth requirements, then compare anonymous vs owned-account responses.",
+        }
+    if any(token in text for token in ("admin", "login", "sso", "auth", "dashboard")):
+        return {
+            "icon": "🔐",
+            "lane": "Access control",
+            "question": "Is this protected boundary intentionally exposed, and can routing/auth normalization weaken it?",
+            "first_action": "Map redirects and cookies, then test only safe route variants against researcher-owned accounts.",
+        }
+    if any(token in text for token in ("jenkins", "git", "grafana", "kibana", "prometheus", "metrics")):
+        return {
+            "icon": "🛠️",
+            "lane": "DevOps exposure",
+            "question": "Does the panel leak engineering metadata, versions, project names, or unauthenticated read access?",
+            "first_action": "Capture the product, version/banner, auth state, and any non-sensitive metadata visible without logging in.",
+        }
+    if row.get("is_mismatch") or row.get("is_expired") or row.get("is_expiring"):
+        return {
+            "icon": "🛰️",
+            "lane": "TLS/routing",
+            "question": "Does the certificate or default vhost reveal stale ownership, tenant confusion, or takeover clues?",
+            "first_action": "Record CN/SANs, issuer, expiry, redirect chain, and default HTTPS vhost response.",
+        }
+    return {
+        "icon": "🧭",
+        "lane": "Recon",
+        "question": "What business function is exposed and what extra enrichment would raise confidence?",
+        "first_action": "Capture status/title/redirect evidence and run safe technology fingerprinting before deeper testing.",
+    }
 
 def _score_bounty_lead(row: dict) -> dict:
     hostname = (row.get("hostname") or "").lower()
@@ -731,6 +772,8 @@ def _score_bounty_lead(row: dict) -> dict:
         "validation_plan": validation,
         "quick_win": score >= 75 and len(evidence) >= 3,
         "evidence_density": len(evidence),
+        "hunter_focus": _bounty_hunter_focus(row, evidence, score),
+        "triage_effort": "15 min" if score >= 85 else "30 min" if score >= 65 else "60 min",
     }
     lead["v5_signal_packs"] = _v5_pack_matches(lead)
     lead["v5_validation_actions"] = _v5_validate_actions(lead)
@@ -819,6 +862,7 @@ def _collect_bounty_summary(project_id: str = "", search: str = "") -> dict:
     protected = sum(1 for r in rows if r.get("http_status_code") in (401, 403))
     tls_anomalies = sum(1 for r in rows if r.get("is_mismatch") or r.get("is_expired") or r.get("is_expiring"))
     fresh = sum(1 for r in rows if r.get("is_latest_discovery"))
+    lane_counts = {lane: sum(1 for r in rows if (r.get("priority") or {}).get("lane") == lane) for lane in ("P0", "P1", "P2", "P3")}
 
     keyword_counts: dict[str, int] = {}
     project_counts: dict[str, int] = {}
@@ -841,6 +885,17 @@ def _collect_bounty_summary(project_id: str = "", search: str = "") -> dict:
         "protected_http": protected,
         "tls_anomalies": tls_anomalies,
         "fresh_discoveries": fresh,
+        "lane_counts": lane_counts,
+        "focus_queue": [
+            {
+                "hostname": r.get("hostname"),
+                "score": r.get("score"),
+                "lane": (r.get("priority") or {}).get("lane"),
+                "focus": (r.get("hunter_focus") or {}).get("lane"),
+                "first_action": (r.get("hunter_focus") or {}).get("first_action"),
+            }
+            for r in rows[:5]
+        ],
         "top_projects": [{"name": k, "count": v} for k, v in sorted(project_counts.items(), key=lambda item: item[1], reverse=True)[:6]],
         "top_surface_types": [{"name": k, "count": v} for k, v in sorted(keyword_counts.items(), key=lambda item: item[1], reverse=True)[:8]],
         "executive_summary": (
