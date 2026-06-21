@@ -1314,34 +1314,33 @@ def _tool_summary() -> str:
 def _select_standard_passive_sources(passive_sources: Dict[str, EnumerationSource]) -> Dict[str, EnumerationSource]:
     """Select passive sources for standard/manual enumeration.
 
-    Standard mode used to silently trim the source set to a small "fast" list,
-    which made UI/manual scans look incomplete even when many integrations were
-    configured.  Prefer breadth by default now, while keeping an escape hatch
-    for operators who need the previous quick-scan behavior.
+    The UI's default Standard scan must finish promptly and show results instead
+    of sitting in a long-running state behind slow/rate-limited optional APIs.
+    Use a compact set of generally quick public sources by default, while still
+    allowing operators to request every configured integration with
+    ``DOMAIN_ENUM_STANDARD_SOURCES=all`` or an explicit comma-separated list.
     """
     raw_standard = os.getenv("DOMAIN_ENUM_STANDARD_SOURCES", "").strip()
     if raw_standard:
         requested = [item.strip() for item in raw_standard.split(",") if item.strip()]
         if any(item.lower() == "all" for item in requested):
             return dict(passive_sources)
-        return {name: passive_sources[name] for name in requested if name in passive_sources}
+        selected = {name: passive_sources[name] for name in requested if name in passive_sources}
+        if selected:
+            return selected
 
-    if _env_bool("DOMAIN_ENUM_STANDARD_FAST_ONLY", False):
-        default_standard = (
-            "crtsh",
-            "certspotter",
-            "anubis",
-            "subdomain_center",
-            "hackertarget",
-            "rapiddns",
-            "alienvault_otx",
-            "urlscan",
-        )
-        fast_sources = {name: passive_sources[name] for name in default_standard if name in passive_sources}
-        if fast_sources:
-            return fast_sources
-
-    return dict(passive_sources)
+    default_standard = (
+        "crtsh",
+        "certspotter",
+        "anubis",
+        "subdomain_center",
+        "hackertarget",
+        "rapiddns",
+        "alienvault_otx",
+        "urlscan",
+    )
+    fast_sources = {name: passive_sources[name] for name in default_standard if name in passive_sources}
+    return fast_sources or dict(passive_sources)
 
 
 def _run_passive_source(source_name: str, source_fn: EnumerationSource, root_domain: str) -> Dict[str, object]:
