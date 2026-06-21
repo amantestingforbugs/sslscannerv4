@@ -578,7 +578,7 @@ def _ordered_bruteforce_candidates(root_domain: str, seed_hosts: List[str]) -> L
     return deduped
 
 
-def _bruteforce_dns_hosts(root_domain: str, seed_hosts: List[str], max_candidates: int = 0) -> List[str]:
+def _bruteforce_dns_hosts(root_domain: str, seed_hosts: List[str], max_candidates: int = 0, resolve_timeout: Optional[int] = None) -> List[str]:
     if max_candidates <= 0:
         max_candidates = _env_int("DNS_BRUTEFORCE_MAX_CANDIDATES", 20000, minimum=1, maximum=1_000_000)
     candidates = _ordered_bruteforce_candidates(root_domain, seed_hosts)
@@ -590,7 +590,7 @@ def _bruteforce_dns_hosts(root_domain: str, seed_hosts: List[str], max_candidate
     if not keep_wildcards:
         wildcard_ips = _wildcard_dns_ips(root_domain)
     workers = max(8, min(256, len(candidates) or 1))
-    phase_timeout = _env_int("DNS_BRUTEFORCE_RESOLVE_TIMEOUT_SECONDS", 180, minimum=1, maximum=3600)
+    phase_timeout = resolve_timeout if resolve_timeout is not None else _env_int("DNS_BRUTEFORCE_RESOLVE_TIMEOUT_SECONDS", 180, minimum=1, maximum=3600)
     rows = _resolve_hosts_with_deadline(candidates, workers=workers, timeout=phase_timeout, phase_name="DNS brute-force resolution")
     for host, ips in rows.items():
         if ips and (keep_wildcards or not wildcard_ips or not ips.issubset(wildcard_ips)):
@@ -1677,6 +1677,55 @@ def _run_subdomain_enumeration(root_domains: List[str], depth_mode: str = "aggre
         enum_pool.shutdown(wait=False, cancel_futures=True)
 
     if not aggressive:
+        # Standard/manual scans should still produce useful results when public
+        # passive APIs are rate-limited, unavailable, or the subfinder binary is
+        # missing. Run a small, bounded DNS brute-force fallback over common
+        # labels before returning so hosts such as www/api/mail can be found
+        # without the expensive recursive/permutation stages used by aggressive
+        # mode.
+        if not _deadline_expired(deadline) and (not max_results or len(all_found) < max_results):
+            dns_candidates = _env_int(
+                "DOMAIN_ENUM_STANDARD_DNS_BRUTE_CANDIDATES",
+                500,
+                minimum=0,
+                maximum=10000,
+            )
+            if dns_candidates > 0:
+                dns_timeout = _env_int(
+                    "DOMAIN_ENUM_STANDARD_DNS_TIMEOUT_SECONDS",
+                    30,
+                    minimum=1,
+                    maximum=600,
+                )
+                for root_domain in root_domains:
+                    if _deadline_expired(deadline) or (max_results and len(all_found) >= max_results):
+                        break
+                    started = time.time()
+                    try:
+                        hosts = _bruteforce_dns_hosts(
+                            root_domain,
+                            sorted(all_found) or root_domains,
+                            dns_candidates,
+                            resolve_timeout=_remaining_seconds(deadline, dns_timeout, minimum=1),
+                        )
+                        found = add_hosts("dns_bruteforce", root_domain, hosts)
+                        raw_records.append({
+                            "source": "dns_bruteforce",
+                            "root_domain": root_domain,
+                            "status": "done",
+                            "found_count": len(found),
+                            "elapsed_ms": int((time.time() - started) * 1000),
+                            "found_sample": found[:_env_int("SUBFINDER_RAW_SAMPLE_SIZE", 50, minimum=0)],
+                        })
+                    except Exception as exc:
+                        raw_records.append({
+                            "source": "dns_bruteforce",
+                            "root_domain": root_domain,
+                            "status": "error",
+                            "found_count": 0,
+                            "elapsed_ms": int((time.time() - started) * 1000),
+                            "stderr_preview": str(exc)[:1000],
+                        })
         return {
             "found": sorted(all_found),
             "source_map": {source: sorted(hosts) for source, hosts in source_map.items()},

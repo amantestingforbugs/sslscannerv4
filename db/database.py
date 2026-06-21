@@ -1332,7 +1332,44 @@ def domain_enum_results_add_batch(scan_id, domain, hostnames, source="mixed"):
     return len(clean)
 
 
+def _domain_enum_running_timeout_seconds() -> int:
+    default_timeout = max(
+        _env_int("DOMAIN_ENUM_TOTAL_TIMEOUT_SECONDS", 600, minimum=30, maximum=7200),
+        _env_int("DOMAIN_ENUM_STANDARD_TOTAL_TIMEOUT_SECONDS", 120, minimum=30, maximum=7200),
+    ) + 60
+    return _env_int("DOMAIN_ENUM_RUNNING_TIMEOUT_SECONDS", default_timeout, minimum=60, maximum=86400)
+
+
+def domain_enum_scans_mark_stale_running(timeout_seconds: int | None = None) -> int:
+    timeout_seconds = int(timeout_seconds or _domain_enum_running_timeout_seconds())
+    cutoff = datetime.now(timezone.utc).timestamp() - timeout_seconds
+    rows = x("SELECT id, started_at FROM domain_enum_scans WHERE status='running'").fetchall()
+    stale_ids = []
+    for row in rows:
+        try:
+            started = datetime.fromisoformat(str(row["started_at"])).timestamp()
+        except Exception:
+            continue
+        if started < cutoff:
+            stale_ids.append(row["id"])
+    if not stale_ids:
+        return 0
+    mark = now()
+    xm(
+        "UPDATE domain_enum_scans SET status='failed', finished_at=?, verbose_log=? WHERE id=? AND status='running'",
+        [(mark, json.dumps([{
+            "source": "watchdog",
+            "status": "timeout",
+            "found_count": 0,
+            "error": f"Enumeration exceeded hard timeout of {timeout_seconds}s",
+        }]), sid) for sid in stale_ids],
+    )
+    commit()
+    return len(stale_ids)
+
+
 def domain_enum_scans_list():
+    domain_enum_scans_mark_stale_running()
     return [dict(r) for r in x("SELECT * FROM domain_enum_scans ORDER BY started_at DESC LIMIT 300").fetchall()]
 
 
@@ -1352,6 +1389,7 @@ def _decode_domain_enum_scan(row):
 
 
 def domain_enum_scan_get(scan_id):
+    domain_enum_scans_mark_stale_running()
     row = x("SELECT * FROM domain_enum_scans WHERE id=?", (scan_id,)).fetchone()
     return _decode_domain_enum_scan(row)
 
