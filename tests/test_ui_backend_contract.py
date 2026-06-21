@@ -167,6 +167,39 @@ def test_domain_enumeration_accepts_authorized_subdomain_scope(tmp_path, monkeyp
     assert calls == [{"domain": "example.com", "depth_mode": "standard"}]
 
 
+def test_domain_enumeration_accepts_aggressive_mode_aliases(tmp_path, monkeypatch):
+    sys.path.insert(0, str(ROOT))
+    from flask import Flask
+    import db.database as database
+    import api.routes as routes
+    import subfinder.runner as runner
+
+    monkeypatch.setattr(database, "DB_PATH", tmp_path / "enum_aggressive_alias.sqlite3")
+    monkeypatch.setattr(database, "_local", __import__("threading").local())
+    monkeypatch.setenv("SCAN_ALLOWED_DOMAINS", "example.com")
+    database.init_db()
+
+    calls = []
+
+    def fake_run(domain, triggered_by="manual", depth_mode="standard", verbose=False):
+        calls.append({"domain": domain, "depth_mode": depth_mode, "verbose": verbose})
+        return {"scan_id": "scan1", "domain": domain, "total_found": 0, "verbose_log": []}
+
+    monkeypatch.setattr(runner, "run_domain_enumeration_scan", fake_run)
+
+    app = Flask(__name__)
+    app.register_blueprint(routes.api)
+    client = app.test_client()
+
+    resp = client.post(
+        "/api/subfinder/enumeration/run?async=false",
+        json={"domain": "example.com", "mode": "aggressive", "verbose": "true"},
+    )
+
+    assert resp.status_code == 200
+    assert resp.json["ok"] is True
+    assert calls == [{"domain": "example.com", "depth_mode": "aggressive", "verbose": True}]
+
 def test_host_upload_accepts_multipart_files_and_raw_text(tmp_path, monkeypatch):
     sys.path.insert(0, str(ROOT))
     from flask import Flask
