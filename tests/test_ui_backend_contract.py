@@ -163,7 +163,7 @@ def test_domain_enumeration_accepts_authorized_subdomain_scope(tmp_path, monkeyp
 
     assert resp.status_code == 200
     assert resp.json["ok"] is True
-    assert calls == ["example.com"]
+    assert calls == ["portal.example.com"]
 
 
 def test_host_upload_accepts_multipart_files_and_raw_text(tmp_path, monkeypatch):
