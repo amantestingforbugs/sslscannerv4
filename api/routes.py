@@ -71,7 +71,20 @@ QUICK_SCAN_ROWS_BUFFER = 500
 STARTED_AT_TS = time.time()
 
 
-
+def _request_bool(value, default: bool = False) -> bool:
+    """Parse JSON/form/query booleans without treating "false" as truthy."""
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(value)
+    text = str(value).strip().lower()
+    if text in {"1", "true", "yes", "on"}:
+        return True
+    if text in {"0", "false", "no", "off", ""}:
+        return False
+    return default
 
 
 def _create_project_or_error(name: str, description: str = "", scan_interval=60, subfinder_interval=30):
@@ -378,7 +391,6 @@ def _normalize_hostname(raw: str, *, check_dns: bool = True) -> str:
     return host
 
 
-
 def _analyze_hosts_text(content: str) -> dict:
     """Return normalized host inventory metadata before saving a pasted/uploaded list."""
     raw_items = []
@@ -413,9 +425,6 @@ def _analyze_hosts_text(content: str) -> dict:
         "scope_domains": allowed_scope_domains(),
         "private_targets_allowed": allow_private_targets(),
     }
-
-
-
 
 
 V5_HUNTER_SIGNAL_PACKS = [
@@ -922,7 +931,6 @@ def _hypotheses_for_leads(leads: list[dict]) -> list[dict]:
             "reporting": "Bundle exact URLs, safe reproduction steps, observed impact, and suggested fix.",
         })
     return selected
-
 
 
 def _bounty_copilot_prompt(lead: dict, brief: dict) -> str:
@@ -1939,7 +1947,6 @@ def security_policy():
     })
 
 
-
 @api.get("/system-overview")
 def system_overview():
     projects_total = db.x("SELECT COUNT(*) c FROM projects").fetchone()["c"]
@@ -2044,11 +2051,28 @@ def run_domain_enumeration():
     if not root_domain or not is_target_allowed(domain):
         return err("Domain is outside configured scan scope or targets a disallowed network", 403)
     try:
-        depth_mode = (payload.get("depth_mode") or "standard").strip().lower()
+        depth_mode = (
+            payload.get("depth_mode")
+            or payload.get("scan_mode")
+            or payload.get("mode")
+            or request.values.get("depth_mode")
+            or request.values.get("scan_mode")
+            or request.values.get("mode")
+            or "standard"
+        )
+        depth_mode = str(depth_mode).strip().lower()
         if depth_mode not in {"standard", "aggressive"}:
             depth_mode = "standard"
-        verbose = bool(payload.get("verbose") or payload.get("verbose_logs") or request.values.get("verbose"))
-        async_requested = bool(payload.get("async") or payload.get("background") or request.values.get("async"))
+        verbose = (
+            _request_bool(payload.get("verbose"), False)
+            or _request_bool(payload.get("verbose_logs"), False)
+            or _request_bool(request.values.get("verbose"), False)
+        )
+        async_requested = (
+            _request_bool(payload.get("async"), False)
+            or _request_bool(payload.get("background"), False)
+            or _request_bool(request.values.get("async"), False)
+        )
         if async_requested:
             scan_id = db.domain_enum_scan_create(
                 root_domain,
@@ -2202,8 +2226,6 @@ def toggle_subfinder(pid):
     new_val = 0 if p.get("subfinder_enabled") else 1
     db.project_update(pid, subfinder_enabled=new_val)
     return ok({"subfinder_enabled": new_val})
-
-
 
 
 def _resolve_nuclei_hosts(pid: str, mode: str) -> list[str]:
