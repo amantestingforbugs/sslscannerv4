@@ -32,6 +32,10 @@ def test_bounty_lead_scoring_prioritizes_active_admin_api_surfaces():
 
     assert lead["score"] >= 75
     assert lead["severity"] == "high"
+    assert lead["priority"]["lane"] in {"P0", "P1"}
+    assert lead["business_impact"]["confidence"] >= 50
+    assert lead["validation_plan"]["false_positive_checks"]
+    assert lead["quick_win"] is True
     assert "API" in lead["lead_type"] or "Admin" in lead["lead_type"]
     assert any("authorized bug-bounty scope" in step for step in lead["next_steps"])
 
@@ -158,6 +162,8 @@ def test_bounty_summary_rolls_up_company_attack_surface(tmp_path, monkeypatch):
     assert summary["active_http"] == 3
     assert summary["protected_http"] == 1
     assert summary["tls_anomalies"] == 1
+    assert summary["p0"] >= 1
+    assert summary["quick_wins"] >= 1
     assert summary["top_surface_types"]
     assert "high-priority" in summary["executive_summary"]
 
@@ -192,6 +198,8 @@ def test_bounty_brief_builds_operator_plan_from_ranked_leads(tmp_path, monkeypat
     brief = _collect_bounty_brief(project_id=project["id"], limit=10)
 
     assert brief["critical_path"][0]["hostname"] == "admin-api.staging.example.com"
+    assert brief["critical_path"][0]["priority"]["lane"] in {"P0", "P1"}
+    assert "business_impact" in brief["critical_path"][0]
     assert brief["scope_guardrails"]
     hypothesis_ids = {h["id"] for h in brief["hypotheses"]}
     assert "access-control" in hypothesis_ids
