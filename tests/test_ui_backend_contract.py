@@ -170,6 +170,33 @@ def test_project_host_upload_accepts_raw_text_payload(tmp_path, monkeypatch):
     assert database.project_hosts(project["id"]) == ["example.com", "api.example.com"]
 
 
+def test_project_host_upload_accepts_utf16_text_file(tmp_path, monkeypatch):
+    """Windows-saved .txt subdomain lists should decode instead of importing as invalid NUL text."""
+    sys.path.insert(0, str(ROOT))
+    from flask import Flask
+    from io import BytesIO
+    import db.database as database
+    import api.routes as routes
+
+    monkeypatch.setattr(database, "DB_PATH", tmp_path / "project_hosts_utf16.sqlite3")
+    monkeypatch.setattr(database, "_local", __import__("threading").local())
+    database.init_db()
+
+    project = database.project_create("utf16-hosts")
+    app = Flask(__name__)
+    app.register_blueprint(routes.api)
+    client = app.test_client()
+
+    resp = client.post(
+        f"/api/projects/{project['id']}/hosts",
+        data={"file": (BytesIO("api.example.com\nwww.example.com\n".encode("utf-16")), "subdomains.txt")},
+    )
+
+    assert resp.status_code == 200
+    assert resp.json["data"]["count"] == 2
+    assert database.project_hosts(project["id"]) == ["api.example.com", "www.example.com"]
+
+
 def test_enumeration_project_creation_uses_available_name(tmp_path, monkeypatch):
     sys.path.insert(0, str(ROOT))
     from flask import Flask
