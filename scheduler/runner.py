@@ -116,7 +116,7 @@ def stop_scan(sid: str) -> bool:
 
 def run_project_scan(project_id: str, triggered_by: str = "manual") -> Optional[str]:
     from db.database import (
-        project_get, project_hosts, scan_create, scan_get, results_batch_save,
+        project_get, project_hosts, scan_create, results_batch_save,
         scan_finish, scan_update, scan_progress,
         alert_add, alerts_unsent, alert_mark_sent, alerts_unseen_count, alert_settings_get,
         asset_backfill_project
@@ -153,7 +153,6 @@ def run_project_scan(project_id: str, triggered_by: str = "manual") -> Optional[
             stop_event.set(); pause_event.clear()
 
     result_batch, alert_batch, done_count = [], [], [0]
-    live_counts = {"ok": 0, "mismatches": 0, "expired": 0, "expiring": 0, "errors": 0}
     lock = threading.Lock()
 
     def on_result(done, total_inner, r):
@@ -163,11 +162,6 @@ def run_project_scan(project_id: str, triggered_by: str = "manual") -> Optional[
                 alert_batch.append(alert)
             result_batch.append(r)
             done_count[0] += 1
-            live_counts["ok"] += 1 if r.get("is_ok") else 0
-            live_counts["mismatches"] += 1 if r.get("is_mismatch") else 0
-            live_counts["expired"] += 1 if r.get("is_expired") else 0
-            live_counts["expiring"] += 1 if r.get("is_expiring_soon") else 0
-            live_counts["errors"] += 1 if r.get("error") else 0
             cur = done_count[0]
             if len(result_batch) >= BATCH_SIZE:
                 batch = result_batch[:]
@@ -176,11 +170,9 @@ def run_project_scan(project_id: str, triggered_by: str = "manual") -> Optional[
                 for h, issue, detail, scope in alert_batch:
                     alert_add(project_id, h, issue, detail, sid, mismatch_scope=scope)
                 alert_batch.clear()
-            # Keep the live progress card accurate even for small scans that
-            # never hit PROGRESS_UPDATE_EVERY before finishing.
-            jobs.update_progress(sid, done=cur, total=total, **live_counts)
             if cur % PROGRESS_UPDATE_EVERY == 0:
                 scan_progress(sid, cur)
+                jobs.update_progress(sid, done=cur, total=total)
             sync_controls()
 
     try:
@@ -204,22 +196,12 @@ def run_project_scan(project_id: str, triggered_by: str = "manual") -> Optional[
         publish("alert_update", {"unseen_count": alerts_unseen_count()})
         if was_stopped:
             done = done_count[0]
-            scan_update(sid, status="stopped", finished_at=_now(), done=done, **live_counts)
-            jobs.update_progress(sid, done=done, total=total, **live_counts)
+            scan_update(sid, status="stopped", finished_at=_now(), done=done)
             jobs.update_state(sid, status="stopped", progress=done, done=done, finished_at=_now())
             log_event("ssl_scan", "warning", "Scan stopped by user", project_id=project_id, scan_id=sid, total=total, done=done, status="stopped")
         else:
             scan_finish(sid)
-            finished_scan = scan_get(sid) or {}
-            final_counts = {
-                "ok": finished_scan.get("ok", live_counts["ok"]),
-                "mismatches": finished_scan.get("mismatches", live_counts["mismatches"]),
-                "expired": finished_scan.get("expired", live_counts["expired"]),
-                "expiring": finished_scan.get("expiring", live_counts["expiring"]),
-                "errors": finished_scan.get("errors", live_counts["errors"]),
-            }
             log_event("ssl_scan", "info", "Scan finished", project_id=project_id, scan_id=sid, total=total, status="idle")
-            jobs.update_progress(sid, done=total, total=total, **final_counts)
             jobs.update_state(sid, status="done", progress=total, done=total, finished_at=_now())
 
         # Send remote alerts

@@ -1445,29 +1445,20 @@ def trigger_scan(pid):
     return ok({"message": "Scan started", "scan": scan, "scan_id": scan.get("id") if scan else ""})
 
 
-def _merge_live_scan_state(scan: dict) -> dict:
-    live = get_scan_state(scan.get("id", ""))
-    if not live:
-        return scan
-    merged = dict(scan)
-    for key in ("status", "progress", "done", "total", "ok", "mismatches", "expired", "expiring", "errors"):
-        if key in live and live.get(key) is not None:
-            merged[key] = live.get(key)
-    merged["live_progress"] = live.get("progress", live.get("done", 0))
-    merged["live_status"] = live.get("status")
-    return merged
-
-
 @api.get("/projects/<pid>/scans")
 def list_scans(pid):
-    return ok([_merge_live_scan_state(s) for s in db.scan_list(pid)])
+    return ok(db.scan_list(pid))
 
 
 @api.get("/scans/<sid>")
 def get_scan(sid):
     s = db.scan_get(sid)
     if not s: return err("Not found", 404)
-    return ok(_merge_live_scan_state(s))
+    live = get_scan_state(sid)
+    if live:
+        s["live_progress"] = live.get("progress", 0)
+        s["live_status"] = live.get("status")
+    return ok(s)
 
 
 @api.get("/assets")
