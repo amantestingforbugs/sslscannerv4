@@ -395,9 +395,17 @@ def _analyze_hosts_text(content: str) -> dict:
     """Return normalized host inventory metadata before saving a pasted/uploaded list."""
     raw_items = []
     for line in (content or "").splitlines():
-        item = line.split("#", 1)[0].strip()
-        if item:
-            raw_items.append(item)
+        line = line.split("#", 1)[0].strip()
+        if not line:
+            continue
+        if "," in line:
+            try:
+                fields = next(csv.reader([line]))
+            except csv.Error:
+                fields = line.split(",")
+            raw_items.extend(field.strip() for field in fields if field.strip())
+        else:
+            raw_items.append(line)
 
     normalized = []
     invalid = []
