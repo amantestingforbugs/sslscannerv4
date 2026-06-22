@@ -684,34 +684,8 @@ def test_standard_domain_enumeration_skips_deep_dns_stages(monkeypatch):
     assert result["source_map"] == {"passive": ["www.example.com"], "subfinder": ["api.example.com"]}
 
 
-def test_standard_domain_enumeration_uses_fast_passive_sources_by_default(monkeypatch):
+def test_standard_domain_enumeration_uses_all_passive_sources_by_default(monkeypatch):
     calls = []
-
-    monkeypatch.setattr(
-        runner,
-        "_passive_enumeration_sources",
-        lambda: {
-            "crtsh": lambda root: calls.append("crtsh") or ["ct.example.com"],
-            "slow_optional": lambda root: calls.append("slow_optional") or ["slow.example.com"],
-        },
-    )
-    monkeypatch.setattr(
-        runner,
-        "_run_subfinder_for_root",
-        lambda root, timeout=180: calls.append(("subfinder", timeout)) or {"root_domain": root, "status": "done", "found": [], "found_count": 0, "stderr": ""},
-    )
-
-    result = runner._run_subdomain_enumeration(["example.com"], depth_mode="standard")
-
-    assert result["found"] == ["ct.example.com"]
-    assert "crtsh" in calls
-    assert "slow_optional" not in calls
-    assert ("subfinder", 90) in calls
-
-
-def test_standard_domain_enumeration_can_request_all_sources(monkeypatch):
-    calls = []
-    monkeypatch.setenv("DOMAIN_ENUM_STANDARD_SOURCES", "all")
 
     monkeypatch.setattr(
         runner,
@@ -732,6 +706,32 @@ def test_standard_domain_enumeration_can_request_all_sources(monkeypatch):
     assert result["found"] == ["ct.example.com", "slow.example.com"]
     assert "crtsh" in calls
     assert "slow_optional" in calls
+    assert ("subfinder", 90) in calls
+
+
+def test_standard_domain_enumeration_can_use_fast_source_subset(monkeypatch):
+    calls = []
+    monkeypatch.setenv("DOMAIN_ENUM_STANDARD_FAST_ONLY", "1")
+
+    monkeypatch.setattr(
+        runner,
+        "_passive_enumeration_sources",
+        lambda: {
+            "crtsh": lambda root: calls.append("crtsh") or ["ct.example.com"],
+            "slow_optional": lambda root: calls.append("slow_optional") or ["slow.example.com"],
+        },
+    )
+    monkeypatch.setattr(
+        runner,
+        "_run_subfinder_for_root",
+        lambda root, timeout=180: calls.append(("subfinder", timeout)) or {"root_domain": root, "status": "done", "found": [], "found_count": 0, "stderr": ""},
+    )
+
+    result = runner._run_subdomain_enumeration(["example.com"], depth_mode="standard")
+
+    assert result["found"] == ["ct.example.com"]
+    assert "crtsh" in calls
+    assert "slow_optional" not in calls
     assert ("subfinder", 90) in calls
 
 
