@@ -201,7 +201,6 @@ def init_db():
         status TEXT DEFAULT 'running',
         triggered_by TEXT DEFAULT 'manual',
         tool_summary TEXT DEFAULT '',
-        depth_mode TEXT DEFAULT 'standard',
         verbose_log TEXT DEFAULT '',
         total_found INTEGER DEFAULT 0,
         started_at TEXT NOT NULL,
@@ -346,11 +345,6 @@ def init_db():
         pass
     try:
         x("ALTER TABLE domain_enum_scans ADD COLUMN verbose_log TEXT DEFAULT ''")
-        commit()
-    except sqlite3.OperationalError:
-        pass
-    try:
-        x("ALTER TABLE domain_enum_scans ADD COLUMN depth_mode TEXT DEFAULT 'standard'")
         commit()
     except sqlite3.OperationalError:
         pass
@@ -1288,14 +1282,11 @@ def subfinder_raw_results_list(pid, limit=20, preview_chars=4000):
     return out
 
 
-def domain_enum_scan_create(domain, triggered_by="manual", tool_summary="", depth_mode="standard"):
+def domain_enum_scan_create(domain, triggered_by="manual", tool_summary=""):
     sid = uid()
-    mode = (depth_mode or "standard").strip().lower()
-    if mode not in {"standard", "aggressive"}:
-        mode = "standard"
     x(
-        "INSERT INTO domain_enum_scans(id,domain,status,triggered_by,tool_summary,depth_mode,started_at) VALUES(?,?,?,?,?,?,?)",
-        (sid, (domain or "").strip().lower(), "running", triggered_by, tool_summary, mode, now()),
+        "INSERT INTO domain_enum_scans(id,domain,status,triggered_by,tool_summary,started_at) VALUES(?,?,?,?,?,?)",
+        (sid, (domain or "").strip().lower(), "running", triggered_by, tool_summary, now()),
     )
     commit()
     return sid
@@ -1341,7 +1332,7 @@ def domain_enum_results_add_batch(scan_id, domain, hostnames, source="mixed"):
     return len(clean)
 
 
-def _domain_enum_running_timeout_seconds(depth_mode: str = "aggressive") -> int:
+def _domain_enum_running_timeout_seconds() -> int:
     # The stale-scan watchdog is only a UI/database safety net for genuinely
     # orphaned background jobs; it must not be the effective timeout for a live
     # aggressive enumeration. Aggressive mode already has its own pipeline
@@ -1358,31 +1349,22 @@ def _domain_enum_running_timeout_seconds(depth_mode: str = "aggressive") -> int:
         _env_int("DOMAIN_DNS_ENUM_PHASE_TIMEOUT_SECONDS", 180, minimum=15, maximum=3600),
         _env_int("DNS_PERMUTATION_RESOLVE_TIMEOUT_SECONDS", 180, minimum=1, maximum=3600),
     )
-    mode = (depth_mode or "aggressive").strip().lower()
-    if mode == "standard":
-        default_timeout = standard_total + longest_phase + 300
-    else:
-        # Aggressive enumeration can still be making progress while slow public
-        # sources, recursive lookups, DNS brute force, and permutation workers
-        # are unwinding. Keep the watchdog as an orphaned-job cleanup backstop,
-        # not a user-visible scan timeout.
-        default_timeout = max(7200, aggressive_total + (2 * longest_phase) + 1800)
+    default_timeout = max(aggressive_total, standard_total) + longest_phase + 300
     return _env_int("DOMAIN_ENUM_RUNNING_TIMEOUT_SECONDS", default_timeout, minimum=60, maximum=86400)
 
 
 def domain_enum_scans_mark_stale_running(timeout_seconds: int | None = None) -> int:
-    override_timeout = int(timeout_seconds) if timeout_seconds is not None else None
-    rows = x("SELECT id, started_at, depth_mode FROM domain_enum_scans WHERE status='running'").fetchall()
+    timeout_seconds = int(timeout_seconds or _domain_enum_running_timeout_seconds())
+    cutoff = datetime.now(timezone.utc).timestamp() - timeout_seconds
+    rows = x("SELECT id, started_at FROM domain_enum_scans WHERE status='running'").fetchall()
     stale_ids = []
     for row in rows:
         try:
             started = datetime.fromisoformat(str(row["started_at"])).timestamp()
         except Exception:
             continue
-        row_timeout = override_timeout or _domain_enum_running_timeout_seconds(row["depth_mode"] or "standard")
-        cutoff = datetime.now(timezone.utc).timestamp() - row_timeout
         if started < cutoff:
-            stale_ids.append((row["id"], row_timeout))
+            stale_ids.append(row["id"])
     if not stale_ids:
         return 0
     mark = now()
@@ -1392,8 +1374,8 @@ def domain_enum_scans_mark_stale_running(timeout_seconds: int | None = None) -> 
             "source": "watchdog",
             "status": "timeout",
             "found_count": 0,
-            "error": f"Enumeration exceeded hard timeout of {row_timeout}s",
-        }]), sid) for sid, row_timeout in stale_ids],
+            "error": f"Enumeration exceeded hard timeout of {timeout_seconds}s",
+        }]), sid) for sid in stale_ids],
     )
     commit()
     return len(stale_ids)
