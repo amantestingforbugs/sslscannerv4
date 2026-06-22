@@ -2251,6 +2251,7 @@ let quickSortCol = 'hostname';
 let quickSortDir = 1;
 let quickRenderTimer = null;
 let alertSettingsCache = null;
+let lastSeenAlertCount = null;
 let genericTableObserver = null;
 let pendingLogEntries = [];
 let logFlushTimer = null;
@@ -2833,8 +2834,15 @@ function connectSSE() {
 
   es.addEventListener('alert_update', e => {
     const d = JSON.parse(e.data);
-    updateAlertBadge(d.unseen_count);
+    const nextCount = Number(d.unseen_count || 0);
+    const previousCount = lastSeenAlertCount;
+    updateAlertBadge(nextCount);
     queueAlertsRefresh();
+    if (Number(d.new_alerts || 0) > 0 || (previousCount !== null && nextCount > previousCount)) {
+      const delta = Number(d.new_alerts || (nextCount - previousCount) || 0);
+      toast(`${fmt(delta)} new alert${delta === 1 ? '' : 's'} after scan finished`, 'err');
+      if (!document.hidden) pollBadge();
+    }
   });
 
   es.addEventListener('scan_update', e => {
@@ -2947,6 +2955,8 @@ function queueAlertsRefresh() {
 // ALERT BADGE
 // ════════════════════════════════════════════════════════════
 function updateAlertBadge(n) {
+  n = Number(n || 0);
+  lastSeenAlertCount = n;
   const pill = document.getElementById('alertPill');
   const badge = document.getElementById('navAlertBadge');
   const count = document.getElementById('pillCount');
@@ -2958,6 +2968,7 @@ function updateAlertBadge(n) {
   } else {
     pill.classList.add('hidden');
     badge.style.display = 'none';
+    count.textContent = '0';
   }
 }
 

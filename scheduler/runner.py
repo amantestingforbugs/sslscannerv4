@@ -153,6 +153,7 @@ def run_project_scan(project_id: str, triggered_by: str = "manual") -> Optional[
             stop_event.set(); pause_event.clear()
 
     result_batch, alert_batch, done_count = [], [], [0]
+    alert_events_count = [0]
     live_counts = {"ok": 0, "mismatches": 0, "expired": 0, "expiring": 0, "errors": 0}
     lock = threading.Lock()
 
@@ -175,6 +176,7 @@ def run_project_scan(project_id: str, triggered_by: str = "manual") -> Optional[
                 results_batch_save(sid, project_id, batch, backfill_assets=False)
                 for h, issue, detail, scope in alert_batch:
                     alert_add(project_id, h, issue, detail, sid, mismatch_scope=scope)
+                    alert_events_count[0] += 1
                 alert_batch.clear()
             # Keep the live progress card accurate even for small scans that
             # never hit PROGRESS_UPDATE_EVERY before finishing.
@@ -200,8 +202,8 @@ def run_project_scan(project_id: str, triggered_by: str = "manual") -> Optional[
                 results_batch_save(sid, project_id, result_batch, backfill_assets=False)
             for h, issue, detail, scope in alert_batch:
                 alert_add(project_id, h, issue, detail, sid, mismatch_scope=scope)
+                alert_events_count[0] += 1
         asset_backfill_project(project_id)
-        publish("alert_update", {"unseen_count": alerts_unseen_count()})
         if was_stopped:
             done = done_count[0]
             scan_update(sid, status="stopped", finished_at=_now(), done=done, **live_counts)
@@ -222,6 +224,8 @@ def run_project_scan(project_id: str, triggered_by: str = "manual") -> Optional[
             jobs.update_progress(sid, done=total, total=total, **final_counts)
             jobs.update_state(sid, status="done", progress=total, done=total, finished_at=_now())
 
+        publish("alert_update", {"unseen_count": alerts_unseen_count(), "project_id": project_id, "scan_id": sid, "new_alerts": alert_events_count[0]})
+
         # Send remote alerts
         unsent = [a for a in alerts_unsent() if a["project_id"] == project_id]
         if unsent:
@@ -229,11 +233,11 @@ def run_project_scan(project_id: str, triggered_by: str = "manual") -> Optional[
             delivered = manager.dispatch(project["name"], unsent)
             if not delivered:
                 log.warning("No remote alert channel accepted alerts for project '%s'; keeping alerts unsent for retry.", project["name"])
-                return sid
-            delivered_ids = set(manager.dispatchable_alert_ids(unsent))
-            for a in unsent:
-                if a["id"] in delivered_ids:
-                    alert_mark_sent(a["id"])
+            if delivered:
+                delivered_ids = set(manager.dispatchable_alert_ids(unsent))
+                for a in unsent:
+                    if a["id"] in delivered_ids:
+                        alert_mark_sent(a["id"])
 
         log.info("Scan done: '%s'", project["name"])
         return sid
