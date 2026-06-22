@@ -2206,7 +2206,29 @@ def domain_enumeration_scan_create_project(scan_id):
         return err(create_error, 400)
     db.project_save_hosts(p["id"], hosts)
     broadcast("project_created", {"id": p["id"], "name": p["name"]})
-    return ok({"project": db.project_get(p["id"]), "host_count": len(hosts), "scan_id": scan_id})
+
+    start_scan = _request_bool(
+        payload.get("start_scan", payload.get("scan", payload.get("run_scan"))),
+        False,
+    )
+    scan_started = False
+    scan_error = ""
+    if start_scan:
+        try:
+            scan_started = bool(run_project_scan_async(p["id"], triggered_by="enum_import"))
+            if not scan_started:
+                scan_error = "A scan is already running for this project"
+        except Exception as exc:
+            log.exception("Failed to start initial scan for enumeration project %s", p["id"])
+            scan_error = str(exc) or "Unable to start scan"
+
+    return ok({
+        "project": db.project_get(p["id"]),
+        "host_count": len(hosts),
+        "scan_id": scan_id,
+        "scan_started": scan_started,
+        "scan_error": scan_error,
+    })
 
 
 @api.delete("/subfinder/enumeration/scans/<scan_id>")
@@ -2238,7 +2260,14 @@ def domain_enumeration_scan_export(scan_id):
     if export_format != "csv":
         return err("format must be either txt or csv")
 
-    enrich = _resolve_active_hosts_with_httpx(hosts)
+    # httpx enrichment can take longer than common reverse-proxy request
+    # timeouts for large enumeration result sets. Keep CSV export fast and
+    # deterministic by default; callers that explicitly want live HTTP
+    # probing can opt in with enrich=1.
+    enrich = []
+    if _request_bool(request.args.get("enrich"), False):
+        enrich_timeout = _safe_int(request.args.get("enrich_timeout"), 30, min_value=1, max_value=60)
+        enrich = _resolve_active_hosts_with_httpx(hosts, timeout=enrich_timeout)
     enrich_map = {r.get("hostname"): r for r in enrich if r.get("hostname")}
 
     out = io.StringIO()
