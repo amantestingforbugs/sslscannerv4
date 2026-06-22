@@ -1132,6 +1132,52 @@ body::before{content:'';position:fixed;inset:0;pointer-events:none;background:ra
 .dashboard-redesign .dash-coverage-grid{margin-bottom:16px}
 .dashboard-redesign .dash-system-strip{grid-template-columns:repeat(6,minmax(0,1fr));margin:0;border-radius:0;border:0}
 @media(max-width:980px){.dashboard-redesign .dash-command-board{grid-template-columns:1fr}.dashboard-redesign .dash-system-strip{grid-template-columns:repeat(2,minmax(0,1fr))}}
+
+
+/* Simple classy dashboard */
+.simple-dashboard{max-width:1120px;margin:0 auto}
+.simple-dashboard .empty{background:transparent;border:1px dashed var(--border);border-radius:16px;padding:28px 18px}
+.simple-hero,.simple-status-card,.simple-card,.simple-metric{
+  background:color-mix(in srgb,var(--bg-surface) 94%,transparent);
+  border:1px solid color-mix(in srgb,var(--border) 82%,transparent);
+  border-radius:22px;
+  box-shadow:0 18px 50px rgba(2,6,23,.10);
+}
+.simple-hero{display:flex;justify-content:space-between;align-items:flex-end;gap:24px;padding:34px;margin-bottom:18px;background:linear-gradient(135deg,color-mix(in srgb,var(--bg-surface) 88%,var(--accent)),var(--bg-surface))}
+.simple-eyebrow{display:inline-flex;margin-bottom:8px;color:var(--accent);font-size:11px;font-weight:800;letter-spacing:.14em;text-transform:uppercase}
+.simple-hero h1{font-size:clamp(30px,5vw,52px);line-height:1;letter-spacing:-.06em;margin-bottom:12px;max-width:720px}
+.simple-hero p{color:var(--text-secondary);font-size:15px;max-width:620px}
+.simple-actions{display:flex;gap:10px;flex-wrap:wrap;justify-content:flex-end}
+.simple-metrics{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:14px;margin-bottom:18px}
+.simple-metric{padding:20px;min-height:122px;display:flex;flex-direction:column;justify-content:space-between;position:relative;overflow:hidden}
+.simple-metric::after{content:'';position:absolute;right:18px;top:18px;width:10px;height:10px;border-radius:50%;background:var(--accent);opacity:.35}
+.simple-metric.good::after{background:var(--green)}.simple-metric.warn::after{background:var(--amber)}.simple-metric.danger::after{background:var(--red)}
+.simple-metric-label{color:var(--text-secondary);font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.08em}
+.simple-metric strong{font-size:42px;line-height:1;letter-spacing:-.06em}
+.simple-status-card,.simple-card{padding:22px;margin-bottom:18px}
+.simple-section-head{display:flex;justify-content:space-between;align-items:flex-start;gap:18px;margin-bottom:18px}.simple-section-head.compact{align-items:center;margin-bottom:14px}
+.simple-section-head h2{font-size:20px;letter-spacing:-.04em;margin:0}.simple-section-head p{color:var(--text-secondary);font-size:13px;margin-top:4px}
+.simple-pill{display:inline-flex;align-items:center;border:1px solid color-mix(in srgb,var(--green) 28%,var(--border));color:var(--green);background:var(--green-dim);border-radius:999px;padding:7px 11px;font-size:12px;font-weight:800}
+.simple-system-grid{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));border:1px solid var(--border);border-radius:16px;overflow:hidden;background:var(--bg-raised)}
+.simple-system-grid div{padding:14px;border-right:1px solid var(--border)}.simple-system-grid div:last-child{border-right:0}.simple-system-grid span{display:block;color:var(--text-muted);font-size:11px;text-transform:uppercase;letter-spacing:.07em;margin-bottom:4px}.simple-system-grid strong{font-size:15px}
+.simple-two-column{display:grid;grid-template-columns:1fr 1fr;gap:18px}.dashboard-hidden-compat{display:none!important}
+@media(max-width:900px){.simple-hero{align-items:flex-start;flex-direction:column}.simple-metrics,.simple-two-column{grid-template-columns:1fr 1fr}.simple-system-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.simple-system-grid div{border-bottom:1px solid var(--border)}}
+@media(max-width:620px){.simple-metrics,.simple-two-column{grid-template-columns:1fr}.simple-hero{padding:24px}.simple-actions{width:100%;justify-content:flex-start}.simple-actions .btn{flex:1;justify-content:center}.simple-metric strong{font-size:34px}}
+
+
+/* Cooler simple dashboard polish */
+.simple-dashboard{position:relative}.simple-dashboard::before{content:'';position:absolute;inset:-24px -18px auto;height:280px;pointer-events:none;background:radial-gradient(circle at 20% 10%,color-mix(in srgb,var(--accent) 18%,transparent),transparent 34%),radial-gradient(circle at 85% 20%,color-mix(in srgb,var(--purple) 16%,transparent),transparent 30%);filter:blur(2px);opacity:.9}
+.simple-dashboard>*{position:relative;z-index:1}
+.simple-hero{position:relative;overflow:hidden;align-items:center;border-color:color-mix(in srgb,var(--accent) 28%,var(--border));background:linear-gradient(135deg,color-mix(in srgb,var(--bg-surface) 82%,var(--accent)),color-mix(in srgb,var(--bg-surface) 92%,var(--purple)) 58%,var(--bg-surface))}
+.simple-hero::before{content:'';position:absolute;inset:0;background:linear-gradient(120deg,transparent 0 35%,rgba(255,255,255,.08) 45%,transparent 56%);transform:translateX(-72%);animation:simple-sheen 7s ease-in-out infinite}.simple-hero::after{content:'';position:absolute;right:-80px;top:-90px;width:260px;height:260px;border-radius:999px;background:radial-gradient(circle,rgba(255,255,255,.16),transparent 62%)}
+@keyframes simple-sheen{0%,55%{transform:translateX(-72%)}80%,100%{transform:translateX(72%)}}
+.simple-hero>div{position:relative;z-index:1}.simple-trust-row{display:flex;flex-wrap:wrap;gap:8px;margin-top:18px}.simple-trust-row span{border:1px solid color-mix(in srgb,var(--accent) 22%,var(--border));background:color-mix(in srgb,var(--bg-raised) 76%,transparent);color:var(--text-secondary);border-radius:999px;padding:7px 10px;font-size:11px;font-weight:800}.simple-trust-row span::before{content:'• ';color:var(--green)}
+.simple-hero-panel{min-width:180px;display:grid;gap:12px;justify-items:center}.simple-orb{width:132px;height:132px;border-radius:999px;display:grid;place-items:center;background:conic-gradient(from 210deg,var(--accent),var(--purple),var(--green),var(--accent));box-shadow:0 24px 70px color-mix(in srgb,var(--accent) 32%,transparent);animation:simple-float 5s ease-in-out infinite}.simple-orb::before{content:'';position:absolute;width:106px;height:106px;border-radius:inherit;background:var(--bg-surface);box-shadow:inset 0 0 0 1px var(--border)}.simple-orb span{position:relative;font-weight:950;letter-spacing:-.08em;font-size:28px}.simple-hero-mini{border:1px solid var(--border);background:color-mix(in srgb,var(--bg-surface) 78%,transparent);border-radius:16px;padding:10px 12px;text-align:center;box-shadow:var(--shadow-sm)}.simple-hero-mini strong{display:block;font-size:12px}.simple-hero-mini span{display:block;color:var(--text-muted);font-size:11px;margin-top:2px}@keyframes simple-float{0%,100%{transform:translateY(0)}50%{transform:translateY(-8px)}}
+.simple-actions .btn{min-height:38px;box-shadow:0 10px 28px rgba(2,6,23,.10)}.simple-actions .btn span{font-weight:900}.simple-actions .btn-primary{box-shadow:0 14px 34px color-mix(in srgb,var(--accent) 30%,transparent)}
+.simple-metric{transition:transform var(--transition),border-color var(--transition),box-shadow var(--transition);background:linear-gradient(180deg,color-mix(in srgb,var(--bg-surface) 96%,transparent),color-mix(in srgb,var(--bg-raised) 86%,transparent))}.simple-metric:hover{transform:translateY(-4px);border-color:color-mix(in srgb,var(--accent) 34%,var(--border));box-shadow:0 22px 56px rgba(2,6,23,.16)}.simple-metric-top{display:flex;align-items:center;gap:9px}.simple-metric-icon{width:30px;height:30px;border-radius:12px;display:grid;place-items:center;background:var(--accent-dim);color:var(--accent);font-weight:900}.simple-metric.good .simple-metric-icon{background:var(--green-dim);color:var(--green)}.simple-metric.warn .simple-metric-icon{background:var(--amber-dim);color:var(--amber)}.simple-metric.danger .simple-metric-icon{background:var(--red-dim);color:var(--red)}.simple-metric small{color:var(--text-muted);font-size:11.5px;font-weight:700}.simple-metric strong{margin-top:18px}.simple-metric::before{content:'';position:absolute;left:18px;right:18px;bottom:12px;height:3px;border-radius:999px;background:linear-gradient(90deg,var(--accent),transparent);opacity:.35}.simple-metric.good::before{background:linear-gradient(90deg,var(--green),transparent)}.simple-metric.warn::before{background:linear-gradient(90deg,var(--amber),transparent)}.simple-metric.danger::before{background:linear-gradient(90deg,var(--red),transparent)}
+.simple-status-card,.simple-card{border-color:color-mix(in srgb,var(--border) 70%,var(--accent) 18%)}.simple-system-grid div{transition:background var(--transition),transform var(--transition)}.simple-system-grid div:hover{background:color-mix(in srgb,var(--accent) 8%,var(--bg-raised));transform:translateY(-1px)}.simple-card{transition:transform var(--transition),box-shadow var(--transition)}.simple-card:hover{transform:translateY(-3px);box-shadow:0 20px 48px rgba(2,6,23,.14)}
+@media(max-width:980px){.simple-hero-panel{display:none}}@media (prefers-reduced-motion: reduce){.simple-hero::before,.simple-orb{animation:none!important}}
+
 </style>
 </head>
 <body>
@@ -1250,104 +1296,85 @@ body::before{content:'';position:fixed;inset:0;pointer-events:none;background:ra
   <div class="content" id="mainContent" tabindex="-1">
 
     <!-- ══════ DASHBOARD ══════ -->
-    <div class="page active dashboard-redesign" id="page-dashboard">
-      <section class="dash-command-center" aria-label="Dashboard overview">
-        <div class="dash-hero-copy">
-          <div class="dash-hero-main">
-            <div class="dash-eyebrow">Simple SSL Dashboard</div>
-            <h1>See what needs attention, then take action.</h1>
-            <p>A cleaner home screen for everyday SSL and recon work: create a project, run discovery, review alerts, and check recent certificate problems without navigating a complex command center.</p>
-            <div class="dash-cta-row" aria-label="Primary dashboard actions">
-              <button class="btn btn-primary" onclick="openModal('createModal')">+ Create Project</button>
-              <button class="btn" onclick="nav('subfinder')">Run Discovery</button>
-              <button class="btn" onclick="nav('alerts')">Review Alerts</button>
-              <button class="btn" onclick="loadDash()">Refresh</button>
-            </div>
+    <div class="page active dashboard-redesign simple-dashboard" id="page-dashboard">
+      <section class="simple-hero" aria-label="Dashboard overview">
+        <div>
+          <div class="simple-eyebrow">SSL Sentinel</div>
+          <h1>Clean SSL monitoring at a glance.</h1>
+          <p>Track certificate health, open alerts, and scanner status from one calm dashboard.</p>
+          <div class="simple-trust-row" aria-label="Dashboard highlights">
+            <span>Live TLS checks</span>
+            <span>Simple alert review</span>
+            <span>Fast project actions</span>
           </div>
+        </div>
+        <div class="simple-hero-panel" aria-hidden="true">
+          <div class="simple-orb"><span>SSL</span></div>
+          <div class="simple-hero-mini"><strong>Protected view</strong><span>Focused, readable, and ready.</span></div>
+        </div>
+        <div class="simple-actions" aria-label="Dashboard actions">
+          <button class="btn btn-primary" onclick="openModal('createModal')"><span>＋</span>Create Project</button>
+          <button class="btn" onclick="nav('projects')"><span>□</span>View Projects</button>
+          <button class="btn" onclick="loadDash()"><span>↻</span>Refresh</button>
         </div>
       </section>
 
+      <section class="simple-metrics" aria-label="Key metrics">
+        <article class="simple-metric">
+          <div class="simple-metric-top"><span class="simple-metric-icon">🌐</span><span class="simple-metric-label">Total Domains</span></div>
+          <strong id="s-projects">—</strong>
+          <small>Monitored scope</small>
+        </article>
+        <article class="simple-metric good">
+          <div class="simple-metric-top"><span class="simple-metric-icon">✓</span><span class="simple-metric-label">Healthy</span></div>
+          <strong id="s-ok">—</strong>
+          <small>Passing certificates</small>
+        </article>
+        <article class="simple-metric danger">
+          <div class="simple-metric-top"><span class="simple-metric-icon">!</span><span class="simple-metric-label">Certificate Issues</span></div>
+          <strong id="s-mis">—</strong>
+          <small>Needs attention</small>
+        </article>
+        <article class="simple-metric warn">
+          <div class="simple-metric-top"><span class="simple-metric-icon">🔔</span><span class="simple-metric-label">Open Alerts</span></div>
+          <strong id="s-expg">—</strong>
+          <small>Ready for triage</small>
+        </article>
+      </section>
 
-
-      <section class="dash-command-board" aria-label="Live operations command board">
-        <article class="dash-posture-card">
-          <div class="dash-posture-ring" id="dashPostureRing" aria-label="Overall risk score"><div class="dash-posture-ring-inner"><div><div class="dash-posture-score" id="dashPostureScore">—</div><div class="dash-posture-label" id="dashPostureLabel">Loading</div></div></div></div>
-          <div class="dash-posture-copy">
-            <span class="dash-card-kicker">Live posture</span>
-            <h2 id="dashPostureTitle">Building scanner picture…</h2>
-            <p id="dashPostureNarrative">Combining certificate health, active scan state, stale projects, and alert pressure into one operator-ready view.</p>
-            <div class="dash-posture-meta">
-              <span class="dash-mini-pill" id="dashMetaScanned">Scanned projects —</span>
-              <span class="dash-mini-pill" id="dashMetaStale">Needs first scan —</span>
-              <span class="dash-mini-pill" id="dashMetaAlerts">Open alerts —</span>
-            </div>
+      <section class="simple-status-card" aria-label="Scanner health">
+        <div class="simple-section-head">
+          <div>
+            <span class="simple-eyebrow">System status</span>
+            <h2>Scanner health</h2>
+            <p id="riskNarrative">Live scanner status and queue health.</p>
           </div>
-        </article>
-        <article class="dash-action-card">
-          <span class="dash-card-kicker">Smart next actions</span>
-          <h2>Prioritized operator queue</h2>
-          <p class="dash-card-subtitle">Actions update from current risk, coverage, active scans, and unresolved certificate findings.</p>
-          <div class="dash-action-list" id="dashActionList">
-            <div class="dash-action-item"><span class="dash-action-item-icon">⏳</span><div><strong>Loading recommendations</strong><small>Analyzing dashboard telemetry…</small></div><button type="button">…</button></div>
-          </div>
-        </article>
-      </section>
-
-      <section class="dash-coverage-grid" aria-label="Coverage health metrics">
-        <article class="dash-coverage-card good"><span class="dash-card-kicker">Certificate pass rate</span><h2><span class="dash-coverage-value" id="dashHealthyRate">—</span></h2><p>Healthy certificates compared with all tracked domains.</p><div class="dash-coverage-bar"><div class="dash-coverage-fill" id="dashHealthyFill"></div></div></article>
-        <article class="dash-coverage-card warn"><span class="dash-card-kicker">Scan coverage</span><h2><span class="dash-coverage-value" id="dashScanCoverage">—</span></h2><p>Projects with scan evidence available for triage.</p><div class="dash-coverage-bar"><div class="dash-coverage-fill" id="dashScanFill"></div></div></article>
-        <article class="dash-coverage-card bad"><span class="dash-card-kicker">Issue pressure</span><h2><span class="dash-coverage-value" id="dashIssueRate">—</span></h2><p>Mismatch, expiry, and error signals requiring review.</p><div class="dash-coverage-bar"><div class="dash-coverage-fill" id="dashIssueFill"></div></div></article>
-      </section>
-
-      <section class="dash-kpi-grid" aria-label="Key metrics">
-        <article class="dash-kpi-card blue">
-          <span class="dash-kpi-icon">🌐</span>
-          <div><div class="dash-kpi-value" id="s-projects">—</div><div class="dash-kpi-label">Total Domains</div></div>
-        </article>
-        <article class="dash-kpi-card green">
-          <span class="dash-kpi-icon">✅</span>
-          <div><div class="dash-kpi-value" id="s-ok">—</div><div class="dash-kpi-label">Healthy Domains</div></div>
-        </article>
-        <article class="dash-kpi-card red">
-          <span class="dash-kpi-icon">⚠️</span>
-          <div><div class="dash-kpi-value" id="s-mis">—</div><div class="dash-kpi-label">Certificate Issues</div></div>
-        </article>
-        <article class="dash-kpi-card amber">
-          <span class="dash-kpi-icon">🔔</span>
-          <div><div class="dash-kpi-value" id="s-expg">—</div><div class="dash-kpi-label">Open Alerts</div></div>
-        </article>
-      </section>
-
-      <section class="dash-card dash-health-card" aria-label="Scanner health">
-        <div class="dash-card-header">
-          <div><span class="dash-card-kicker">System status</span><h2>Scanner health</h2><p class="dash-card-subtitle" id="riskNarrative">Loading scanner status…</p></div>
-          <span class="dash-live-pill" id="missionState">Ready</span>
+          <span class="simple-pill" id="missionState">Ready</span>
         </div>
-        <div class="dash-system-strip" aria-label="System health">
+        <div class="simple-system-grid" aria-label="System health">
           <div><span>Uptime</span><strong id="sys-uptime">—</strong></div>
           <div><span>Running Scans</span><strong id="sys-running-scans">—</strong></div>
           <div><span>Enabled Projects</span><strong id="sys-enabled-projects">—</strong></div>
-          <div><span>DB Size</span><strong id="sys-db-size">—</strong></div>
+          <div><span>Database</span><strong id="sys-db-size">—</strong></div>
           <div><span>Discovered Hosts</span><strong id="sys-discoveries">—</strong></div>
           <div><span>Unresolved Alerts</span><strong id="sys-unresolved">—</strong></div>
         </div>
-        <div class="visually-hidden" id="riskOrb"><span id="riskNumber">—</span><span id="riskCaption">Signal</span></div>
       </section>
 
-      <section class="dash-secondary-grid" aria-label="Current work">
-        <article class="dash-card">
-          <div class="dash-card-header">
-            <div><span class="dash-card-kicker">Now running</span><h2>Active scans</h2></div>
-            <button class="btn btn-sm btn-primary" onclick="nav('projects')">+ New Project</button>
+      <section class="simple-two-column" aria-label="Current work">
+        <article class="simple-card">
+          <div class="simple-section-head compact">
+            <div><span class="simple-eyebrow">Now running</span><h2>Active scans</h2></div>
+            <button class="btn btn-sm" onclick="nav('projects')">Projects</button>
           </div>
           <div id="dash-active-scans" class="dash-table-slot">
             <div class="empty"><div class="empty-icon">⚡</div><div class="empty-title">No scans running</div><p class="empty-desc">Start a scan from any project.</p></div>
           </div>
         </article>
-        <article class="dash-card">
-          <div class="dash-card-header">
-            <div><span class="dash-card-kicker">Needs review</span><h2>Recent certificate issues</h2></div>
-            <button class="btn btn-sm" onclick="nav('projects')">All Projects →</button>
+        <article class="simple-card">
+          <div class="simple-section-head compact">
+            <div><span class="simple-eyebrow">Needs review</span><h2>Recent certificate issues</h2></div>
+            <button class="btn btn-sm" onclick="nav('alerts')">Alerts</button>
           </div>
           <div id="dash-mismatches" class="dash-table-slot">
             <div class="empty"><div class="empty-icon">✅</div><div class="empty-title">No mismatches detected</div></div>
@@ -1355,10 +1382,9 @@ body::before{content:'';position:fixed;inset:0;pointer-events:none;background:ra
         </article>
       </section>
 
-      <section class="dash-card dash-log-card" aria-hidden="true">
-        <span id="dash-log-status">Idle</span>
-        <div id="dash-logs" class="logs-panel dash-logs"></div>
-      </section>
+      <div class="dashboard-hidden-compat" aria-hidden="true">
+        <div id="dashPostureRing"></div><span id="dashPostureScore"></span><span id="dashPostureLabel"></span><span id="dashPostureTitle"></span><span id="dashPostureNarrative"></span><span id="dashMetaScanned"></span><span id="dashMetaStale"></span><span id="dashMetaAlerts"></span><span id="dashHealthyRate"></span><span id="dashScanCoverage"></span><span id="dashIssueRate"></span><span id="dashHealthyFill"></span><span id="dashScanFill"></span><span id="dashIssueFill"></span><span id="dashActionList"></span><span id="riskOrb"><span id="riskNumber"></span><span id="riskCaption"></span></span><span id="dash-log-status">Idle</span><div id="dash-logs"></div>
+      </div>
     </div>
 
     <div class="page" id="page-logs">
