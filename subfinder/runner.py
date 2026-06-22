@@ -1366,13 +1366,11 @@ def _tool_summary() -> str:
 def _select_standard_passive_sources(passive_sources: Dict[str, EnumerationSource]) -> Dict[str, EnumerationSource]:
     """Select passive sources for standard/manual enumeration.
 
-    Standard mode skips recursive passive lookups and DNS expansion, but the UI
-    promises "all passive sources" for this mode.  Do not silently narrow the
-    source list to the historical quick-source subset: doing so makes the
-    enumeration appear to stop at eight unique sources even though many more
-    integrations are available. Operators that need a smaller or custom source
-    set can still use ``DOMAIN_ENUM_STANDARD_SOURCES`` with a comma-separated
-    source list.
+    The UI's default Standard scan must finish promptly and show results instead
+    of sitting in a long-running state behind slow/rate-limited optional APIs.
+    Use a compact set of generally quick public sources by default, while still
+    allowing operators to request every configured integration with
+    ``DOMAIN_ENUM_STANDARD_SOURCES=all`` or an explicit comma-separated list.
     """
     raw_standard = os.getenv("DOMAIN_ENUM_STANDARD_SOURCES", "").strip()
     if raw_standard:
@@ -1383,7 +1381,18 @@ def _select_standard_passive_sources(passive_sources: Dict[str, EnumerationSourc
         if selected:
             return selected
 
-    return dict(passive_sources)
+    default_standard = (
+        "crtsh",
+        "certspotter",
+        "anubis",
+        "subdomain_center",
+        "hackertarget",
+        "rapiddns",
+        "alienvault_otx",
+        "urlscan",
+    )
+    fast_sources = {name: passive_sources[name] for name in default_standard if name in passive_sources}
+    return fast_sources or dict(passive_sources)
 
 
 def _run_passive_source(source_name: str, source_fn: EnumerationSource, root_domain: str) -> Dict[str, object]:
