@@ -2255,6 +2255,11 @@ let lastSeenAlertCount = null;
 let genericTableObserver = null;
 let pendingLogEntries = [];
 let logFlushTimer = null;
+let pendingNucleiLogEntries = [];
+let nucleiLogFlushTimer = null;
+let activeScansRefreshTimer = null;
+let lastRenderedNucleiLogScanId = null;
+let lastRenderedNucleiLogCount = 0;
 let enumCurPage = 1, enumTotalPages = 1;
 const ENUM_RESULTS_PER_PAGE = 250;
 let opensslRenderTimer = null;
@@ -2462,9 +2467,27 @@ function enhanceGenericSortableTables(root = document) {
 function initGenericTableSorting() {
   enhanceGenericSortableTables();
   if (genericTableObserver) return;
-  const debouncedEnhance = debounce(() => enhanceGenericSortableTables(), 80);
-  genericTableObserver = new MutationObserver(() => debouncedEnhance());
-  genericTableObserver.observe(document.body, { childList: true, subtree: true });
+  const scheduleEnhance = (() => {
+    let pending = false;
+    return () => {
+      if (pending) return;
+      pending = true;
+      const run = () => {
+        pending = false;
+        enhanceGenericSortableTables(document.querySelector('.page.active') || document);
+      };
+      if ('requestIdleCallback' in window) requestIdleCallback(run, { timeout: 500 });
+      else setTimeout(run, 120);
+    };
+  })();
+  genericTableObserver = new MutationObserver((mutations) => {
+    const shouldEnhance = mutations.some(m => [...m.addedNodes].some(node => {
+      if (node.nodeType !== Node.ELEMENT_NODE) return false;
+      return node.matches?.('.table-wrap, table') || node.querySelector?.('.table-wrap, table');
+    }));
+    if (shouldEnhance) scheduleEnhance();
+  });
+  genericTableObserver.observe(document.getElementById('mainContent') || document.body, { childList: true, subtree: true });
 }
 
 // ════════════════════════════════════════════════════════════
@@ -2855,7 +2878,7 @@ function connectSSE() {
     }
     // Refresh dashboard active scans section
     if (document.getElementById('page-dashboard').classList.contains('active')) {
-      refreshActiveScans();
+      queueActiveScansRefresh();
     }
   });
 
@@ -3281,6 +3304,14 @@ function appendLogRow(entry) {
     loadSystemOverview();
     pendingLogEntries = [];
   }, 1000);
+}
+
+function queueActiveScansRefresh() {
+  if (activeScansRefreshTimer) return;
+  activeScansRefreshTimer = setTimeout(() => {
+    activeScansRefreshTimer = null;
+    if (!document.hidden && document.getElementById('page-dashboard').classList.contains('active')) refreshActiveScans();
+  }, 2000);
 }
 
 async function refreshActiveScans() {
@@ -5024,13 +5055,24 @@ function nucleiLogEntryHTML(entry) {
   return `<div class="nuclei-log-row"><span class="nuclei-log-time">${esc(ts)}</span><span class="nuclei-log-stream ${esc(label)}">${esc(label)}</span><span class="nuclei-log-line">${esc(entry.line || '')}</span></div>`;
 }
 
-function appendNucleiLogEntry(entry) {
+function flushNucleiLogEntries() {
+  nucleiLogFlushTimer = null;
   const logEl = document.getElementById('nuclei-log');
-  if (!logEl || !entry) return;
+  if (!logEl || !pendingNucleiLogEntries.length) return;
   if (logEl.querySelector('.nuclei-log-empty')) logEl.innerHTML = '';
-  logEl.insertAdjacentHTML('beforeend', nucleiLogEntryHTML(entry));
+  const fragment = pendingNucleiLogEntries.map(nucleiLogEntryHTML).join('');
+  pendingNucleiLogEntries = [];
+  logEl.insertAdjacentHTML('beforeend', fragment);
   while (logEl.children.length > 650) logEl.firstElementChild?.remove();
   logEl.scrollTop = logEl.scrollHeight;
+}
+
+function appendNucleiLogEntry(entry) {
+  if (!entry) return;
+  pendingNucleiLogEntries.push(entry);
+  if (pendingNucleiLogEntries.length > 200) pendingNucleiLogEntries = pendingNucleiLogEntries.slice(-200);
+  if (nucleiLogFlushTimer) return;
+  nucleiLogFlushTimer = requestAnimationFrame(flushNucleiLogEntries);
 }
 
 async function initNucleiPage() {
@@ -5192,7 +5234,12 @@ function updateNucleiLive(scan) {
     ? `Nuclei scan started · expected to complete around ${scan.estimated_completion_at ? new Date(scan.estimated_completion_at).toLocaleTimeString() : 'soon'} · use Pause, Resume, or Stop while it runs.`
     : `Scanned ${fmt(scan.hosts_scanned || 0)} targets · Findings: ${fmt(scan.findings_total || nucleiFindings.length || 0)} · Status: ${scan.status || 'unknown'}`;
   renderNucleiStatsTerminal(scan);
-  renderNucleiLogEntries(scan.logs || []);
+  const incomingLogCount = (scan.logs || []).length;
+  if (scan.id !== lastRenderedNucleiLogScanId || incomingLogCount > lastRenderedNucleiLogCount) {
+    renderNucleiLogEntries(scan.logs || []);
+    lastRenderedNucleiLogScanId = scan.id;
+    lastRenderedNucleiLogCount = incomingLogCount;
+  }
   rememberNucleiScan(scan);
   renderNucleiRows(nucleiFindings);
   runBtn.disabled = active;
@@ -5283,6 +5330,8 @@ document.addEventListener('visibilitychange', () => {
     dashboardRefreshTimer = null;
     opensslRefreshTimer = null;
     if (scanPollTimer) { clearInterval(scanPollTimer); scanPollTimer = null; }
+    clearTimeout(activeScansRefreshTimer);
+    activeScansRefreshTimer = null;
     clearTimeout(sseReconnectTimer);
     sseReconnectTimer = null;
     if (sseConnection) { sseConnection.close(); sseConnection = null; }
