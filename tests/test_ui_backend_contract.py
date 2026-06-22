@@ -32,6 +32,13 @@ def test_subfinder_job_history_shows_root_domains():
     assert "Enumeration Found" in TEMPLATE
 
 
+def test_domain_enumeration_results_have_pagination_controls():
+    assert 'id="sf-enum-pagination"' in TEMPLATE
+    assert "ENUM_RESULTS_PER_PAGE" in TEMPLATE
+    assert "function changeEnumPage(dir)" in TEMPLATE
+    assert "Page ${enumCurPage} of ${enumTotalPages}" in TEMPLATE
+
+
 def test_project_interval_persistence_matches_ui_contract(tmp_path, monkeypatch):
     """Database project helpers should preserve the interval range shown in the UI."""
     sys.path.insert(0, str(ROOT))
