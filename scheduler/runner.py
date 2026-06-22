@@ -15,7 +15,7 @@ log = logging.getLogger(__name__)
 # ── Shared constants (used by subfinder module too) ───────────────────────────
 BATCH_SIZE = 500
 PROGRESS_UPDATE_EVERY = 500
-MAX_WORKERS = int(os.getenv("SSL_MAX_WORKERS", "50"))
+MAX_WORKERS = int(os.getenv("SSL_MAX_WORKERS", "200"))
 SCAN_STATE_TTL_SECONDS = int(os.getenv("SCAN_STATE_TTL_SECONDS", "3600"))
 SCAN_STATE_MAX_COMPLETED = int(os.getenv("SCAN_STATE_MAX_COMPLETED", "100"))
 
@@ -112,8 +112,7 @@ def run_project_scan(project_id: str, triggered_by: str = "manual") -> Optional[
     from db.database import (
         project_get, project_hosts, scan_create, results_batch_save,
         scan_finish, scan_update, scan_progress,
-        alert_add, alerts_unsent, alert_mark_sent, alerts_unseen_count, alert_settings_get,
-        asset_backfill_project
+        alert_add, alerts_unsent, alert_mark_sent, alerts_unseen_count, alert_settings_get
     )
     from core.ssl_checker import run_checker
     from alerts.notifiers import AlertManager
@@ -160,7 +159,7 @@ def run_project_scan(project_id: str, triggered_by: str = "manual") -> Optional[
             if len(result_batch) >= BATCH_SIZE:
                 batch = result_batch[:]
                 result_batch.clear()
-                results_batch_save(sid, project_id, batch, backfill_assets=False)
+                results_batch_save(sid, project_id, batch)
                 for h, issue, detail, scope in alert_batch:
                     alert_add(project_id, h, issue, detail, sid, mismatch_scope=scope)
                 alert_batch.clear()
@@ -183,10 +182,9 @@ def run_project_scan(project_id: str, triggered_by: str = "manual") -> Optional[
 
         with lock:
             if result_batch:
-                results_batch_save(sid, project_id, result_batch, backfill_assets=False)
+                results_batch_save(sid, project_id, result_batch)
             for h, issue, detail, scope in alert_batch:
                 alert_add(project_id, h, issue, detail, sid, mismatch_scope=scope)
-        asset_backfill_project(project_id)
         publish("alert_update", {"unseen_count": alerts_unseen_count()})
         if was_stopped:
             done = done_count[0]
