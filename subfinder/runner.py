@@ -1959,7 +1959,7 @@ def run_domain_enumeration_scan(domain: str, triggered_by: str = "manual", depth
     # path in fresh deployments, worker processes, or direct CLI/test usage.
     # Ensure the domain enumeration tables exist before writing the scan row so
     # users do not see a generic "Enumeration failed: no such table" error.
-    db.ensure_schema()
+    db.init_db()
 
     scan_id = db.domain_enum_scan_create(
         root,
