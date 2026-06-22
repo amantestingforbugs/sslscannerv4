@@ -771,7 +771,7 @@ def test_standard_domain_enumeration_skips_deep_dns_stages(monkeypatch):
     assert result["source_map"] == {"passive": ["www.example.com"], "subfinder": ["api.example.com"]}
 
 
-def test_standard_domain_enumeration_uses_all_passive_sources_by_default(monkeypatch):
+def test_standard_domain_enumeration_uses_fast_passive_sources_by_default(monkeypatch):
     calls = []
 
     monkeypatch.setattr(
@@ -790,9 +790,9 @@ def test_standard_domain_enumeration_uses_all_passive_sources_by_default(monkeyp
 
     result = runner._run_subdomain_enumeration(["example.com"], depth_mode="standard")
 
-    assert result["found"] == ["ct.example.com", "slow.example.com"]
+    assert result["found"] == ["ct.example.com"]
     assert "crtsh" in calls
-    assert "slow_optional" in calls
+    assert "slow_optional" not in calls
     assert ("subfinder", 45) in calls
 
 
