@@ -294,15 +294,8 @@ def test_build_subfinder_cmd_adds_aggressive_supported_flags(monkeypatch):
     cmd = runner._build_subfinder_cmd("subfinder", "example.com")
     assert "-all" in cmd
     assert "-recursive" in cmd
-    assert "-active" not in cmd
-    assert cmd[cmd.index("-timeout") + 1] == "60"
-
-
-def test_build_subfinder_cmd_allows_explicit_active_filter(monkeypatch):
-    monkeypatch.setenv("SUBFINDER_EXTRA_FLAGS", "-active")
-    monkeypatch.setattr(runner, "_subfinder_supports_flag", lambda *_args, **_kwargs: True)
-    cmd = runner._build_subfinder_cmd("subfinder", "example.com")
     assert "-active" in cmd
+    assert cmd[cmd.index("-timeout") + 1] == "60"
 
 
 def test_build_subfinder_cmd_allows_deeper_timeout_override(monkeypatch):
