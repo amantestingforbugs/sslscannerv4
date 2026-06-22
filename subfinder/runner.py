@@ -632,7 +632,7 @@ def _ordered_bruteforce_candidates(root_domain: str, seed_hosts: List[str]) -> L
 
 def _bruteforce_dns_hosts(root_domain: str, seed_hosts: List[str], max_candidates: int = 0, resolve_timeout: Optional[int] = None) -> List[str]:
     if max_candidates <= 0:
-        max_candidates = _env_int("DNS_BRUTEFORCE_MAX_CANDIDATES", 5000, minimum=1, maximum=1_000_000)
+        max_candidates = _env_int("DNS_BRUTEFORCE_MAX_CANDIDATES", 20000, minimum=1, maximum=1_000_000)
     candidates = _ordered_bruteforce_candidates(root_domain, seed_hosts)
     if max_candidates > 0:
         candidates = candidates[:max_candidates]
@@ -642,7 +642,7 @@ def _bruteforce_dns_hosts(root_domain: str, seed_hosts: List[str], max_candidate
     if not keep_wildcards:
         wildcard_ips = _wildcard_dns_ips(root_domain)
     workers = max(8, min(256, len(candidates) or 1))
-    phase_timeout = resolve_timeout if resolve_timeout is not None else _env_int("DNS_BRUTEFORCE_RESOLVE_TIMEOUT_SECONDS", 45, minimum=1, maximum=3600)
+    phase_timeout = resolve_timeout if resolve_timeout is not None else _env_int("DNS_BRUTEFORCE_RESOLVE_TIMEOUT_SECONDS", 180, minimum=1, maximum=3600)
     rows = _resolve_hosts_with_deadline(candidates, workers=workers, timeout=phase_timeout, phase_name="DNS brute-force resolution")
     for host, ips in rows.items():
         if ips and (keep_wildcards or not wildcard_ips or not ips.issubset(wildcard_ips)):
@@ -1508,9 +1508,9 @@ def _run_recursive_passive_enumeration(
         return {"found": [], "source_counts": {}, "raw_records": []}
 
     max_depth = _env_int("SUBDOMAIN_DEEP_SCAN_DEPTH", 4, minimum=1, maximum=10)
-    targets_per_root = _env_int("SUBDOMAIN_DEEP_TARGETS_PER_ROOT", 25, minimum=1, maximum=1000)
-    max_tasks = _env_int("SUBDOMAIN_DEEP_MAX_TASKS", 250, minimum=1, maximum=10000)
-    phase_timeout = _env_int("SUBDOMAIN_DEEP_PHASE_TIMEOUT_SECONDS", 45, minimum=10, maximum=7200)
+    targets_per_root = _env_int("SUBDOMAIN_DEEP_TARGETS_PER_ROOT", 80, minimum=1, maximum=1000)
+    max_tasks = _env_int("SUBDOMAIN_DEEP_MAX_TASKS", 1200, minimum=1, maximum=10000)
+    phase_timeout = _env_int("SUBDOMAIN_DEEP_PHASE_TIMEOUT_SECONDS", 420, minimum=30, maximum=7200)
 
     known = sorted(set(discovered))
     total_found: Set[str] = set()
@@ -1630,13 +1630,13 @@ def _generate_permutation_candidates(root_domain: str, known_hosts: List[str], m
 
 def _permutation_dns_hosts(root_domain: str, known_hosts: List[str], max_candidates: int = 0) -> List[str]:
     if max_candidates <= 0:
-        max_candidates = _env_int("DNS_PERMUTATION_MAX_CANDIDATES", 5000, minimum=1, maximum=1_000_000)
+        max_candidates = _env_int("DNS_PERMUTATION_MAX_CANDIDATES", 20000, minimum=1, maximum=1_000_000)
     candidates = sorted(_generate_permutation_candidates(root_domain, known_hosts, max_candidates=max_candidates))
     if not candidates:
         return []
     resolved: List[str] = []
     workers = max(8, min(256, len(candidates)))
-    phase_timeout = _env_int("DNS_PERMUTATION_RESOLVE_TIMEOUT_SECONDS", 45, minimum=1, maximum=3600)
+    phase_timeout = _env_int("DNS_PERMUTATION_RESOLVE_TIMEOUT_SECONDS", 180, minimum=1, maximum=3600)
     rows = _resolve_hosts_with_deadline(candidates, workers=workers, timeout=phase_timeout, phase_name="DNS permutation resolution")
     for host, ips in rows.items():
         if ips:
@@ -1661,7 +1661,7 @@ def _run_subdomain_enumeration(
     passive_sources = _passive_enumeration_sources()
     total_timeout = _env_int(
         "DOMAIN_ENUM_TOTAL_TIMEOUT_SECONDS" if aggressive else "DOMAIN_ENUM_STANDARD_TOTAL_TIMEOUT_SECONDS",
-        180 if aggressive else 60,
+        600 if aggressive else 60,
         minimum=30,
         maximum=7200,
     )
@@ -1706,17 +1706,7 @@ def _run_subdomain_enumeration(
     try:
         future_map = {}
         for root_domain in root_domains:
-            subfinder_timeout = _remaining_seconds(
-                deadline,
-                _env_int(
-                    "DOMAIN_ENUM_SUBFINDER_TIMEOUT_SECONDS" if aggressive else "DOMAIN_ENUM_STANDARD_SUBFINDER_TIMEOUT_SECONDS",
-                    60 if aggressive else 45,
-                    minimum=10,
-                    maximum=600,
-                ),
-                minimum=1,
-            )
-            future_map[enum_pool.submit(_run_subfinder_for_root, root_domain, subfinder_timeout)] = ("subfinder", root_domain)
+            future_map[enum_pool.submit(_run_subfinder_for_root, root_domain, 360 if aggressive else _env_int("DOMAIN_ENUM_STANDARD_SUBFINDER_TIMEOUT_SECONDS", 45, minimum=10, maximum=600))] = ("subfinder", root_domain)
             future_map.update(
                 {
                     enum_pool.submit(_run_passive_source, source_name, source_fn, root_domain): (source_name, root_domain)
@@ -1724,7 +1714,7 @@ def _run_subdomain_enumeration(
                 }
             )
 
-        phase_timeout = _env_int("DOMAIN_ENUM_PHASE_TIMEOUT_SECONDS" if aggressive else "DOMAIN_ENUM_STANDARD_PHASE_TIMEOUT_SECONDS", 60 if aggressive else 45, minimum=10, maximum=3600)
+        phase_timeout = _env_int("DOMAIN_ENUM_PHASE_TIMEOUT_SECONDS" if aggressive else "DOMAIN_ENUM_STANDARD_PHASE_TIMEOUT_SECONDS", 360 if aggressive else 45, minimum=10, maximum=3600)
         for fut, source_info, timed_out in _iter_completed_with_deadline(future_map, _remaining_seconds(deadline, phase_timeout, minimum=1), "subdomain enumeration"):
             source_name, root_domain = source_info
             if timed_out:
@@ -1882,7 +1872,7 @@ def _run_subdomain_enumeration(
         for root_domain in root_domains:
             future_map[dns_pool.submit(_bruteforce_dns_hosts, root_domain, seed_hosts, 0)] = ("dns_bruteforce", root_domain)
             future_map[dns_pool.submit(_permutation_dns_hosts, root_domain, seed_hosts, 0)] = ("dns_permutation", root_domain)
-        phase_timeout = _env_int("DOMAIN_DNS_ENUM_PHASE_TIMEOUT_SECONDS", 45, minimum=10, maximum=3600)
+        phase_timeout = _env_int("DOMAIN_DNS_ENUM_PHASE_TIMEOUT_SECONDS", 180, minimum=15, maximum=3600)
         for fut, source_info, timed_out in _iter_completed_with_deadline(future_map, _remaining_seconds(deadline, phase_timeout, minimum=1), "subdomain DNS enumeration"):
             source_name, root_domain = source_info
             if timed_out:

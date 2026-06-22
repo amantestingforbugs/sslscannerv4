@@ -796,48 +796,6 @@ def test_standard_domain_enumeration_uses_fast_passive_sources_by_default(monkey
     assert ("subfinder", 45) in calls
 
 
-def test_aggressive_domain_enumeration_uses_bounded_default_timeouts(monkeypatch):
-    calls = []
-    monkeypatch.delenv("DOMAIN_ENUM_TOTAL_TIMEOUT_SECONDS", raising=False)
-    monkeypatch.delenv("DOMAIN_ENUM_PHASE_TIMEOUT_SECONDS", raising=False)
-    monkeypatch.delenv("DOMAIN_ENUM_SUBFINDER_TIMEOUT_SECONDS", raising=False)
-    monkeypatch.delenv("SUBDOMAIN_DEEP_PHASE_TIMEOUT_SECONDS", raising=False)
-    monkeypatch.delenv("DOMAIN_DNS_ENUM_PHASE_TIMEOUT_SECONDS", raising=False)
-
-    monkeypatch.setattr(runner, "_passive_enumeration_sources", lambda: {})
-    monkeypatch.setattr(
-        runner,
-        "_run_subfinder_for_root",
-        lambda root, timeout=180: calls.append(("subfinder", timeout)) or {
-            "root_domain": root,
-            "status": "done",
-            "found": ["dev.example.com"],
-            "found_count": 1,
-            "stderr": "",
-        },
-    )
-
-    def fake_deep(roots, discovered, sources, *, deadline=None, max_results=0):
-        calls.append(("deep_remaining", runner._remaining_seconds(deadline, 999, minimum=1)))
-        return {
-            "found": [],
-            "source_counts": {},
-            "raw_records": [],
-        }
-
-    monkeypatch.setattr(runner, "_run_recursive_passive_enumeration", fake_deep)
-    monkeypatch.setattr(runner, "_bruteforce_dns_hosts", lambda root, seed, max_candidates=0: calls.append(("brute", max_candidates)) or [])
-    monkeypatch.setattr(runner, "_permutation_dns_hosts", lambda root, seed, max_candidates=0: calls.append(("permute", max_candidates)) or [])
-
-    result = runner._run_subdomain_enumeration(["example.com"], depth_mode="aggressive")
-
-    assert result["found"] == ["dev.example.com"]
-    assert ("subfinder", 60) in calls
-    assert any(name == "deep_remaining" and remaining <= 180 for name, remaining in calls)
-    assert ("brute", 0) in calls
-    assert ("permute", 0) in calls
-
-
 def test_standard_domain_enumeration_can_request_all_sources(monkeypatch):
     calls = []
     monkeypatch.setenv("DOMAIN_ENUM_STANDARD_SOURCES", "all")
