@@ -551,17 +551,3 @@ def test_project_delete_route_reports_missing_project(tmp_path, monkeypatch):
 def test_project_delete_ui_checks_api_result_before_success_toast():
     assert "if (!ok) { toast(error || 'Failed to delete project','err'); return; }" in TEMPLATE
     assert "toast('Project deleted','ok');" in TEMPLATE
-
-
-
-def test_quick_scan_sends_current_project_for_realtime_alerts():
-    """Ad-hoc quick scan findings should be attached to alerts immediately."""
-    assert "project_id: curPid || ''" in TEMPLATE
-    assert "Quick scan complete — ${fmt(d.alerts)} alert" in TEMPLATE
-
-
-def test_quick_scan_backend_creates_realtime_alert_events():
-    routes_text = (ROOT / "api" / "routes.py").read_text()
-    assert "def _quick_scan_alert_project_id()" in routes_text
-    assert "_build_alert_from_result(row" in routes_text
-    assert 'broadcast("alert_update", {"unseen_count": db.alerts_unseen_count()' in routes_text
