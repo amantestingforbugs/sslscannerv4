@@ -912,14 +912,6 @@ html[data-density="comfortable"] .card-body,html[data-density="comfortable"] .mo
 .skeleton{position:relative;overflow:hidden;background:var(--bg-raised);border-radius:12px;min-height:44px}.skeleton::after{content:'';position:absolute;inset:0;transform:translateX(-100%);background:linear-gradient(90deg,transparent,color-mix(in srgb,var(--accent) 12%,transparent),transparent);animation:shimmer 1.25s infinite}@keyframes shimmer{100%{transform:translateX(100%)}}
 
 
-/* High-priority leads command-center upgrade */
-.bounty-hero{position:relative;overflow:hidden;display:grid;grid-template-columns:minmax(0,1.25fr) minmax(300px,.75fr);gap:16px;margin-bottom:14px;border:1px solid color-mix(in srgb,var(--red) 28%,var(--border));border-radius:24px;padding:18px;background:linear-gradient(135deg,color-mix(in srgb,var(--red-dim) 34%,var(--bg-surface)),color-mix(in srgb,var(--accent-dim) 24%,var(--bg-raised)));box-shadow:0 18px 48px rgba(2,6,23,.14)}
-.bounty-hero::after{content:'';position:absolute;right:-90px;top:-110px;width:260px;height:260px;border-radius:999px;background:radial-gradient(circle,color-mix(in srgb,var(--red) 24%,transparent),transparent 68%);pointer-events:none}.bounty-hero h2{font-size:clamp(24px,3vw,38px);line-height:1;letter-spacing:-.06em;margin:5px 0 8px}.bounty-hero p{color:var(--text-secondary);font-size:13px;line-height:1.5;max-width:74ch}.bounty-hero-actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:14px}.bounty-hero-panel{position:relative;z-index:1;border:1px solid color-mix(in srgb,var(--border) 72%,var(--accent));border-radius:18px;padding:14px;background:color-mix(in srgb,var(--bg-surface) 78%,transparent)}
-.bounty-lane-strip{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-top:10px}.bounty-lane-pill{border:1px solid var(--border);border-radius:14px;padding:9px;background:color-mix(in srgb,var(--bg-raised) 76%,transparent)}.bounty-lane-pill strong{display:block;font-size:20px;letter-spacing:-.04em}.bounty-lane-pill span{font-size:10px;font-weight:900;color:var(--text-muted);letter-spacing:.08em;text-transform:uppercase}.bounty-lane-pill.p0{border-color:color-mix(in srgb,var(--red) 50%,var(--border))}.bounty-lane-pill.p1{border-color:color-mix(in srgb,var(--amber) 48%,var(--border))}
-.bounty-filter-rail{display:flex;gap:8px;flex-wrap:wrap;margin:0 0 12px}.bounty-filter-rail button{border:1px solid var(--border);background:var(--bg-raised);color:var(--text-secondary);border-radius:999px;padding:7px 11px;font-size:12px;font-weight:800}.bounty-filter-rail button.active{border-color:var(--accent);background:var(--accent-dim);color:var(--accent)}
-.bounty-focus-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:8px;margin-top:10px}.bounty-focus-card{border:1px solid var(--border);border-radius:16px;padding:11px;background:color-mix(in srgb,var(--bg-raised) 78%,transparent)}.bounty-focus-top{display:flex;justify-content:space-between;gap:8px;align-items:center}.bounty-focus-host{font-family:var(--mono);font-size:12px;font-weight:850;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.bounty-focus-action{font-size:11.5px;color:var(--text-secondary);line-height:1.4;margin-top:7px}
-.bounty-lead-card{display:grid;grid-template-columns:110px minmax(230px,1.05fr) minmax(180px,.8fr) minmax(240px,1fr);gap:14px;align-items:start}.bounty-score-orb{width:76px;height:76px;border-radius:22px;display:grid;place-items:center;background:linear-gradient(145deg,var(--accent-dim),color-mix(in srgb,var(--red-dim) 45%,transparent));border:1px solid color-mix(in srgb,var(--accent) 36%,var(--border));font-size:27px;font-weight:950}.bounty-lead-host{font-family:var(--mono);font-size:13px;font-weight:900}.bounty-mini-meta{display:flex;gap:5px;flex-wrap:wrap;margin-top:6px}.bounty-question{font-size:12px;color:var(--text-secondary);line-height:1.4;margin-top:7px}.bounty-action-box{border:1px dashed color-mix(in srgb,var(--accent) 42%,var(--border));border-radius:12px;padding:9px;background:var(--accent-dim);font-size:11.5px;color:var(--text-secondary);line-height:1.4}.bounty-evidence-list{margin:0;padding-left:16px;color:var(--text-secondary);font-size:12px;line-height:1.45}.bounty-row-detail summary{cursor:pointer;color:var(--accent);font-size:11px;font-weight:800;margin-top:7px}.bounty-row-detail ul{margin-top:6px}@media(max-width:1050px){.bounty-hero{grid-template-columns:1fr}.bounty-lead-card{grid-template-columns:1fr}.bounty-lane-strip{grid-template-columns:repeat(2,1fr)}}
-
 /* Beginner-first customer experience */
 .beginner-toggle{display:flex;align-items:center;justify-content:space-between;gap:8px;margin:8px 10px 10px;padding:10px;border:1px solid color-mix(in srgb,var(--accent) 28%,var(--border));border-radius:14px;background:var(--accent-dim)}
 .beginner-toggle-copy{min-width:0}.beginner-toggle-title{font-size:12px;font-weight:800;color:var(--text-primary)}.beginner-toggle-sub{font-size:10.5px;color:var(--text-muted);line-height:1.25;margin-top:2px}
@@ -1828,19 +1820,6 @@ html[data-performance="fast"] tbody tr{transition:none!important}
           <button class="btn btn-primary" onclick="loadBountyLeads()">Refresh Leads</button>
         </div>
       </div>
-      <div class="bounty-hero">
-        <div>
-          <div class="dash-eyebrow">High signal validation queue</div>
-          <h2>Turn recon into a ranked, evidence-backed bounty worklist.</h2>
-          <p>Prioritize assets by lane, confidence, business impact, and safe first action. Every recommendation stays scope-first and avoids exploit execution.</p>
-          <div class="bounty-hero-actions"><button class="btn btn-primary" onclick="loadXbowBrief()">Regenerate operator brief</button><button class="btn" onclick="loadBountyCopilot()">Build AI playbooks</button></div>
-        </div>
-        <div class="bounty-hero-panel">
-          <div class="xbow-kicker">Lane heatmap</div>
-          <div class="xbow-title">Validation pressure</div>
-          <div class="bounty-lane-strip" id="bounty-lane-strip"></div>
-        </div>
-      </div>
       <div class="table-toolbar">
         <select class="form-input" id="bounty-project-select" style="max-width:260px" onchange="loadBountyLeads()"><option value="">All projects</option></select>
         <div class="search-input">
@@ -1848,14 +1827,6 @@ html[data-performance="fast"] tbody tr{transition:none!important}
           <input type="text" id="bounty-search" placeholder="Search host, e.g. admin, api, staging...">
         </div>
         <span id="bounty-count" style="font-size:12px;color:var(--text-muted)">0 leads</span><span id="bounty-v5-count" class="badge badge-info">v5 packs loading</span>
-      </div>
-      <div class="bounty-filter-rail" id="bounty-filter-rail" aria-label="Lead filters">
-        <button class="active" data-filter="all" onclick="setBountyFilter('all')">All leads</button>
-        <button data-filter="P0" onclick="setBountyFilter('P0')">P0 today</button>
-        <button data-filter="P1" onclick="setBountyFilter('P1')">P1 high</button>
-        <button data-filter="quick" onclick="setBountyFilter('quick')">Quick wins</button>
-        <button data-filter="protected" onclick="setBountyFilter('protected')">Auth boundaries</button>
-        <button data-filter="tls" onclick="setBountyFilter('tls')">TLS/routing</button>
       </div>
       <div class="stats-grid" id="bounty-summary-grid" style="margin-bottom:12px">
         <div class="stat-card"><div class="stat-label">P0 Today</div><div class="stat-value" id="bounty-stat-p0">—</div><div class="stat-sub">Critical validation lane</div></div>
@@ -1921,14 +1892,13 @@ html[data-performance="fast"] tbody tr{transition:none!important}
         <div class="card-body" style="font-size:12.5px;color:var(--text-secondary)">
           <b>Company/Bounty workflow:</b> <span id="bounty-exec-summary">Scores are recon prioritization hints, not vulnerability claims.</span>
           <div id="bounty-surface-breakdown" style="margin-top:8px;display:flex;gap:6px;flex-wrap:wrap"></div>
-          <div id="bounty-focus-queue" class="bounty-focus-grid"></div>
           Always verify scope and program rules before testing.
         </div>
       </div>
       <div class="card">
         <div class="table-wrap">
           <table>
-            <thead><tr><th>Prioritized lead card</th></tr></thead>
+            <thead><tr><th>Score</th><th>Lead</th><th>Project</th><th>HTTP</th><th>Evidence</th><th>Next Steps</th></tr></thead>
             <tbody id="bounty-body"></tbody>
           </table>
         </div>
@@ -4910,29 +4880,6 @@ async function loadXbowBrief() {
   renderXbowBrief(data || {});
 }
 
-let bountyRowsCache = [];
-let bountyActiveFilter = 'all';
-
-function setBountyFilter(filter) {
-  bountyActiveFilter = filter || 'all';
-  document.querySelectorAll('#bounty-filter-rail button').forEach(b => b.classList.toggle('active', b.dataset.filter === bountyActiveFilter));
-  renderBountyRows(bountyRowsCache);
-}
-
-function renderBountyLaneStrip(summary) {
-  const el = document.getElementById('bounty-lane-strip');
-  if (!el) return;
-  const counts = summary.lane_counts || {};
-  el.innerHTML = ['P0','P1','P2','P3'].map(l => `<div class="bounty-lane-pill ${l.toLowerCase()}"><span>${l}</span><strong>${fmt(counts[l] || 0)}</strong><span>${l === 'P0' ? 'today' : l === 'P1' ? '24 hours' : l === 'P2' ? 'triage' : 'watch'}</span></div>`).join('');
-}
-
-function renderBountyFocusQueue(summary) {
-  const el = document.getElementById('bounty-focus-queue');
-  if (!el) return;
-  const rows = summary.focus_queue || [];
-  el.innerHTML = rows.length ? rows.map(r => `<div class="bounty-focus-card"><div class="bounty-focus-top"><div class="bounty-focus-host">${esc(r.hostname || '—')}</div><span class="badge badge-info">${esc(r.lane || 'P3')} · ${fmt(r.score || 0)}</span></div><div class="bounty-focus-action"><b>${esc(r.focus || 'Recon')}:</b> ${esc(r.first_action || 'Enrich this host before testing.')}</div></div>`).join('') : '';
-}
-
 function renderBountySummary(summary) {
   const set = (id, val) => { const el = document.getElementById(id); if (el) el.textContent = fmt(val || 0); };
   set('bounty-stat-p0', summary.p0);
@@ -4941,8 +4888,6 @@ function renderBountySummary(summary) {
   set('bounty-stat-active', summary.active_http);
   set('bounty-stat-protected', summary.protected_http);
   set('bounty-stat-tls', summary.tls_anomalies);
-  renderBountyLaneStrip(summary);
-  renderBountyFocusQueue(summary);
   const exec = document.getElementById('bounty-exec-summary');
   if (exec) exec.textContent = summary.executive_summary || 'Scores are recon prioritization hints, not vulnerability claims.';
   const breakdown = document.getElementById('bounty-surface-breakdown');
@@ -5007,48 +4952,23 @@ async function loadBountyLeads() {
   renderBountyPriorityLanes(rows);
   if (!rows.length) {
     renderBountyPriorityLanes([]);
-    body.innerHTML = '<tr><td style="text-align:center;padding:20px;color:var(--text-muted)">No leads yet. Run Subfinder and HTTP enrichment to populate prioritized bounty targets.</td></tr>';
+    body.innerHTML = '<tr><td colspan="6" style="text-align:center;padding:20px;color:var(--text-muted)">No leads yet. Run Subfinder and HTTP enrichment to populate prioritized bounty targets.</td></tr>';
     return;
   }
-  bountyRowsCache = rows;
-  renderBountyRows(rows);
-}
-
-function bountyFilterRows(rows) {
-  return (rows || []).filter(r => {
-    const lane = (r.priority || {}).lane;
-    if (bountyActiveFilter === 'all') return true;
-    if (bountyActiveFilter === 'quick') return !!r.quick_win;
-    if (bountyActiveFilter === 'protected') return [401, 403].includes(r.http_status_code);
-    if (bountyActiveFilter === 'tls') return !!(r.is_mismatch || r.is_expired || r.is_expiring);
-    return lane === bountyActiveFilter;
-  });
-}
-
-function renderBountyRows(rows) {
-  const body = document.getElementById('bounty-body');
-  if (!body) return;
-  const filtered = bountyFilterRows(rows);
-  if (!filtered.length) {
-    body.innerHTML = '<tr><td style="text-align:center;padding:20px;color:var(--text-muted)">No leads match this filter.</td></tr>';
-    return;
-  }
-  body.innerHTML = filtered.map(r => {
+  body.innerHTML = rows.map(r => {
     const url = r.http_final_url || (r.http_scheme ? `${r.http_scheme}://${r.hostname}` : `https://${r.hostname}`);
-    const evidence = (r.evidence || []).slice(0, 5).map(e => `<li>${esc(e)}</li>`).join('');
-    const plan = ((r.validation_plan || {}).checklist || r.next_steps || []).slice(0, 4).map(e => `<li>${esc(e)}</li>`).join('');
-    const fps = ((r.validation_plan || {}).false_positive_checks || []).slice(0, 3).map(e => `<li>${esc(e)}</li>`).join('');
+    const evidence = (r.evidence || []).map(e => `<li>${esc(e)}</li>`).join('');
+    const steps = (r.next_steps || []).slice(0, 3).map(e => `<li>${esc(e)}</li>`).join('');
+    const plan = ((r.validation_plan || {}).checklist || []).slice(0, 2).map(e => `<li>${esc(e)}</li>`).join('');
     const priority = r.priority || {};
-    const focus = r.hunter_focus || {};
-    const packs = (r.v5_signal_packs || []).slice(0,3).map(p => `<span class="badge badge-info">v5 ${esc(p.id || p.name)}</span>`).join('');
-    return `<tr><td>
-      <div class="bounty-lead-card">
-        <div><div class="bounty-score-orb">${fmt(r.score || 0)}</div><div class="bounty-mini-meta">${bountySeverityBadge(r.severity)}<span class="badge badge-info">${esc(priority.lane || 'P3')}</span><span class="badge badge-info">${esc(r.triage_effort || '30 min')}</span></div></div>
-        <div><div class="bounty-lead-host">${esc(focus.icon || '🧭')} ${esc(r.hostname)}</div><div style="font-size:12px;color:var(--text-secondary);margin-top:3px">${esc(r.lead_type || 'Recon candidate')} · ${esc(r.project_name || '—')}</div><div class="bounty-question">${esc(focus.question || (r.business_impact || {}).primary || 'Impact hypothesis pending enrichment')}</div><div class="bounty-mini-meta">${packs}${r.quick_win ? '<span class="badge badge-mismatch">quick win</span>' : ''}<span class="badge badge-info">${esc((r.business_impact || {}).confidence_label || 'confidence')}</span></div></div>
-        <div><div class="xbow-kicker">HTTP + impact</div><div style="font-weight:850">HTTP ${r.http_status_code ?? '—'}</div><a href="${esc(url)}" target="_blank" rel="noopener" style="font-size:11px;color:var(--accent)">${esc((r.http_page_title || r.http_final_url || 'open target').slice(0, 90))}</a><div class="bounty-question">${esc((r.business_impact || {}).primary || 'Business impact pending enrichment')}</div></div>
-        <div><div class="bounty-action-box"><b>First safe action:</b> ${esc(focus.first_action || 'Capture baseline evidence before testing.')}<br><b>Lane reason:</b> ${esc(priority.reason || 'Ranked by available recon signals.')}</div><details class="bounty-row-detail"><summary>Evidence, plan, and false-positive checks</summary><ul class="bounty-evidence-list">${evidence}</ul><ul class="bounty-evidence-list">${plan}</ul><ul class="bounty-evidence-list">${fps}</ul></details></div>
-      </div>
-    </td></tr>`;
+    return `<tr>
+      <td data-sort-value="${Number(r.score || 0)}"><div style="font-size:22px;font-weight:800">${fmt(r.score || 0)}</div>${bountySeverityBadge(r.severity)}<div style="margin-top:5px"><span class="badge badge-info">${esc(priority.lane || 'P3')} · ${esc(priority.sla || 'Monitor')}</span></div></td>
+      <td><div style="font-family:var(--mono);font-size:12px;font-weight:700">${esc(r.hostname)}</div><div style="font-size:12px;color:var(--text-secondary)">${esc(r.lead_type || 'Recon candidate')}</div><div style="font-size:11px;color:var(--text-muted);margin-top:4px">${esc((r.business_impact || {}).primary || 'Impact hypothesis pending enrichment')}</div><div style="margin-top:5px;display:flex;gap:4px;flex-wrap:wrap">${(r.v5_signal_packs || []).slice(0,2).map(p => `<span class="badge badge-info">v5 ${esc(p.id || p.name)}</span>`).join('')}${r.quick_win ? '<span class="badge badge-mismatch">quick win</span>' : ''}</div></td>
+      <td>${esc(r.project_name || '—')}</td>
+      <td><div>${r.http_status_code ?? '—'}</div><a href="${esc(url)}" target="_blank" rel="noopener" style="font-size:11px;color:var(--accent)">${esc((r.http_page_title || r.http_final_url || 'open target').slice(0, 80))}</a></td>
+      <td><ul style="margin-left:16px;color:var(--text-secondary);font-size:12px">${evidence}</ul></td>
+      <td><ul style="margin-left:16px;color:var(--text-secondary);font-size:12px">${plan || steps}</ul></td>
+    </tr>`;
   }).join('');
 }
 
