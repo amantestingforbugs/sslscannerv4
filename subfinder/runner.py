@@ -426,20 +426,6 @@ def _registrable_domain(host: str) -> Optional[str]:
     return root or None
 
 
-def _enumeration_root_domain(domain: str) -> str:
-    """Normalize user input to the registrable domain used by OSINT sources.
-
-    Users frequently paste a URL or a single hostname such as
-    ``www.example.com`` into the standalone subdomain enumeration form. Most
-    passive APIs and tools expect the apex/registrable domain, so querying the
-    exact pasted hostname can make an otherwise healthy enumeration look empty.
-    """
-    host = _normalize_host(domain)
-    if not host or "." not in host or not _HOST_RE.match(host):
-        return ""
-    return _registrable_domain(host) or host
-
-
 def _extract_project_root_domains(hosts: List[str]) -> List[str]:
     """Extract registrable root domains from a project host list."""
     normalized: List[str] = []
@@ -1690,12 +1676,13 @@ def _run_subdomain_enumeration(root_domains: List[str], depth_mode: str = "aggre
         enum_pool.shutdown(wait=False, cancel_futures=True)
 
     if not aggressive:
-        # Standard/manual scans should still produce useful results when every
-        # public passive API is rate-limited, unavailable, or the subfinder
-        # binary is missing. Run a small, bounded DNS brute-force fallback over
-        # common labels only when no passive/tool source found anything, so the
-        # default quick scan remains fast when normal sources are healthy.
-        if not all_found and not _deadline_expired(deadline) and (not max_results or len(all_found) < max_results):
+        # Standard/manual scans should still produce useful results when public
+        # passive APIs are rate-limited, unavailable, or the subfinder binary is
+        # missing. Run a small, bounded DNS brute-force fallback over common
+        # labels before returning so hosts such as www/api/mail can be found
+        # without the expensive recursive/permutation stages used by aggressive
+        # mode.
+        if not _deadline_expired(deadline) and (not max_results or len(all_found) < max_results):
             dns_candidates = _env_int(
                 "DOMAIN_ENUM_STANDARD_DNS_BRUTE_CANDIDATES",
                 500,
@@ -2168,7 +2155,7 @@ def get_sf_state(project_id: str) -> dict:
 def run_domain_enumeration_scan(domain: str, triggered_by: str = "manual", depth_mode: str = "aggressive", verbose: bool = False, scan_id: Optional[str] = None) -> dict:
     import db.database as db
 
-    root = _enumeration_root_domain(domain)
+    root = _normalize_host(domain)
     if not root or "." not in root:
         raise ValueError("Invalid domain")
 
