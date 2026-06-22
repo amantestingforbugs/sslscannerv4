@@ -6,40 +6,12 @@ Supports Telegram, Slack, and Discord webhooks.
 import json
 import html
 import logging
-import ipaddress
-import socket
-import re
 import urllib.error
 import urllib.parse
 import urllib.request
 from typing import Dict, List
 
 logger = logging.getLogger(__name__)
-
-_TELEGRAM_TOKEN_RE = re.compile(r"^[0-9]{6,20}:[A-Za-z0-9_-]{20,}$")
-
-def _is_safe_https_url(raw: str) -> bool:
-    """Reject malformed, non-HTTPS, localhost, and private-network webhook URLs."""
-    try:
-        parsed = urllib.parse.urlparse((raw or "").strip())
-        if parsed.scheme != "https" or not parsed.hostname or parsed.username or parsed.password:
-            return False
-        host = parsed.hostname.strip().lower()
-        if host in {"localhost", "localhost.localdomain"} or host.endswith(".localhost"):
-            return False
-        try:
-            ip = ipaddress.ip_address(host.strip("[]"))
-            return not (ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_multicast or ip.is_reserved or ip.is_unspecified)
-        except ValueError:
-            pass
-        for info in socket.getaddrinfo(host, parsed.port or 443, type=socket.SOCK_STREAM):
-            ip = ipaddress.ip_address(info[4][0])
-            if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_multicast or ip.is_reserved or ip.is_unspecified:
-                return False
-        return True
-    except Exception as e:
-        logger.warning("Webhook URL safety validation failed: %s", e)
-        return False
 
 
 class _NoRedirectHandler(urllib.request.HTTPRedirectHandler):
@@ -89,7 +61,7 @@ class TelegramNotifier:
         self.enabled = bool(settings.get("telegram_enabled"))
         self.token = settings.get("telegram_bot_token", "")
         self.chat_id = settings.get("telegram_chat_id", "")
-        self.ready = bool(self.enabled and self.token and self.chat_id and _TELEGRAM_TOKEN_RE.match(self.token))
+        self.ready = bool(self.enabled and self.token and self.chat_id)
 
     def send_mismatch_digest(self, project_name: str, alerts: List[Dict]) -> bool:
         if not alerts:
@@ -132,7 +104,7 @@ class WebhookNotifier:
         self.name = name
         self.enabled = bool(enabled)
         self.webhook_url = webhook_url or ""
-        self.ready = bool(self.enabled and self.webhook_url and _is_safe_https_url(self.webhook_url))
+        self.ready = bool(self.enabled and self.webhook_url)
 
     def send_mismatch_digest(self, project_name: str, alerts: List[Dict]) -> bool:
         if not alerts:
