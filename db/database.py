@@ -1350,13 +1350,13 @@ def _domain_enum_running_timeout_seconds(depth_mode: str = "aggressive") -> int:
     # DOMAIN_ENUM_TOTAL_TIMEOUT_SECONDS. Include the largest configured phase
     # timeout plus a grace period so users do not see a misleading watchdog
     # failure while aggressive enumeration is still unwinding.
-    aggressive_total = _env_int("DOMAIN_ENUM_TOTAL_TIMEOUT_SECONDS", 600, minimum=30, maximum=7200)
+    aggressive_total = _env_int("DOMAIN_ENUM_TOTAL_TIMEOUT_SECONDS", 240, minimum=30, maximum=7200)
     standard_total = _env_int("DOMAIN_ENUM_STANDARD_TOTAL_TIMEOUT_SECONDS", 120, minimum=30, maximum=7200)
     longest_phase = max(
-        _env_int("DOMAIN_ENUM_PHASE_TIMEOUT_SECONDS", 360, minimum=10, maximum=3600),
-        _env_int("SUBDOMAIN_DEEP_PHASE_TIMEOUT_SECONDS", 420, minimum=30, maximum=7200),
-        _env_int("DOMAIN_DNS_ENUM_PHASE_TIMEOUT_SECONDS", 180, minimum=15, maximum=3600),
-        _env_int("DNS_PERMUTATION_RESOLVE_TIMEOUT_SECONDS", 180, minimum=1, maximum=3600),
+        _env_int("DOMAIN_ENUM_PHASE_TIMEOUT_SECONDS", 90, minimum=10, maximum=3600),
+        _env_int("SUBDOMAIN_DEEP_PHASE_TIMEOUT_SECONDS", 75, minimum=30, maximum=7200),
+        _env_int("DOMAIN_DNS_ENUM_PHASE_TIMEOUT_SECONDS", 45, minimum=15, maximum=3600),
+        _env_int("DNS_PERMUTATION_RESOLVE_TIMEOUT_SECONDS", 45, minimum=1, maximum=3600),
     )
     mode = (depth_mode or "aggressive").strip().lower()
     if mode == "standard":

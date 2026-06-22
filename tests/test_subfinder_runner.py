@@ -1163,3 +1163,107 @@ def test_domain_enum_watchdog_uses_depth_mode_timeout(tmp_path, monkeypatch):
     assert db.domain_enum_scans_mark_stale_running() == 1
     assert db.domain_enum_scan_get(standard_id)["status"] == "failed"
     assert db.domain_enum_scan_get(aggressive_id)["status"] == "running"
+
+
+def test_run_subfinder_timeout_preserves_partial_stdout(monkeypatch, tmp_path):
+    import subprocess
+
+    fake_bin = tmp_path / "subfinder"
+    fake_bin.write_text("#!/bin/sh\n")
+    monkeypatch.setattr(runner, "_resolve_subfinder_bin", lambda: str(fake_bin))
+    monkeypatch.setattr(runner, "_build_subfinder_cmd", lambda _bin, root: [str(fake_bin), "-d", root])
+
+    def fake_run(*args, **kwargs):
+        raise subprocess.TimeoutExpired(
+            cmd=args[0],
+            timeout=kwargs.get("timeout"),
+            output="api.example.com\n*.dev.example.com\nbad.net\n",
+            stderr="still running",
+        )
+
+    monkeypatch.setattr(runner.subprocess, "run", fake_run)
+
+    result = runner._run_subfinder_for_root("example.com", timeout=1)
+
+    assert result["status"] == "timeout"
+    assert result["found"] == ["api.example.com", "dev.example.com"]
+    assert "api.example.com" in result["stdout"]
+
+
+def test_run_subfinder_nonzero_with_results_is_warning(monkeypatch, tmp_path):
+    import subprocess
+
+    fake_bin = tmp_path / "subfinder"
+    fake_bin.write_text("#!/bin/sh\n")
+    monkeypatch.setattr(runner, "_resolve_subfinder_bin", lambda: str(fake_bin))
+    monkeypatch.setattr(runner, "_build_subfinder_cmd", lambda _bin, root: [str(fake_bin), "-d", root])
+    monkeypatch.setattr(
+        runner.subprocess,
+        "run",
+        lambda *args, **kwargs: subprocess.CompletedProcess(
+            args=args[0],
+            returncode=1,
+            stdout="api.example.com\n",
+            stderr="some sources failed",
+        ),
+    )
+
+    result = runner._run_subfinder_for_root("example.com", timeout=1)
+
+    assert result["status"] == "warning"
+    assert result["found"] == ["api.example.com"]
+
+
+def test_aggressive_domain_enumeration_uses_short_subfinder_budget_by_default(monkeypatch):
+    calls = []
+    monkeypatch.delenv("DOMAIN_ENUM_SUBFINDER_TIMEOUT_SECONDS", raising=False)
+    monkeypatch.delenv("DOMAIN_ENUM_PHASE_TIMEOUT_SECONDS", raising=False)
+    monkeypatch.setattr(runner, "_passive_enumeration_sources", lambda: {})
+    monkeypatch.setattr(
+        runner,
+        "_run_subfinder_for_root",
+        lambda root, timeout=180: calls.append((root, timeout)) or {
+            "root_domain": root,
+            "status": "done",
+            "found": ["api.example.com"],
+            "found_count": 1,
+            "stderr": "",
+        },
+    )
+    monkeypatch.setattr(runner, "_run_recursive_passive_enumeration", lambda *args, **kwargs: {"found": [], "source_counts": {}, "raw_records": []})
+    monkeypatch.setattr(runner, "_bruteforce_dns_hosts", lambda *args, **kwargs: [])
+    monkeypatch.setattr(runner, "_permutation_dns_hosts", lambda *args, **kwargs: [])
+
+    result = runner._run_subdomain_enumeration(["example.com"], depth_mode="aggressive")
+
+    assert result["found"] == ["api.example.com"]
+    assert calls == [("example.com", 90)]
+
+
+def test_dns_expansion_defaults_are_bounded_for_short_aggressive_scans(monkeypatch):
+    brute_calls = []
+    permutation_calls = []
+    monkeypatch.delenv("DNS_BRUTEFORCE_MAX_CANDIDATES", raising=False)
+    monkeypatch.delenv("DNS_BRUTEFORCE_RESOLVE_TIMEOUT_SECONDS", raising=False)
+    monkeypatch.delenv("DNS_PERMUTATION_MAX_CANDIDATES", raising=False)
+    monkeypatch.delenv("DNS_PERMUTATION_RESOLVE_TIMEOUT_SECONDS", raising=False)
+    monkeypatch.setattr(runner, "_ordered_bruteforce_candidates", lambda root, seeds: [f"h{i}.example.com" for i in range(6000)])
+    monkeypatch.setattr(runner, "_wildcard_dns_ips", lambda root: set())
+    monkeypatch.setattr(runner, "_generate_permutation_candidates", lambda root, hosts, max_candidates=1200: {f"p{i}.example.com" for i in range(max_candidates)})
+
+    def fake_resolve_brute(hosts, workers, timeout, phase_name):
+        brute_calls.append((len(hosts), timeout, phase_name))
+        return {}
+
+    monkeypatch.setattr(runner, "_resolve_hosts_with_deadline", fake_resolve_brute)
+    assert runner._bruteforce_dns_hosts("example.com", []) == []
+
+    def fake_resolve_permutation(hosts, workers, timeout, phase_name):
+        permutation_calls.append((len(hosts), timeout, phase_name))
+        return {}
+
+    monkeypatch.setattr(runner, "_resolve_hosts_with_deadline", fake_resolve_permutation)
+    assert runner._permutation_dns_hosts("example.com", ["api.example.com"]) == []
+
+    assert brute_calls == [(5000, 45, "DNS brute-force resolution")]
+    assert permutation_calls == [(5000, 45, "DNS permutation resolution")]

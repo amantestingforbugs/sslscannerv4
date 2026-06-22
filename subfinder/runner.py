@@ -234,6 +234,23 @@ def _build_subfinder_cmd(subfinder_bin: str, root_domain: str) -> List[str]:
     return cmd
 
 
+def _parse_subfinder_hosts(stdout: object, root_domain: str) -> List[str]:
+    """Parse normalized in-scope hosts from subfinder stdout bytes/text."""
+    if isinstance(stdout, bytes):
+        stdout = stdout.decode("utf-8", errors="replace")
+    raw_lines = [ln.strip().lower() for ln in str(stdout or "").splitlines() if ln.strip()]
+    return sorted(
+        {
+            candidate
+            for ln in raw_lines
+            for candidate in [_normalize_host(ln)]
+            if candidate
+            and _HOST_RE.match(candidate)
+            and _is_host_within_root(candidate, root_domain)
+        }
+    )
+
+
 def _run_subfinder_for_root(root_domain: str, timeout: int = 180) -> Dict[str, object]:
     subfinder_bin = _resolve_subfinder_bin()
     if not subfinder_bin:
@@ -252,18 +269,8 @@ def _run_subfinder_for_root(root_domain: str, timeout: int = 180) -> Dict[str, o
     log_event("subfinder", "info", "Subfinder command started", root_domain=root_domain, command=command_str, status="running")
     try:
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
-        raw_lines = [ln.strip().lower() for ln in result.stdout.splitlines() if ln.strip()]
-        found = sorted(
-            {
-                candidate
-                for ln in raw_lines
-                for candidate in [_normalize_host(ln)]
-                if candidate
-                and _HOST_RE.match(candidate)
-                and _is_host_within_root(candidate, root_domain)
-            }
-        )
-        status = "done" if result.returncode == 0 else "error"
+        found = _parse_subfinder_hosts(result.stdout, root_domain)
+        status = "done" if result.returncode == 0 else ("warning" if found else "error")
         log.info(
             "Subfinder finished root=%s exit_code=%s discovered=%d",
             root_domain,
@@ -279,17 +286,20 @@ def _run_subfinder_for_root(root_domain: str, timeout: int = 180) -> Dict[str, o
             "stderr": result.stderr or "",
             "found": found,
         }
-    except subprocess.TimeoutExpired:
+    except subprocess.TimeoutExpired as exc:
         msg = f"Subfinder timed out after {timeout}s for {root_domain}"
-        log.error(msg)
+        stdout = exc.stdout or ""
+        stderr = exc.stderr or ""
+        found = _parse_subfinder_hosts(stdout, root_domain)
+        log.error("%s; preserving %d partial result(s)", msg, len(found))
         return {
             "root_domain": root_domain,
             "command": command_str,
             "status": "timeout",
             "exit_code": None,
-            "stdout": "",
-            "stderr": msg,
-            "found": [],
+            "stdout": stdout.decode("utf-8", errors="replace") if isinstance(stdout, bytes) else str(stdout or ""),
+            "stderr": (stderr.decode("utf-8", errors="replace") if isinstance(stderr, bytes) else str(stderr or "")) or msg,
+            "found": found,
         }
     except Exception as e:
         log.exception("Subfinder execution error: %s", e)
@@ -622,7 +632,10 @@ def _ordered_bruteforce_candidates(root_domain: str, seed_hosts: List[str]) -> L
 
 def _bruteforce_dns_hosts(root_domain: str, seed_hosts: List[str], max_candidates: int = 0, resolve_timeout: Optional[int] = None) -> List[str]:
     if max_candidates <= 0:
-        max_candidates = _env_int("DNS_BRUTEFORCE_MAX_CANDIDATES", 20000, minimum=1, maximum=1_000_000)
+        # Keep the default aggressive DNS expansion bounded so the standalone
+        # UI scan reaches a terminal result quickly. Operators that need a
+        # full wordlist sweep can still raise this via environment config.
+        max_candidates = _env_int("DNS_BRUTEFORCE_MAX_CANDIDATES", 5000, minimum=1, maximum=1_000_000)
     candidates = _ordered_bruteforce_candidates(root_domain, seed_hosts)
     if max_candidates > 0:
         candidates = candidates[:max_candidates]
@@ -632,7 +645,7 @@ def _bruteforce_dns_hosts(root_domain: str, seed_hosts: List[str], max_candidate
     if not keep_wildcards:
         wildcard_ips = _wildcard_dns_ips(root_domain)
     workers = max(8, min(256, len(candidates) or 1))
-    phase_timeout = resolve_timeout if resolve_timeout is not None else _env_int("DNS_BRUTEFORCE_RESOLVE_TIMEOUT_SECONDS", 180, minimum=1, maximum=3600)
+    phase_timeout = resolve_timeout if resolve_timeout is not None else _env_int("DNS_BRUTEFORCE_RESOLVE_TIMEOUT_SECONDS", 45, minimum=1, maximum=3600)
     rows = _resolve_hosts_with_deadline(candidates, workers=workers, timeout=phase_timeout, phase_name="DNS brute-force resolution")
     for host, ips in rows.items():
         if ips and (keep_wildcards or not wildcard_ips or not ips.issubset(wildcard_ips)):
@@ -1497,10 +1510,13 @@ def _run_recursive_passive_enumeration(
     if not sources:
         return {"found": [], "source_counts": {}, "raw_records": []}
 
-    max_depth = _env_int("SUBDOMAIN_DEEP_SCAN_DEPTH", 4, minimum=1, maximum=10)
-    targets_per_root = _env_int("SUBDOMAIN_DEEP_TARGETS_PER_ROOT", 80, minimum=1, maximum=1000)
-    max_tasks = _env_int("SUBDOMAIN_DEEP_MAX_TASKS", 1200, minimum=1, maximum=10000)
-    phase_timeout = _env_int("SUBDOMAIN_DEEP_PHASE_TIMEOUT_SECONDS", 420, minimum=30, maximum=7200)
+    # Aggressive mode should add recursive coverage without turning the UI
+    # request into a long-running OSINT crawl by default. These conservative
+    # defaults can be raised for scheduled or dedicated deep sweeps.
+    max_depth = _env_int("SUBDOMAIN_DEEP_SCAN_DEPTH", 2, minimum=1, maximum=10)
+    targets_per_root = _env_int("SUBDOMAIN_DEEP_TARGETS_PER_ROOT", 25, minimum=1, maximum=1000)
+    max_tasks = _env_int("SUBDOMAIN_DEEP_MAX_TASKS", 250, minimum=1, maximum=10000)
+    phase_timeout = _env_int("SUBDOMAIN_DEEP_PHASE_TIMEOUT_SECONDS", 75, minimum=30, maximum=7200)
 
     known = sorted(set(discovered))
     total_found: Set[str] = set()
@@ -1620,13 +1636,15 @@ def _generate_permutation_candidates(root_domain: str, known_hosts: List[str], m
 
 def _permutation_dns_hosts(root_domain: str, known_hosts: List[str], max_candidates: int = 0) -> List[str]:
     if max_candidates <= 0:
-        max_candidates = _env_int("DNS_PERMUTATION_MAX_CANDIDATES", 20000, minimum=1, maximum=1_000_000)
+        # Bound permutation expansion by default for the same reason as DNS
+        # brute force: return final enumeration results promptly in the UI.
+        max_candidates = _env_int("DNS_PERMUTATION_MAX_CANDIDATES", 5000, minimum=1, maximum=1_000_000)
     candidates = sorted(_generate_permutation_candidates(root_domain, known_hosts, max_candidates=max_candidates))
     if not candidates:
         return []
     resolved: List[str] = []
     workers = max(8, min(256, len(candidates)))
-    phase_timeout = _env_int("DNS_PERMUTATION_RESOLVE_TIMEOUT_SECONDS", 180, minimum=1, maximum=3600)
+    phase_timeout = _env_int("DNS_PERMUTATION_RESOLVE_TIMEOUT_SECONDS", 45, minimum=1, maximum=3600)
     rows = _resolve_hosts_with_deadline(candidates, workers=workers, timeout=phase_timeout, phase_name="DNS permutation resolution")
     for host, ips in rows.items():
         if ips:
@@ -1651,7 +1669,10 @@ def _run_subdomain_enumeration(
     passive_sources = _passive_enumeration_sources()
     total_timeout = _env_int(
         "DOMAIN_ENUM_TOTAL_TIMEOUT_SECONDS" if aggressive else "DOMAIN_ENUM_STANDARD_TOTAL_TIMEOUT_SECONDS",
-        600 if aggressive else 60,
+        # Aggressive used to default to a ten-minute deadline with multi-minute
+        # phase budgets. That made manual scans look stuck; keep defaults short
+        # while preserving env overrides for exhaustive operator-run scans.
+        240 if aggressive else 60,
         minimum=30,
         maximum=7200,
     )
@@ -1696,7 +1717,8 @@ def _run_subdomain_enumeration(
     try:
         future_map = {}
         for root_domain in root_domains:
-            future_map[enum_pool.submit(_run_subfinder_for_root, root_domain, 360 if aggressive else _env_int("DOMAIN_ENUM_STANDARD_SUBFINDER_TIMEOUT_SECONDS", 45, minimum=10, maximum=600))] = ("subfinder", root_domain)
+            subfinder_timeout = _env_int("DOMAIN_ENUM_SUBFINDER_TIMEOUT_SECONDS", 90, minimum=10, maximum=600) if aggressive else _env_int("DOMAIN_ENUM_STANDARD_SUBFINDER_TIMEOUT_SECONDS", 45, minimum=10, maximum=600)
+            future_map[enum_pool.submit(_run_subfinder_for_root, root_domain, subfinder_timeout)] = ("subfinder", root_domain)
             future_map.update(
                 {
                     enum_pool.submit(_run_passive_source, source_name, source_fn, root_domain): (source_name, root_domain)
@@ -1704,7 +1726,7 @@ def _run_subdomain_enumeration(
                 }
             )
 
-        phase_timeout = _env_int("DOMAIN_ENUM_PHASE_TIMEOUT_SECONDS" if aggressive else "DOMAIN_ENUM_STANDARD_PHASE_TIMEOUT_SECONDS", 360 if aggressive else 45, minimum=10, maximum=3600)
+        phase_timeout = _env_int("DOMAIN_ENUM_PHASE_TIMEOUT_SECONDS" if aggressive else "DOMAIN_ENUM_STANDARD_PHASE_TIMEOUT_SECONDS", 90 if aggressive else 45, minimum=10, maximum=3600)
         for fut, source_info, timed_out in _iter_completed_with_deadline(future_map, _remaining_seconds(deadline, phase_timeout, minimum=1), "subdomain enumeration"):
             source_name, root_domain = source_info
             if timed_out:
@@ -1851,7 +1873,7 @@ def _run_subdomain_enumeration(
         for root_domain in root_domains:
             future_map[dns_pool.submit(_bruteforce_dns_hosts, root_domain, seed_hosts, 0)] = ("dns_bruteforce", root_domain)
             future_map[dns_pool.submit(_permutation_dns_hosts, root_domain, seed_hosts, 0)] = ("dns_permutation", root_domain)
-        phase_timeout = _env_int("DOMAIN_DNS_ENUM_PHASE_TIMEOUT_SECONDS", 180, minimum=15, maximum=3600)
+        phase_timeout = _env_int("DOMAIN_DNS_ENUM_PHASE_TIMEOUT_SECONDS", 45, minimum=15, maximum=3600)
         for fut, source_info, timed_out in _iter_completed_with_deadline(future_map, _remaining_seconds(deadline, phase_timeout, minimum=1), "subdomain DNS enumeration"):
             source_name, root_domain = source_info
             if timed_out:
