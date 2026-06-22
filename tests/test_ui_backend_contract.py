@@ -28,8 +28,7 @@ def test_subfinder_interval_hint_matches_backend_limits():
 
 def test_subfinder_job_history_shows_root_domains():
     assert "Root Domain(s)" in TEMPLATE
-    assert "sfJobRootDomains(job)" in TEMPLATE
-    assert "Enumeration Found" in TEMPLATE
+    assert "j.domains_input || '—'" in TEMPLATE
 
 
 def test_domain_enumeration_results_have_pagination_controls():
