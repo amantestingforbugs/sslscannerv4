@@ -2183,6 +2183,8 @@ def _ssl_scan_subfinder_hosts(project_id: str, hostnames: List[str], job_id: str
     done_count = [0]
     lock = threading.Lock()
     scanned_hosts = []
+    alert_events_count = [0]
+    alert_issue_counts = {"SSL Mismatch": 0, "Expired": 0, "Expiring Soon": 0}
 
     def on_result(done, total_inner, r):
         hostname = r.get("hostname", "")
@@ -2192,12 +2194,18 @@ def _ssl_scan_subfinder_hosts(project_id: str, hostnames: List[str], job_id: str
             mismatch_scope = "same_domain" if r.get("same_base") else "different_domain"
             alert_add(project_id, hostname, "SSL Mismatch",
                       f"[Subfinder] CN '{r.get('cn','?')}' ≠ hostname", scan_id, mismatch_scope=mismatch_scope)
+            alert_events_count[0] += 1
+            alert_issue_counts["SSL Mismatch"] += 1
         elif r.get("is_expired") and not r.get("error"):
             alert_add(project_id, hostname, "Expired",
                       f"[Subfinder] Expired {r.get('expiry','?')}", scan_id)
+            alert_events_count[0] += 1
+            alert_issue_counts["Expired"] += 1
         elif r.get("is_expiring_soon") and not r.get("error"):
             alert_add(project_id, hostname, "Expiring Soon",
                       f"[Subfinder] Expires {r.get('expiry','?')} ({r.get('days_left')}d)", scan_id)
+            alert_events_count[0] += 1
+            alert_issue_counts["Expiring Soon"] += 1
 
         with lock:
             result_batch.append(r)
@@ -2225,7 +2233,14 @@ def _ssl_scan_subfinder_hosts(project_id: str, hostnames: List[str], job_id: str
     jobs.update_state(scan_id, status="done", progress=total, done=done_count[0], total=total)
     publish("scan_update", jobs.public_state(jobs.get_job(scan_id)))
     subfinder_hosts_mark_scanned(project_id, scanned_hosts)
-    publish("alert_update", {"unseen_count": alerts_unseen_count()})
+    publish("alert_update", {
+        "unseen_count": alerts_unseen_count(),
+        "project_id": project_id,
+        "project_name": (project_get(project_id) or {}).get("name", "Unknown Project"),
+        "scan_id": scan_id,
+        "new_alerts": alert_events_count[0],
+        "alert_breakdown": {k: v for k, v in alert_issue_counts.items() if v},
+    })
 
     unsent = [a for a in alerts_unsent() if a["project_id"] == project_id]
     if unsent:
