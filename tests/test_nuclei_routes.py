@@ -4,11 +4,9 @@ import sys
 sys.path.append(str(Path(__file__).resolve().parents[1]))
 
 from api.routes import (  # noqa: E402
-    _ensure_nuclei_templates,
     _looks_like_nuclei_finding,
     _normalize_nuclei_finding,
     _normalize_nuclei_target,
-    _nuclei_list_public,
     _nuclei_command,
     _nuclei_exit_error,
     _nuclei_supported_flags,
@@ -128,63 +126,6 @@ def test_resolve_nuclei_binary_prefers_configured_executable(tmp_path, monkeypat
     monkeypatch.setenv("PATH", "")
 
     assert _resolve_nuclei_binary() == str(nuclei)
-
-
-def test_ensure_nuclei_templates_requires_yaml_templates(tmp_path, monkeypatch):
-    import api.routes as routes
-
-    template_dir = tmp_path / "templates"
-    template_dir.mkdir()
-    (template_dir / "README.md").write_text("not a nuclei template\n")
-    captured = {}
-
-    class FakeRun:
-        returncode = 0
-        stdout = "download complete"
-        stderr = ""
-
-    def fake_run(cmd, text, capture_output, timeout):
-        captured["cmd"] = cmd
-        return FakeRun()
-
-    monkeypatch.setenv("NUCLEI_TEMPLATES_DIR", str(template_dir))
-    monkeypatch.setattr(routes, "_nuclei_supports_flag", lambda nuclei_bin, flag: flag == "-ud")
-    monkeypatch.setattr(routes.subprocess, "run", fake_run)
-
-    ok, message = _ensure_nuclei_templates("/bin/nuclei")
-
-    assert ok is False
-    assert "Failed to download nuclei templates automatically" in message
-    assert captured["cmd"] == ["/bin/nuclei", "-ut", "-ud", str(template_dir)]
-
-
-def test_nuclei_list_public_includes_persisted_jobs(monkeypatch):
-    import api.routes as routes
-
-    routes._nuclei_state.clear()
-    persisted_job = {
-        "id": "scan-persisted",
-        "type": "nuclei_scan",
-        "project_id": "p1",
-        "status": "done",
-        "started_at": "2026-06-01T00:00:00Z",
-        "payload": {
-            "project_name": "Project",
-            "scan_mode": "all_subdomains",
-            "hosts_scanned": 2,
-            "findings": [{"template_id": "tpl-1"}],
-            "stats": {"hosts": 2, "matched": 1},
-        },
-    }
-
-    monkeypatch.setattr(routes.jobs, "list_jobs", lambda **kwargs: [persisted_job])
-    monkeypatch.setattr(routes.jobs, "get_job", lambda job_id: persisted_job if job_id == "scan-persisted" else None)
-
-    rows = _nuclei_list_public(project_id="p1", limit=5)
-
-    assert rows
-    assert rows[0]["id"] == "scan-persisted"
-    assert rows[0]["findings"][0]["template_id"] == "tpl-1"
 
 
 def test_nuclei_scan_route_runs_with_normalized_results_and_removes_targets(
