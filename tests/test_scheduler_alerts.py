@@ -26,25 +26,6 @@ def test_build_alert_keeps_non_ignored_scan_errors():
 
 
 
-def test_build_alert_honors_disabled_scan_error_rule():
-    result = {
-        "hostname": "bad.example.com",
-        "error": "certificate parse failure",
-        "is_ignored_error": False,
-    }
-    assert _build_alert_from_result(result, expiring_threshold=30, alert_settings={"rule_error": 0}) is None
-
-
-def test_build_alert_honors_disabled_expiring_rule():
-    result = {
-        "hostname": "soon.example.com",
-        "days_left": 10,
-        "expiry": "2026-07-01",
-        "is_ok": True,
-    }
-    assert _build_alert_from_result(result, expiring_threshold=30, alert_settings={"rule_expiring": 0}) is None
-
-
 def test_prune_finished_scan_state_bounds_completed_entries(monkeypatch):
     import scheduler.runner as runner
 

@@ -30,7 +30,7 @@ def _now():
     return datetime.now(timezone.utc).isoformat()
 
 
-def _build_alert_from_result(r: Dict, expiring_threshold: int, alert_settings: Optional[Dict] = None):
+def _build_alert_from_result(r: Dict, expiring_threshold: int):
     """
     Build an alert tuple from a scan result.
     Returns: (hostname, issue_type, details, mismatch_scope) or None.
@@ -41,10 +41,6 @@ def _build_alert_from_result(r: Dict, expiring_threshold: int, alert_settings: O
     hostname = r.get("hostname", "")
     days_left = r.get("days_left")
     is_expiring_by_setting = isinstance(days_left, int) and 0 <= days_left <= expiring_threshold
-    settings = alert_settings or {}
-
-    def enabled(rule_name: str) -> bool:
-        return int(settings.get(rule_name, 1)) == 1
 
     # Keep derived flags aligned with the configured expiring threshold.
     if is_expiring_by_setting:
@@ -54,14 +50,14 @@ def _build_alert_from_result(r: Dict, expiring_threshold: int, alert_settings: O
     if r.get("is_ok") and isinstance(days_left, int) and days_left <= expiring_threshold:
         r["is_ok"] = False
 
-    if enabled("rule_mismatch") and r.get("is_mismatch") and not r.get("error"):
+    if r.get("is_mismatch") and not r.get("error"):
         mismatch_scope = "same_domain" if r.get("same_base") else "different_domain"
         return (hostname, "SSL Mismatch", f"CN '{r.get('cn','?')}' ≠ hostname", mismatch_scope)
-    if enabled("rule_expired") and r.get("is_expired") and not r.get("error"):
+    if r.get("is_expired") and not r.get("error"):
         return (hostname, "Expired", f"Expired {r.get('expiry','?')}", "")
-    if enabled("rule_expiring") and is_expiring_by_setting and not r.get("error"):
+    if is_expiring_by_setting and not r.get("error"):
         return (hostname, "Expiring Soon", f"Expires {r.get('expiry','?')} ({r.get('days_left')}d)", "")
-    if enabled("rule_error") and r.get("error") and not r.get("is_ignored_error"):
+    if r.get("error") and not r.get("is_ignored_error"):
         return (hostname, "Scan Error", r.get("error") or "Unknown TLS error", "")
     return None
 
@@ -163,7 +159,7 @@ def run_project_scan(project_id: str, triggered_by: str = "manual") -> Optional[
     lock = threading.Lock()
 
     def on_result(done, total_inner, r):
-        alert = _build_alert_from_result(r, expiring_threshold, alert_settings)
+        alert = _build_alert_from_result(r, expiring_threshold)
         with lock:
             if alert:
                 alert_batch.append(alert)
