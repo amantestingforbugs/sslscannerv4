@@ -168,15 +168,8 @@ def _build_subfinder_cmd(subfinder_bin: str, root_domain: str) -> List[str]:
     tool_timeout = _env_int("SUBFINDER_TOOL_TIMEOUT_SECONDS", 60, minimum=10, maximum=600)
     cmd = [subfinder_bin, "-d", root_domain, "-silent", "-timeout", str(tool_timeout)]
 
-    # Aggressive passive defaults to maximize enumeration yield where supported.
-    #
-    # Do not enable subfinder's ``-active`` flag by default. On some
-    # installations it filters output down to DNS-resolving hosts only, so a
-    # resolver issue or wildcard edge case can make otherwise valid passive
-    # discoveries look like "no results". Operators that explicitly want
-    # subfinder-side active filtering can still opt in with
-    # ``SUBFINDER_EXTRA_FLAGS=-active``.
-    preferred_flags = ["-all", "-recursive"]
+    # Aggressive defaults to maximize enumeration yield where supported.
+    preferred_flags = ["-all", "-recursive", "-active"]
 
     # Optional env override to add additional flags without code changes. Keep
     # value tokens that belong to supported flags (for example: "-rate-limit 50").
