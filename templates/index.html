@@ -1829,22 +1829,10 @@ html[data-performance="fast"] tbody tr{transition:none!important}
         <span id="bounty-count" style="font-size:12px;color:var(--text-muted)">0 leads</span><span id="bounty-v5-count" class="badge badge-info">v5 packs loading</span>
       </div>
       <div class="stats-grid" id="bounty-summary-grid" style="margin-bottom:12px">
-        <div class="stat-card"><div class="stat-label">P0 Today</div><div class="stat-value" id="bounty-stat-p0">—</div><div class="stat-sub">Critical validation lane</div></div>
         <div class="stat-card"><div class="stat-label">High Priority</div><div class="stat-value" id="bounty-stat-high">—</div><div class="stat-sub">Validate first</div></div>
-        <div class="stat-card"><div class="stat-label">Quick Wins</div><div class="stat-value" id="bounty-stat-quick">—</div><div class="stat-sub">Dense evidence</div></div>
         <div class="stat-card"><div class="stat-label">Active HTTP</div><div class="stat-value" id="bounty-stat-active">—</div><div class="stat-sub">Reachable surfaces</div></div>
         <div class="stat-card"><div class="stat-label">Protected Surfaces</div><div class="stat-value" id="bounty-stat-protected">—</div><div class="stat-sub">401/403 auth boundaries</div></div>
         <div class="stat-card"><div class="stat-label">TLS Anomalies</div><div class="stat-value" id="bounty-stat-tls">—</div><div class="stat-sub">Mismatch/expired/expiring</div></div>
-      </div>
-
-      <div class="card" style="margin-bottom:12px">
-        <div class="card-body">
-          <div style="display:flex;justify-content:space-between;gap:10px;align-items:center;flex-wrap:wrap">
-            <div><b>Priority command center:</b> P0/P1 lanes combine score, exploitability clues, business impact, and evidence density into a validation queue.</div>
-            <span class="badge badge-info" id="bounty-command-mode">Scope-first, non-destructive</span>
-          </div>
-          <div id="bounty-priority-lanes" style="margin-top:10px;display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:8px"></div>
-        </div>
       </div>
 
       <div class="card" style="margin-bottom:12px">
@@ -4882,9 +4870,7 @@ async function loadXbowBrief() {
 
 function renderBountySummary(summary) {
   const set = (id, val) => { const el = document.getElementById(id); if (el) el.textContent = fmt(val || 0); };
-  set('bounty-stat-p0', summary.p0);
   set('bounty-stat-high', summary.high);
-  set('bounty-stat-quick', summary.quick_wins);
   set('bounty-stat-active', summary.active_http);
   set('bounty-stat-protected', summary.protected_http);
   set('bounty-stat-tls', summary.tls_anomalies);
@@ -4895,18 +4881,6 @@ function renderBountySummary(summary) {
     const chips = (summary.top_surface_types || []).map(s => `<span class="badge badge-info">${esc(s.name)} · ${fmt(s.count)}</span>`);
     breakdown.innerHTML = chips.length ? chips.join('') : '<span style="color:var(--text-muted)">Run Subfinder/HTTP enrichment to build an attack-surface breakdown.</span>';
   }
-}
-
-function renderBountyPriorityLanes(rows) {
-  const el = document.getElementById('bounty-priority-lanes');
-  if (!el) return;
-  const lanes = ['P0', 'P1', 'P2', 'P3'].map(lane => {
-    const laneRows = (rows || []).filter(r => (r.priority || {}).lane === lane).slice(0, 3);
-    const label = laneRows[0]?.priority?.label || ({P0:'Critical validation lane',P1:'High-priority lane',P2:'Triage lane',P3:'Recon watchlist'}[lane]);
-    const items = laneRows.length ? laneRows.map(r => `<div class="dash-priority-item"><span class="dash-priority-icon">${lane === 'P0' ? '🔥' : lane === 'P1' ? '🎯' : lane === 'P2' ? '🧭' : '👁️'}</span><div><b>${esc(r.hostname || '—')}</b><small>${fmt(r.score || 0)} pts · ${esc((r.business_impact || {}).primary || r.lead_type || 'Recon candidate')}</small></div></div>`).join('') : '<div class="xbow-empty">No assets in this lane.</div>';
-    return `<div class="xbow-path bounty-lane-${lane.toLowerCase()}"><div class="xbow-path-host">${lane} · ${esc(label)}</div><div class="xbow-path-meta">${fmt(laneRows.length)} shown · ${(laneRows[0]?.priority?.sla) ? esc(laneRows[0].priority.sla) : 'Waiting for enrichment'}</div><div class="dash-priority-list">${items}</div></div>`;
-  });
-  el.innerHTML = lanes.join('');
 }
 
 function renderBountyV5(v5) {
@@ -4949,9 +4923,7 @@ async function loadBountyLeads() {
   }
   const rows = data?.rows || [];
   count.textContent = `${fmt(data?.total || 0)} leads`;
-  renderBountyPriorityLanes(rows);
   if (!rows.length) {
-    renderBountyPriorityLanes([]);
     body.innerHTML = '<tr><td colspan="6" style="text-align:center;padding:20px;color:var(--text-muted)">No leads yet. Run Subfinder and HTTP enrichment to populate prioritized bounty targets.</td></tr>';
     return;
   }
@@ -4959,15 +4931,13 @@ async function loadBountyLeads() {
     const url = r.http_final_url || (r.http_scheme ? `${r.http_scheme}://${r.hostname}` : `https://${r.hostname}`);
     const evidence = (r.evidence || []).map(e => `<li>${esc(e)}</li>`).join('');
     const steps = (r.next_steps || []).slice(0, 3).map(e => `<li>${esc(e)}</li>`).join('');
-    const plan = ((r.validation_plan || {}).checklist || []).slice(0, 2).map(e => `<li>${esc(e)}</li>`).join('');
-    const priority = r.priority || {};
     return `<tr>
-      <td data-sort-value="${Number(r.score || 0)}"><div style="font-size:22px;font-weight:800">${fmt(r.score || 0)}</div>${bountySeverityBadge(r.severity)}<div style="margin-top:5px"><span class="badge badge-info">${esc(priority.lane || 'P3')} · ${esc(priority.sla || 'Monitor')}</span></div></td>
-      <td><div style="font-family:var(--mono);font-size:12px;font-weight:700">${esc(r.hostname)}</div><div style="font-size:12px;color:var(--text-secondary)">${esc(r.lead_type || 'Recon candidate')}</div><div style="font-size:11px;color:var(--text-muted);margin-top:4px">${esc((r.business_impact || {}).primary || 'Impact hypothesis pending enrichment')}</div><div style="margin-top:5px;display:flex;gap:4px;flex-wrap:wrap">${(r.v5_signal_packs || []).slice(0,2).map(p => `<span class="badge badge-info">v5 ${esc(p.id || p.name)}</span>`).join('')}${r.quick_win ? '<span class="badge badge-mismatch">quick win</span>' : ''}</div></td>
+      <td data-sort-value="${Number(r.score || 0)}"><div style="font-size:22px;font-weight:800">${fmt(r.score || 0)}</div>${bountySeverityBadge(r.severity)}</td>
+      <td><div style="font-family:var(--mono);font-size:12px;font-weight:700">${esc(r.hostname)}</div><div style="font-size:12px;color:var(--text-secondary)">${esc(r.lead_type || 'Recon candidate')}</div><div style="margin-top:5px;display:flex;gap:4px;flex-wrap:wrap">${(r.v5_signal_packs || []).slice(0,2).map(p => `<span class="badge badge-info">v5 ${esc(p.id || p.name)}</span>`).join('')}</div></td>
       <td>${esc(r.project_name || '—')}</td>
       <td><div>${r.http_status_code ?? '—'}</div><a href="${esc(url)}" target="_blank" rel="noopener" style="font-size:11px;color:var(--accent)">${esc((r.http_page_title || r.http_final_url || 'open target').slice(0, 80))}</a></td>
       <td><ul style="margin-left:16px;color:var(--text-secondary);font-size:12px">${evidence}</ul></td>
-      <td><ul style="margin-left:16px;color:var(--text-secondary);font-size:12px">${plan || steps}</ul></td>
+      <td><ul style="margin-left:16px;color:var(--text-secondary);font-size:12px">${steps}</ul></td>
     </tr>`;
   }).join('');
 }
