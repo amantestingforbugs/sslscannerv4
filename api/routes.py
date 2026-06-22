@@ -1924,18 +1924,19 @@ def run_domain_enumeration():
         return err("Domain must be a valid public hostname", 400)
     root_domain = registered_domain(domain)
     # The user may authorize a narrower scope such as ``portal.example.com``.
-    # Only enumerate the registrable root when that broader root is also
-    # authorized; otherwise keep enumeration scoped to the submitted host so
-    # passive tools and DNS lookups do not collect assets outside the allow-list.
+    # Subfinder-style tools still need the registrable domain (``example.com``)
+    # as their search root, but the broader root itself may intentionally be
+    # outside SCAN_ALLOWED_DOMAINS. Validate the submitted domain here and let
+    # the enumeration pipeline's per-host filters keep returned hosts inside
+    # the configured scope.
     if not root_domain or not is_target_allowed(domain):
         return err("Domain is outside configured scan scope or targets a disallowed network", 403)
-    enumeration_root = root_domain if is_target_allowed(root_domain) else domain
     try:
         depth_mode = (payload.get("depth_mode") or "standard").strip().lower()
         if depth_mode not in {"standard", "aggressive"}:
             depth_mode = "standard"
         verbose = bool(payload.get("verbose") or payload.get("verbose_logs") or request.values.get("verbose"))
-        data = run_domain_enumeration_scan(enumeration_root, triggered_by="manual", depth_mode=depth_mode, verbose=verbose)
+        data = run_domain_enumeration_scan(root_domain, triggered_by="manual", depth_mode=depth_mode, verbose=verbose)
         return ok(data)
     except ValueError as ve:
         return err(str(ve))
