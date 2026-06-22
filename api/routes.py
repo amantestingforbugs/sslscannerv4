@@ -1333,7 +1333,7 @@ def _quick_scan_worker(sid: str):
             state["expiring"] += 1 if row.get("is_expiring_soon") else 0
             state["errors"] += 1 if row.get("error") else 0
             alert_count = int(state.get("alerts") or 0)
-            alert = _build_alert_from_result(row, max(1, min(365, int(db.alert_settings_get().get("minimum_days_left") or 30))))
+            alert = _build_alert_from_result(row, max(1, min(365, int(db.alert_settings_get().get("minimum_days_left") or 30))), db.alert_settings_get())
             if alert:
                 h, issue, detail, scope = alert
                 db.alert_add(project_id, h, issue, detail, sid, mismatch_scope=scope)
