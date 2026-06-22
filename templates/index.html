@@ -3703,10 +3703,17 @@ async function loadOpenSSLRows() {
 }
 
 async function delProject() {
+  if (!curPid) { toast('No project selected','err'); return; }
   if (!confirm('Delete this project and all its scan data?')) return;
-  await fetch(`/api/projects/${curPid}`,{method:'DELETE'});
-  clearApiMemo();
-  toast('Project deleted','ok'); nav('projects');
+  try {
+    const { ok, error } = await fetch(`/api/projects/${curPid}`,{method:'DELETE'}).then(r=>r.json());
+    if (!ok) { toast(error || 'Failed to delete project','err'); return; }
+    clearApiMemo();
+    curPid = null; curSid = null;
+    toast('Project deleted','ok');
+    await loadProjects();
+    nav('projects');
+  } catch { toast('Failed to delete project','err'); }
 }
 
 function openEditModal() {

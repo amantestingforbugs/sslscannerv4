@@ -1509,9 +1509,17 @@ def update_project(pid):
 
 @api.delete("/projects/<pid>")
 def delete_project(pid):
-    db.project_delete(pid)
+    if not db.project_get(pid):
+        return err("Project not found", 404)
+    try:
+        deleted = db.project_delete(pid)
+    except Exception:
+        log.exception("Failed to delete project %s", pid)
+        return err("Failed to delete project", 500)
+    if not deleted:
+        return err("Project not found", 404)
     broadcast("project_deleted", {"id": pid})
-    return ok()
+    return ok({"deleted": True, "id": pid})
 
 
 def _read_hosts_upload_payload() -> str:
