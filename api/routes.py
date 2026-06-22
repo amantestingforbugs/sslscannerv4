@@ -47,6 +47,7 @@ from scheduler.runner import (
     pause_scan,
     resume_scan,
     stop_scan,
+    _build_alert_from_result,
 )
 from alerts.notifiers import WebhookNotifier, TelegramNotifier
 
@@ -1239,7 +1240,28 @@ def _collect_openssl_hosts(pid: str) -> list[str]:
     return sorted({h for h in (base_hosts | sf_hosts) if h})
 
 
-def _start_quick_scan(hosts: list[str]) -> str:
+def _quick_scan_alert_project_id() -> str:
+    """Return the project used to surface ad-hoc quick scan alerts."""
+    name = "Quick Scan Alerts"
+    project = db.project_get_by_name(name)
+    if project:
+        return project["id"]
+    project, create_error = _create_project_or_error(
+        name,
+        "Automatically created project for alerts found by ad-hoc quick scans.",
+        60,
+        30,
+    )
+    if create_error:
+        existing = db.project_get_by_name(name)
+        if existing:
+            return existing["id"]
+        raise RuntimeError(create_error)
+    broadcast("project_created", {"id": project["id"], "name": project["name"]})
+    return project["id"]
+
+
+def _start_quick_scan(hosts: list[str], project_id: str = "") -> str:
     sid = db.uid()
     with _quick_scan_lock:
         _quick_scan_state[sid] = {
@@ -1258,8 +1280,10 @@ def _start_quick_scan(hosts: list[str]) -> str:
             "rows_total": 0,
             "started_at": db.now(),
             "finished_at": None,
+            "project_id": project_id,
+            "alerts": 0,
         }
-    jobs.create_job("quick_scan", id=sid, status="running", total=len(hosts), source="manual", payload={"source": "quick_scan", "hosts": hosts})
+    jobs.create_job("quick_scan", id=sid, project_id=project_id or None, status="running", total=len(hosts), source="manual", payload={"source": "quick_scan", "hosts": hosts})
     th = threading.Thread(target=_quick_scan_worker, args=(sid,), daemon=True, name=f"quick-scan-{sid[:8]}")
     with _quick_scan_lock:
         _quick_scan_threads[sid] = th
@@ -1273,6 +1297,12 @@ def _quick_scan_worker(sid: str):
     with _quick_scan_lock:
         state = _quick_scan_state.get(sid)
         hosts = list(state.get("hosts") or []) if state else []
+        project_id = (state.get("project_id") or "") if state else ""
+    if not project_id:
+        project_id = _quick_scan_alert_project_id()
+        with _quick_scan_lock:
+            if sid in _quick_scan_state:
+                _quick_scan_state[sid]["project_id"] = project_id
     if not hosts:
         with _quick_scan_lock:
             if sid in _quick_scan_state:
@@ -1302,6 +1332,13 @@ def _quick_scan_worker(sid: str):
             state["expired"] += 1 if row.get("is_expired") else 0
             state["expiring"] += 1 if row.get("is_expiring_soon") else 0
             state["errors"] += 1 if row.get("error") else 0
+            alert_count = int(state.get("alerts") or 0)
+            alert = _build_alert_from_result(row, max(1, min(365, int(db.alert_settings_get().get("minimum_days_left") or 30))))
+            if alert:
+                h, issue, detail, scope = alert
+                db.alert_add(project_id, h, issue, detail, sid, mismatch_scope=scope)
+                alert_count += 1
+                state["alerts"] = alert_count
             payload = {
                 "id": sid,
                 "status": "running",
@@ -1312,7 +1349,11 @@ def _quick_scan_worker(sid: str):
                 "expired": state["expired"],
                 "expiring": state["expiring"],
                 "errors": state["errors"],
+                "project_id": project_id,
+                "alerts": alert_count,
             }
+        if alert:
+            broadcast("alert_update", {"unseen_count": db.alerts_unseen_count(), "project_id": project_id, "scan_id": sid, "new_alerts": 1})
         jobs.update_progress(sid, done=done, total=total, ok=payload["ok"], mismatches=payload["mismatches"], expired=payload["expired"], expiring=payload["expiring"], errors=payload["errors"])
         broadcast("quick_scan_row", {"scan_id": sid, "row": row})
         broadcast("quick_scan_update", payload)
@@ -1344,6 +1385,8 @@ def _quick_scan_worker(sid: str):
                     "expired": state["expired"],
                     "expiring": state["expiring"],
                     "errors": state["errors"],
+                    "alerts": state.get("alerts", 0),
+                    "project_id": project_id,
                     "finished_at": state["finished_at"],
                 }
         jobs.update_state(sid, status="done", done=payload.get("done", 0), progress=payload.get("done", 0), finished_at=payload.get("finished_at"))
@@ -1788,8 +1831,11 @@ def start_quick_scan():
         return err("Paste at least one valid hostname")
     if len(hosts) > 50000:
         return err("Quick scan supports up to 50000 hosts at once")
-    sid = _start_quick_scan(hosts)
-    return ok({"scan_id": sid, "total": len(hosts), "status": "running"})
+    project_id = (d.get("project_id") or "").strip()
+    if project_id and not db.project_get(project_id):
+        return err("Project not found", 404)
+    sid = _start_quick_scan(hosts, project_id=project_id)
+    return ok({"scan_id": sid, "total": len(hosts), "status": "running", "project_id": project_id})
 
 
 @api.get("/quick-scan/<sid>")
