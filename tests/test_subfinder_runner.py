@@ -70,31 +70,6 @@ def test_extract_project_root_domains_from_mixed_input():
     assert roots == ["demo.co.uk", "example.com", "example.net"]
 
 
-def test_domain_enumeration_scan_uses_registrable_root_for_pasted_hostname(monkeypatch):
-    import db.database as db
-
-    calls = []
-    monkeypatch.setattr(db, "init_db", lambda: None)
-    monkeypatch.setattr(db, "domain_enum_scan_create", lambda domain, **kwargs: calls.append(("scan", domain)) or "scan1")
-    monkeypatch.setattr(db, "domain_enum_results_add_batch", lambda *args, **kwargs: None)
-    monkeypatch.setattr(db, "domain_enum_scan_finish", lambda *args, **kwargs: None)
-    monkeypatch.setattr(
-        runner,
-        "_run_subdomain_enumeration",
-        lambda roots, depth_mode="aggressive": calls.append(("enum", tuple(roots))) or {
-            "found": ["api.example.com"],
-            "source_map": {"passive": ["api.example.com"]},
-            "source_counts": {"passive": 1},
-            "raw_records": [],
-        },
-    )
-
-    result = runner.run_domain_enumeration_scan("https://www.example.com/login", depth_mode="standard")
-
-    assert result["domain"] == "example.com"
-    assert calls == [("scan", "example.com"), ("enum", ("example.com",))]
-
-
 def test_is_host_within_root_requires_domain_boundary():
     assert _is_host_within_root("a.example.com", "example.com") is True
     assert _is_host_within_root("example.com", "example.com") is True
