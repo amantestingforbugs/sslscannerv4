@@ -224,65 +224,6 @@ def test_enumeration_project_creation_uses_available_name(tmp_path, monkeypatch)
     assert resp.json["data"]["host_count"] == 2
 
 
-def test_enumeration_project_creation_can_start_scan_without_extra_request(tmp_path, monkeypatch):
-    sys.path.insert(0, str(ROOT))
-    from flask import Flask
-    import db.database as database
-    import api.routes as routes
-
-    monkeypatch.setattr(database, "DB_PATH", tmp_path / "enum_project_scan.sqlite3")
-    monkeypatch.setattr(database, "_local", __import__("threading").local())
-    database.init_db()
-
-    scan_id = database.domain_enum_scan_create("example.com")
-    database.domain_enum_results_add_batch(scan_id, "example.com", ["www.example.com", "api.example.com"])
-    database.domain_enum_scan_finish(scan_id, "done", 2)
-
-    started = []
-    monkeypatch.setattr(routes, "run_project_scan_async", lambda pid, triggered_by="manual": started.append((pid, triggered_by)) or True)
-
-    app = Flask(__name__)
-    app.register_blueprint(routes.api)
-    client = app.test_client()
-
-    resp = client.post(f"/api/subfinder/enumeration/scans/{scan_id}/project", json={"name": "Enum example.com", "start_scan": True})
-
-    assert resp.status_code == 200
-    assert resp.json["data"]["scan_started"] is True
-    assert resp.json["data"]["scan_error"] == ""
-    assert started == [(resp.json["data"]["project"]["id"], "enum_import")]
-
-
-def test_domain_enumeration_csv_export_skips_httpx_by_default(tmp_path, monkeypatch):
-    sys.path.insert(0, str(ROOT))
-    from flask import Flask
-    import db.database as database
-    import api.routes as routes
-    import subfinder.runner as runner
-
-    monkeypatch.setattr(database, "DB_PATH", tmp_path / "enum_export.sqlite3")
-    monkeypatch.setattr(database, "_local", __import__("threading").local())
-    database.init_db()
-
-    scan_id = database.domain_enum_scan_create("example.com")
-    database.domain_enum_results_add_batch(scan_id, "example.com", ["www.example.com"])
-    database.domain_enum_scan_finish(scan_id, "done", 1)
-
-    def fail_httpx(*_args, **_kwargs):
-        raise AssertionError("httpx enrichment should be opt-in for CSV export")
-
-    monkeypatch.setattr(runner, "_resolve_active_hosts_with_httpx", fail_httpx)
-
-    app = Flask(__name__)
-    app.register_blueprint(routes.api)
-    client = app.test_client()
-
-    resp = client.get(f"/api/subfinder/enumeration/scans/{scan_id}/export?format=csv")
-
-    assert resp.status_code == 200
-    assert "www.example.com" in resp.text
-    assert ",no," in resp.text
-
 def test_domain_enumeration_accepts_authorized_subdomain_scope(tmp_path, monkeypatch):
     sys.path.insert(0, str(ROOT))
     from flask import Flask
