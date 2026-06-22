@@ -585,99 +585,6 @@ def _bounty_lead_severity(score: int) -> str:
     return "low"
 
 
-def _bounty_priority_lane(lead: dict) -> dict:
-    score = lead.get("score") or 0
-    text = _lead_keywords(lead)
-    is_protected = lead.get("http_status_code") in (401, 403)
-    has_api = any(token in text for token in ("api", "graphql", "swagger", "openapi"))
-    has_admin = any(token in text for token in ("admin", "login", "sso", "dashboard", "auth"))
-    has_devops = any(token in text for token in ("jenkins", "git", "grafana", "kibana", "prometheus", "metrics"))
-    if score >= 85 or (score >= 70 and (has_api or has_admin or has_devops) and is_protected):
-        return {
-            "lane": "P0",
-            "label": "Critical validation lane",
-            "sla": "Validate today",
-            "reason": "High score plus exposed auth/API/DevOps or protected-boundary signal.",
-        }
-    if score >= 75:
-        return {
-            "lane": "P1",
-            "label": "High-priority lane",
-            "sla": "Validate within 24 hours",
-            "reason": "Strong multi-signal bounty candidate with enough context for manual proof planning.",
-        }
-    if score >= 45:
-        return {
-            "lane": "P2",
-            "label": "Triage lane",
-            "sla": "Review this week",
-            "reason": "Useful exposure signal, but needs more evidence before deeper validation.",
-        }
-    return {
-        "lane": "P3",
-        "label": "Recon watchlist",
-        "sla": "Monitor after enrichment",
-        "reason": "Low-confidence discovery that should be enriched or watched for drift.",
-    }
-
-
-def _bounty_business_impact(row: dict, evidence: list[str]) -> dict:
-    text = " ".join([_lead_keywords(row), " ".join(evidence)]).lower()
-    impacts = []
-    if any(token in text for token in ("api", "graphql", "swagger", "openapi")):
-        impacts.append("Possible customer/tenant data boundary if APIs expose objects, schemas, or excessive fields.")
-    if any(token in text for token in ("admin", "login", "sso", "auth", "dashboard")):
-        impacts.append("Possible account, role, or administrative access-control boundary.")
-    if any(token in text for token in ("jenkins", "git", "grafana", "kibana", "prometheus", "metrics")):
-        impacts.append("Possible engineering, CI/CD, telemetry, or operational metadata exposure.")
-    if any(token in text for token in ("dev", "test", "stage", "staging", "uat", "internal")):
-        impacts.append("Possible non-production drift with weaker controls or sensitive test data.")
-    if row.get("is_mismatch") or row.get("is_expired") or row.get("is_expiring"):
-        impacts.append("Possible stale routing, tenant confusion, reliability, or certificate-trust impact.")
-    if not impacts:
-        impacts.append("Externally reachable asset that may become higher value after technology and auth enrichment.")
-    return {
-        "primary": impacts[0],
-        "hypotheses": impacts[:4],
-        "confidence": min(99, 35 + len(evidence) * 7 + (15 if row.get("http_is_active") else 0) + (10 if row.get("checked_at") else 0)),
-    }
-
-
-def _bounty_validation_plan(row: dict, evidence: list[str]) -> dict:
-    text = " ".join([_lead_keywords(row), " ".join(evidence)]).lower()
-    checks = [
-        "Reconfirm program scope, rate limits, and allowed testing classes before touching the asset.",
-        "Capture baseline URL, final URL, status, title, redirects, headers, technologies, and timestamp.",
-    ]
-    fp = [
-        "Verify the hostname is controlled by the program and not a third-party tenant or shared SaaS page.",
-        "Re-test from a clean session and a researcher-owned account before claiming impact.",
-    ]
-    if any(token in text for token in ("api", "graphql", "swagger", "openapi")):
-        checks.extend([
-            "Map documented endpoints and compare anonymous, low-privilege, and expected-denied responses.",
-            "Use only objects you own to test tenant isolation, IDOR/BOLA, excessive fields, and auth bypass.",
-        ])
-        fp.append("Confirm exposed schemas or docs reveal non-public functionality, not intentionally public developer docs.")
-    if any(token in text for token in ("admin", "login", "sso", "auth", "dashboard")):
-        checks.extend([
-            "Map auth redirects, cookies, CORS, password reset, invitation, and SSO callback behavior.",
-            "Check safe route-normalization variants and stop immediately at proof of unauthorized access.",
-        ])
-        fp.append("Separate mere login-panel exposure from a bypass, sensitive metadata leak, or misconfiguration.")
-    if row.get("is_mismatch") or row.get("is_expired") or row.get("is_expiring"):
-        checks.append("Record CN/SANs, issuer, expiry, redirect chain, and default vhost response for routing evidence.")
-        fp.append("Confirm TLS anomalies affect this hostname and are not a scanner SNI/configuration artifact.")
-    return {
-        "checklist": checks[:7],
-        "false_positive_checks": fp[:5],
-        "stop_conditions": [
-            "Stop if testing reaches third-party data, destructive actions, persistence, spam, or unclear authorization.",
-            "Stop after one minimal proof and move to documentation once impact is demonstrated.",
-        ],
-    }
-
-
 def _bounty_lead_next_steps(row: dict, evidence: list[str]) -> list[str]:
     steps = [
         "Confirm this asset is in your authorized bug-bounty scope before testing.",
@@ -744,9 +651,6 @@ def _score_bounty_lead(row: dict) -> dict:
         evidence.append("Discovered subdomain with no high-signal bounty markers yet")
         lead_types.append("Recon candidate")
 
-    draft = {**row, "score": score, "evidence": evidence[:10]}
-    impact = _bounty_business_impact(draft, evidence)
-    validation = _bounty_validation_plan(draft, evidence)
     lead = {
         **row,
         "score": score,
@@ -754,11 +658,6 @@ def _score_bounty_lead(row: dict) -> dict:
         "lead_type": ", ".join(dict.fromkeys(lead_types)) or "Recon candidate",
         "evidence": evidence[:10],
         "next_steps": _bounty_lead_next_steps(row, evidence),
-        "priority": _bounty_priority_lane({**draft, "lead_type": ", ".join(dict.fromkeys(lead_types))}),
-        "business_impact": impact,
-        "validation_plan": validation,
-        "quick_win": score >= 75 and len(evidence) >= 3,
-        "evidence_density": len(evidence),
     }
     lead["v5_signal_packs"] = _v5_pack_matches(lead)
     lead["v5_validation_actions"] = _v5_validate_actions(lead)
@@ -840,9 +739,6 @@ def _collect_bounty_summary(project_id: str = "", search: str = "") -> dict:
     total = data.get("total", len(rows))
     high = sum(1 for r in rows if r.get("severity") == "high")
     medium = sum(1 for r in rows if r.get("severity") == "medium")
-    p0 = sum(1 for r in rows if (r.get("priority") or {}).get("lane") == "P0")
-    p1 = sum(1 for r in rows if (r.get("priority") or {}).get("lane") == "P1")
-    quick_wins = sum(1 for r in rows if r.get("quick_win"))
     active = sum(1 for r in rows if r.get("http_is_active"))
     protected = sum(1 for r in rows if r.get("http_status_code") in (401, 403))
     tls_anomalies = sum(1 for r in rows if r.get("is_mismatch") or r.get("is_expired") or r.get("is_expiring"))
@@ -862,9 +758,6 @@ def _collect_bounty_summary(project_id: str = "", search: str = "") -> dict:
         "returned": len(rows),
         "high": high,
         "medium": medium,
-        "p0": p0,
-        "p1": p1,
-        "quick_wins": quick_wins,
         "active_http": active,
         "protected_http": protected,
         "tls_anomalies": tls_anomalies,
@@ -872,7 +765,7 @@ def _collect_bounty_summary(project_id: str = "", search: str = "") -> dict:
         "top_projects": [{"name": k, "count": v} for k, v in sorted(project_counts.items(), key=lambda item: item[1], reverse=True)[:6]],
         "top_surface_types": [{"name": k, "count": v} for k, v in sorted(keyword_counts.items(), key=lambda item: item[1], reverse=True)[:8]],
         "executive_summary": (
-            f"{p0} P0, {p1} P1, {high} high-priority and {medium} medium-priority leads across {total} ranked assets; "
+            f"{high} high-priority and {medium} medium-priority leads across {total} ranked assets; "
             f"{active} active HTTP surfaces, {protected} protected login/API surfaces, and {tls_anomalies} TLS anomalies need validation."
         ),
     }
@@ -999,13 +892,10 @@ def _collect_bounty_copilot(project_id: str = "", search: str = "", limit: int =
             "score": lead.get("score"),
             "severity": lead.get("severity"),
             "lead_type": lead.get("lead_type"),
-            "priority": lead.get("priority"),
-            "business_impact": lead.get("business_impact"),
             "url": lead.get("http_final_url") or (f"{lead.get('http_scheme') or 'https'}://{lead.get('hostname')}" if lead.get("hostname") else ""),
             "evidence": (lead.get("evidence") or [])[:8],
             "validation_checklist": [
                 "Verify the hostname is in written scope and record the program rule permitting this test.",
-                *((lead.get("validation_plan") or {}).get("checklist") or [])[:4],
                 *((lead.get("next_steps") or [])[:5]),
                 "Collect timestamped screenshots and one minimal request/response proof for any verified issue.",
                 "Stop testing if you encounter third-party data, destructive functionality, or unclear authorization.",
@@ -1041,10 +931,8 @@ def _collect_bounty_brief(project_id: str = "", search: str = "", limit: int = 2
             "hostname": lead.get("hostname"),
             "score": lead.get("score"),
             "severity": lead.get("severity"),
-            "priority": lead.get("priority"),
-            "business_impact": (lead.get("business_impact") or {}).get("primary"),
             "why": lead.get("evidence", [])[:4],
-            "first_actions": ((lead.get("validation_plan") or {}).get("checklist") or lead.get("next_steps", []))[:3],
+            "first_actions": lead.get("next_steps", [])[:3],
         })
     return {
         "generated_at": db.now(),
