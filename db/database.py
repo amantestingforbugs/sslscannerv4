@@ -515,11 +515,68 @@ def project_update(pid, **kw):
     x(f"UPDATE projects SET {sets} WHERE id=?", [*kw.values(), pid])
     commit()
 
+def _table_exists(table: str) -> bool:
+    return bool(x("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (table,)).fetchone())
+
+
+def _table_has_column(table: str, column: str) -> bool:
+    if not _table_exists(table):
+        return False
+    return any(r["name"] == column for r in x(f"PRAGMA table_info({table})").fetchall())
+
+
+def _delete_if_column_exists(table: str, column: str, value) -> int:
+    if not _table_has_column(table, column):
+        return 0
+    return x(f"DELETE FROM {table} WHERE {column}=?", (value,)).rowcount or 0
+
+
 def project_delete(pid):
-    for t in ("job_events","job_controls","jobs","asset_findings","asset_observations","asset_relationships","assets","results","alerts","scans","subfinder_jobs","subfinder_hosts","subfinder_new_discoveries","openssl_results"):
-        x(f"DELETE FROM {t} WHERE project_id=?", (pid,)) if t not in {"job_events", "job_controls"} else None
-    x("DELETE FROM projects WHERE id=?", (pid,))
-    commit()
+    """Delete a project and all project-scoped records.
+
+    Some deployments carry SQLite files created by older application versions.
+    Those files may be missing newer cleanup tables, while other tables have no
+    project foreign key and must be removed explicitly. Check table/column
+    existence before cleanup so deletion works across legacy databases.
+    """
+    if not project_get(pid):
+        return False
+
+    try:
+        project_job_ids = []
+        if _table_has_column("jobs", "project_id"):
+            project_job_ids = [r["id"] for r in x("SELECT id FROM jobs WHERE project_id=?", (pid,)).fetchall()]
+        if project_job_ids:
+            if _table_has_column("job_events", "job_id"):
+                _delete_by_ids("job_events", "job_id", project_job_ids)
+            if _table_has_column("job_controls", "job_id"):
+                _delete_by_ids("job_controls", "job_id", project_job_ids)
+
+        # Delete child/high-volume rows before their project-scoped parents.
+        for table in (
+            "asset_findings",
+            "asset_observations",
+            "asset_relationships",
+            "assets",
+            "results",
+            "alerts",
+            "scans",
+            "subfinder_raw_results",
+            "subfinder_new_discoveries",
+            "subfinder_httpx_results",
+            "subfinder_hosts",
+            "subfinder_jobs",
+            "openssl_results",
+            "jobs",
+        ):
+            _delete_if_column_exists(table, "project_id", pid)
+
+        deleted = x("DELETE FROM projects WHERE id=?", (pid,)).rowcount or 0
+        commit()
+        return deleted > 0
+    except Exception:
+        _conn().rollback()
+        raise
 
 def project_hosts(pid):
     r = x("SELECT hosts_file FROM projects WHERE id=?", (pid,)).fetchone()
