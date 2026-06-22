@@ -1716,15 +1716,12 @@ def _run_subdomain_enumeration(
                         "stderr": str(exc),
                     }
             found = add_hosts(source_name, root_domain, run.get("found") or [])
-            run.setdefault("source", source_name)
-            run.setdefault("root_domain", root_domain)
             run["found"] = found
             run["found_count"] = len(found)
             raw_records.append(_compact_raw_record(run, sample_size=_env_int("SUBFINDER_RAW_SAMPLE_SIZE", 50, minimum=0)))
-            # Keep collecting source status even after the host cap is reached.
-            # Aggressive scans are expected to report every configured source as
-            # done/error/timeout; stopping here made later sources look like they
-            # never completed whenever an early source filled DOMAIN_ENUM_MAX_RESULTS.
+            if max_results and len(all_found) >= max_results:
+                _cancel_pending_futures(set(future_map) - {fut})
+                break
     finally:
         enum_pool.shutdown(wait=False, cancel_futures=True)
 
