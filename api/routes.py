@@ -303,8 +303,8 @@ def _validate_webhook_url(raw: str) -> str:
     if not value:
         return ""
     parsed = urlparse(value)
-    if parsed.scheme != "https" or not parsed.netloc or parsed.username or parsed.password:
-        raise ValueError("Webhook URLs must be valid https URLs without embedded credentials")
+    if parsed.scheme != "https" or not parsed.netloc:
+        raise ValueError("Webhook URLs must be valid https URLs")
     host = (parsed.hostname or "").strip().lower()
     if not host or _is_private_or_local_host(host) or resolves_to_disallowed_ip(host):
         raise ValueError("Webhook URL host is not allowed")

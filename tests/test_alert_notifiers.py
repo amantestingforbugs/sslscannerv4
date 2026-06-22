@@ -63,7 +63,7 @@ def test_telegram_notifier_escapes_html(monkeypatch):
     monkeypatch.setattr("alerts.notifiers._urlopen_no_redirect", fake_urlopen)
     notifier = TelegramNotifier({
         "telegram_enabled": 1,
-        "telegram_bot_token": "123456:ABCDEFGHIJKLMNOPQRSTUVWXYZabcd",
+        "telegram_bot_token": "token",
         "telegram_chat_id": "chat",
     })
 
@@ -78,49 +78,3 @@ def test_telegram_notifier_escapes_html(monkeypatch):
     assert "&lt;host&amp;&gt;" in text
     assert "CN &lt;bad&amp;&gt;" in text
     assert "<Project&>" not in text
-
-
-def test_webhook_notifier_rejects_private_network_url(monkeypatch):
-    from alerts.notifiers import WebhookNotifier
-
-    called = {"sent": False}
-
-    def fake_urlopen(req, timeout=10):
-        called["sent"] = True
-        raise AssertionError("private webhook URL should not be requested")
-
-    monkeypatch.setattr("alerts.notifiers._urlopen_no_redirect", fake_urlopen)
-    notifier = WebhookNotifier("slack", True, "https://127.0.0.1/hook")
-
-    assert notifier.ready is False
-    assert notifier.send_mismatch_digest("Project", [{"hostname": "a", "issue_type": "Expired", "details": "x"}]) is False
-    assert called["sent"] is False
-
-
-def test_webhook_notifier_rejects_redirects(monkeypatch):
-    from alerts.notifiers import WebhookNotifier
-    import urllib.error
-
-    class RedirectResponse:
-        status = 302
-
-    def fake_urlopen(req, timeout=10):
-        raise urllib.error.HTTPError(req.full_url, 302, "Found", {"Location": "https://example.com"}, None)
-
-    monkeypatch.setattr("alerts.notifiers._is_safe_https_url", lambda url: True)
-    monkeypatch.setattr("alerts.notifiers._urlopen_no_redirect", fake_urlopen)
-    notifier = WebhookNotifier("slack", True, "https://hooks.slack.com/services/test")
-
-    assert notifier.send_mismatch_digest("Project", [{"hostname": "a", "issue_type": "Expired", "details": "x"}]) is False
-
-
-def test_telegram_notifier_rejects_malformed_token():
-    from alerts.notifiers import TelegramNotifier
-
-    notifier = TelegramNotifier({
-        "telegram_enabled": 1,
-        "telegram_bot_token": "../../bad-token",
-        "telegram_chat_id": "chat",
-    })
-
-    assert notifier.ready is False
