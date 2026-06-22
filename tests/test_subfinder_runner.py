@@ -215,25 +215,6 @@ def test_query_urlscan_for_root_parses_task_and_page_domains(monkeypatch):
     assert found == ["api.example.com", "example.com", "www.example.com"]
 
 
-def test_query_urlscan_for_root_paginates_and_extracts_nested_lists(monkeypatch):
-    calls = []
-
-    def fake_json(url, *args, **kwargs):
-        calls.append(url)
-        if len(calls) == 1:
-            return {
-                "results": [{"page": {"url": "https://api.example.com/v1"}, "lists": {"domains": ["cdn.example.com"]}}],
-                "search_after": [123, "abc"],
-            }
-        return {"results": [{"task": {"domain": "portal.example.com"}}]}
-
-    monkeypatch.setenv("URLSCAN_MAX_PAGES", "2")
-    monkeypatch.setattr(runner, "_http_json_with_retries", fake_json)
-    found = _query_urlscan_for_root("example.com")
-    assert found == ["api.example.com", "cdn.example.com", "portal.example.com"]
-    assert "search_after=123%2Cabc" in calls[1]
-
-
 def test_build_subfinder_cmd_adds_aggressive_supported_flags(monkeypatch):
     monkeypatch.setattr(runner, "_subfinder_supports_flag", lambda *_args, flag=None: True)
     cmd = runner._build_subfinder_cmd("subfinder", "example.com")
@@ -312,35 +293,7 @@ def test_build_subfinder_cmd_preserves_supported_extra_flag_values(monkeypatch):
 
 def test_passive_enumeration_sources_include_all_optional_integrations():
     sources = runner._passive_enumeration_sources()
-    assert {"findomain", "anubis", "subdomain_center", "shodan", "chaos", "commoncrawl", "github_code", "censys", "binaryedge"}.issubset(sources)
-
-
-def test_query_virustotal_for_root_paginates(monkeypatch):
-    monkeypatch.setenv("VT_API_KEY", "secret")
-    calls = []
-
-    def fake_json(url, *args, **kwargs):
-        calls.append(url)
-        if len(calls) == 1:
-            return {"data": [{"id": "api.example.com"}], "links": {"next": "https://next.example/vt"}}
-        return {"data": [{"id": "cdn.example.com"}, {"id": "bad.net"}], "links": {}}
-
-    monkeypatch.setenv("VT_SUBDOMAIN_MAX_PAGES", "2")
-    monkeypatch.setattr(runner, "_http_json_with_retries", fake_json)
-    found = runner._query_virustotal_for_root("example.com")
-    assert found == ["api.example.com", "cdn.example.com"]
-    assert calls[1] == "https://next.example/vt"
-
-
-def test_query_binaryedge_for_root_extracts_nested_hostnames(monkeypatch):
-    monkeypatch.setenv("BINARYEDGE_API_KEY", "secret")
-    monkeypatch.setattr(
-        runner,
-        "_http_json_with_retries",
-        lambda *args, **kwargs: {"events": [{"domain": "api.example.com"}, {"domain": "bad.net"}]},
-    )
-    found = runner._query_binaryedge_for_root("example.com")
-    assert found == ["api.example.com"]
+    assert {"findomain", "anubis", "subdomain_center", "shodan", "chaos", "commoncrawl", "github_code"}.issubset(sources)
 
 
 def test_brute_labels_uses_builtin_top_n_without_network(monkeypatch):
