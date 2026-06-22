@@ -909,6 +909,43 @@ def test_subdomain_enumeration_respects_configured_result_cap(monkeypatch):
     assert len(result["found"]) == 2
     assert result["found"] == ["api.example.com", "dev.example.com"]
 
+
+def test_aggressive_domain_enumeration_records_all_initial_sources_after_result_cap(monkeypatch):
+    monkeypatch.setenv("DOMAIN_ENUM_MAX_RESULTS", "2")
+    monkeypatch.setattr(
+        runner,
+        "_passive_enumeration_sources",
+        lambda: {
+            "source_a": lambda root: ["a.example.com"],
+            "source_b": lambda root: ["b.example.com"],
+        },
+    )
+    monkeypatch.setattr(
+        runner,
+        "_run_subfinder_for_root",
+        lambda root, timeout=180: {
+            "root_domain": root,
+            "status": "done",
+            "found": ["api.example.com", "dev.example.com", "extra.example.com"],
+            "found_count": 3,
+            "stderr": "",
+        },
+    )
+
+    def fail_late_stage(*_args, **_kwargs):
+        raise AssertionError("late stages should stop once DOMAIN_ENUM_MAX_RESULTS is reached")
+
+    monkeypatch.setattr(runner, "_run_recursive_passive_enumeration", fail_late_stage)
+    monkeypatch.setattr(runner, "_bruteforce_dns_hosts", fail_late_stage)
+    monkeypatch.setattr(runner, "_permutation_dns_hosts", fail_late_stage)
+
+    result = runner._run_subdomain_enumeration(["example.com"], depth_mode="aggressive")
+    recorded_sources = {record["source"] for record in result["raw_records"]}
+
+    assert len(result["found"]) == 2
+    assert {"subfinder", "source_a", "source_b"} <= recorded_sources
+
+
 def test_aggressive_domain_enumeration_persists_incremental_results_before_completion(tmp_path, monkeypatch):
     import db.database as db
 
