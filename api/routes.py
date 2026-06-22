@@ -395,9 +395,17 @@ def _analyze_hosts_text(content: str) -> dict:
     """Return normalized host inventory metadata before saving a pasted/uploaded list."""
     raw_items = []
     for line in (content or "").splitlines():
-        item = line.split("#", 1)[0].strip()
-        if item:
-            raw_items.append(item)
+        line = line.split("#", 1)[0].strip()
+        if not line:
+            continue
+        if "," in line:
+            try:
+                fields = next(csv.reader([line]))
+            except csv.Error:
+                fields = line.split(",")
+            raw_items.extend(field.strip() for field in fields if field.strip())
+        else:
+            raw_items.append(line)
 
     normalized = []
     invalid = []
@@ -425,6 +433,26 @@ def _analyze_hosts_text(content: str) -> dict:
         "scope_domains": allowed_scope_domains(),
         "private_targets_allowed": allow_private_targets(),
     }
+
+
+def _decode_hosts_text(data: bytes) -> str:
+    """Decode uploaded host-list text from common editor encodings."""
+    if not data:
+        return ""
+    if data.startswith((b"\xff\xfe\x00\x00", b"\x00\x00\xfe\xff")):
+        return data.decode("utf-32", errors="ignore")
+    if data.startswith((b"\xff\xfe", b"\xfe\xff")):
+        return data.decode("utf-16", errors="ignore")
+
+    text = data.decode("utf-8-sig", errors="ignore")
+    if "\x00" not in text:
+        return text
+
+    for encoding in ("utf-16", "utf-16-le", "utf-16-be"):
+        decoded = data.decode(encoding, errors="ignore")
+        if decoded and decoded.count("\x00") < text.count("\x00"):
+            return decoded
+    return text.replace("\x00", "")
 
 
 V5_HUNTER_SIGNAL_PACKS = [
@@ -1527,7 +1555,7 @@ def _read_hosts_upload_payload() -> str:
     for field_name in ("file", "hosts_file", "host_file"):
         upload = request.files.get(field_name)
         if upload:
-            return upload.read().decode("utf-8-sig", errors="ignore")
+            return _decode_hosts_text(upload.read())
 
     payload = request.get_json(silent=True) or {}
     if isinstance(payload, dict) and payload.get("hosts") is not None:
@@ -1537,7 +1565,7 @@ def _read_hosts_upload_payload() -> str:
     if form_hosts is not None:
         return form_hosts
 
-    return (request.get_data(cache=False) or b"").decode("utf-8-sig", errors="ignore")
+    return _decode_hosts_text(request.get_data(cache=False) or b"")
 
 
 @api.post("/projects/<pid>/hosts")
@@ -1562,7 +1590,7 @@ def get_hosts(pid):
 def preview_hosts(pid):
     if not db.project_get(pid):
         return err("Project not found", 404)
-    content = (request.json or {}).get("hosts", "") or (request.data or b"").decode(errors="ignore")
+    content = (request.json or {}).get("hosts", "") or _decode_hosts_text(request.data or b"")
     return ok(_analyze_hosts_text(content))
 
 
