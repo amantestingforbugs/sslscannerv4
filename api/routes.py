@@ -19,7 +19,6 @@ import subprocess
 import shutil
 import tempfile
 import signal
-import functools
 import hmac
 import re
 import shlex
@@ -136,13 +135,8 @@ def _is_private_or_local_host(host: str) -> bool:
 
 def _resolve_nuclei_binary() -> str | None:
     configured = os.environ.get("NUCLEI_BIN", "").strip()
-    if configured:
-        configured_path = os.path.expanduser(configured)
-        if os.path.isfile(configured_path) and os.access(configured_path, os.X_OK):
-            return configured_path
-        configured_on_path = shutil.which(configured)
-        if configured_on_path:
-            return configured_on_path
+    if configured and os.path.isfile(configured) and os.access(configured, os.X_OK):
+        return configured
 
     bin_path = shutil.which("nuclei")
     if bin_path:
@@ -155,8 +149,7 @@ def _resolve_nuclei_binary() -> str | None:
 
 
 def _nuclei_templates_dir() -> str:
-    configured = os.environ.get("NUCLEI_TEMPLATES_DIR", "").strip()
-    return os.path.expanduser(configured) if configured else os.path.expanduser("~/nuclei-templates")
+    return os.environ.get("NUCLEI_TEMPLATES_DIR", "").strip() or os.path.expanduser("~/nuclei-templates")
 
 
 def _directory_has_files(path: str) -> bool:
@@ -175,32 +168,6 @@ def _nuclei_template_count(path: str) -> int:
         if name.endswith((".yaml", ".yml"))
     )
 
-
-@functools.lru_cache(maxsize=8)
-def _nuclei_supported_flags(nuclei_bin: str) -> set[str]:
-    """Return flags supported by the installed nuclei binary.
-
-    ProjectDiscovery has renamed/added flags across releases, and users often run
-    this app with a locally installed macOS/Windows/Linux nuclei binary. Building
-    the command from the actual help output prevents scans from failing before
-    they start just because an optional quality-of-life flag is unavailable.
-    """
-    try:
-        run = subprocess.run(
-            [nuclei_bin, "-h"],
-            text=True,
-            capture_output=True,
-            timeout=15,
-        )
-    except Exception:
-        return set()
-    help_text = f"{run.stdout or ''}\n{run.stderr or ''}"
-    return set(re.findall(r"(?<!\w)-{1,2}[A-Za-z][A-Za-z0-9-]*", help_text))
-
-
-def _nuclei_supports_flag(nuclei_bin: str, flag: str) -> bool:
-    flags = _nuclei_supported_flags(nuclei_bin)
-    return not flags or flag in flags
 
 def _nuclei_resource_settings() -> dict:
     return {
@@ -233,11 +200,8 @@ def _ensure_nuclei_templates(nuclei_bin: str) -> tuple[bool, str]:
 
     try:
         os.makedirs(templates_dir, exist_ok=True)
-        update_cmd = [nuclei_bin, "-ut"]
-        if _nuclei_supports_flag(nuclei_bin, "-ud"):
-            update_cmd.extend(["-ud", templates_dir])
         init_run = subprocess.run(
-            update_cmd,
+            [nuclei_bin, "-ut", "-ud", templates_dir],
             text=True,
             capture_output=True,
             timeout=300,
@@ -2020,26 +1984,21 @@ def _resolve_nuclei_hosts(pid: str, mode: str) -> list[str]:
 
 def _nuclei_command(nuclei_bin: str, targets_file: str, templates_dir: str) -> list[str]:
     resources = _nuclei_resource_settings()
-    cmd = [
+    return [
         nuclei_bin,
         "-l", targets_file,
         "-severity", "medium,high,critical",
         "-jsonl",
         "-stats",
-    ]
-    for optional_flag in ("-stats-json", "-duc", "-no-color", "-silent"):
-        if _nuclei_supports_flag(nuclei_bin, optional_flag):
-            cmd.append(optional_flag)
-    if _nuclei_supports_flag(nuclei_bin, "-ud"):
-        cmd.extend(["-ud", templates_dir])
-    cmd.extend([
+        "-stats-json",
+        "-duc",
+        "-ud", templates_dir,
         "-t", templates_dir,
         "-rl", str(resources["rate_limit"]),
         "-c", str(resources["concurrency"]),
         "-bs", str(resources["bulk_size"]),
         "-timeout", str(resources["timeout"]),
-    ])
-    return cmd
+    ]
 
 
 def _strip_ansi(text: str) -> str:
