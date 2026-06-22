@@ -2868,7 +2868,15 @@ function connectSSE() {
     queueAlertsRefresh();
     if (Number(d.new_alerts || 0) > 0 || (previousCount !== null && nextCount > previousCount)) {
       const delta = Number(d.new_alerts || (nextCount - previousCount) || 0);
-      toast(`${fmt(delta)} new alert${delta === 1 ? '' : 's'} after scan finished`, 'err');
+      const parts = [];
+      const breakdown = d.alert_breakdown || {};
+      [['SSL Mismatch', 'mismatch'], ['Expired', 'expired'], ['Expiring Soon', 'expiring'], ['Scan Error', 'scan error']].forEach(([key, label]) => {
+        const count = Number(breakdown[key] || 0);
+        if (count) parts.push(`${fmt(count)} ${label}${count === 1 ? '' : 's'}`);
+      });
+      const scope = d.project_name ? ` for ${d.project_name}` : '';
+      const detail = parts.length ? `: ${parts.join(', ')}` : '';
+      toast(`Scan finished${scope} with ${fmt(delta)} alert${delta === 1 ? '' : 's'}${detail}`, 'err');
       if (!document.hidden) pollBadge();
     }
   });
@@ -4231,7 +4239,7 @@ function renderAlerts(d) {
   } else {
     const cls=t=>t.includes('Mismatch')?'mismatch':t.includes('Expir')?'expiring':'expired';
     el.innerHTML=allAlerts.map(a=>`
-      <div class="alert-item ${a.seen?'':'unread'}" onclick="markOneSeen('${a.id}',this)">
+      <div class="alert-item ${a.seen?'':'unread'}" data-alert-id="${escAttr(a.id)}" role="button" tabindex="0">
         <div class="alert-dot" style="color:${a.seen?'var(--text-muted)':'var(--red)'}">●</div>
         <div style="flex:1;min-width:0">
           <div class="alert-host">${esc(a.hostname)}</div>
@@ -4241,6 +4249,13 @@ function renderAlerts(d) {
         <div class="alert-time">${new Date(a.created_at).toLocaleString()}</div>
       </div>`).join('');
   }
+  el.querySelectorAll('.alert-item[data-alert-id]').forEach(row => {
+    const open = () => markOneSeen(row.dataset.alertId, row);
+    row.addEventListener('click', open);
+    row.addEventListener('keydown', ev => {
+      if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); open(); }
+    });
+  });
   renderAlertsPagination(d);
 }
 

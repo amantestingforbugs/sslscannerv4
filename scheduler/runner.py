@@ -154,6 +154,7 @@ def run_project_scan(project_id: str, triggered_by: str = "manual") -> Optional[
 
     result_batch, alert_batch, done_count = [], [], [0]
     alert_events_count = [0]
+    alert_issue_counts = {"SSL Mismatch": 0, "Expired": 0, "Expiring Soon": 0, "Scan Error": 0}
     live_counts = {"ok": 0, "mismatches": 0, "expired": 0, "expiring": 0, "errors": 0}
     lock = threading.Lock()
 
@@ -177,6 +178,7 @@ def run_project_scan(project_id: str, triggered_by: str = "manual") -> Optional[
                 for h, issue, detail, scope in alert_batch:
                     alert_add(project_id, h, issue, detail, sid, mismatch_scope=scope)
                     alert_events_count[0] += 1
+                    alert_issue_counts[issue] = alert_issue_counts.get(issue, 0) + 1
                 alert_batch.clear()
             # Keep the live progress card accurate even for small scans that
             # never hit PROGRESS_UPDATE_EVERY before finishing.
@@ -203,6 +205,7 @@ def run_project_scan(project_id: str, triggered_by: str = "manual") -> Optional[
             for h, issue, detail, scope in alert_batch:
                 alert_add(project_id, h, issue, detail, sid, mismatch_scope=scope)
                 alert_events_count[0] += 1
+                alert_issue_counts[issue] = alert_issue_counts.get(issue, 0) + 1
         asset_backfill_project(project_id)
         if was_stopped:
             done = done_count[0]
@@ -224,7 +227,14 @@ def run_project_scan(project_id: str, triggered_by: str = "manual") -> Optional[
             jobs.update_progress(sid, done=total, total=total, **final_counts)
             jobs.update_state(sid, status="done", progress=total, done=total, finished_at=_now())
 
-        publish("alert_update", {"unseen_count": alerts_unseen_count(), "project_id": project_id, "scan_id": sid, "new_alerts": alert_events_count[0]})
+        publish("alert_update", {
+            "unseen_count": alerts_unseen_count(),
+            "project_id": project_id,
+            "project_name": project["name"],
+            "scan_id": sid,
+            "new_alerts": alert_events_count[0],
+            "alert_breakdown": {k: v for k, v in alert_issue_counts.items() if v},
+        })
 
         # Send remote alerts
         unsent = [a for a in alerts_unsent() if a["project_id"] == project_id]
