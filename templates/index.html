@@ -650,7 +650,6 @@ tbody tr:last-child td{border-bottom:none}
   border-left:3px solid var(--accent);
 }
 .toast.ok{border-left-color:var(--green)}
-.toast.warn{border-left-color:var(--amber)}
 .toast.err{border-left-color:var(--red)}
 @keyframes toastIn{from{opacity:0;transform:translateX(12px)}to{opacity:1;transform:none}}
 
@@ -2893,7 +2892,7 @@ function daysColor(d) {
 // TOAST
 // ════════════════════════════════════════════════════════════
 function toast(msg, type='') {
-  const icon = type==='ok'?'✅':type==='warn'?'⚠️':type==='err'?'❌':'ℹ️';
+  const icon = type==='ok'?'✅':type==='err'?'❌':'ℹ️';
   const el = document.createElement('div');
   el.className = `toast ${type}`;
   el.innerHTML = `<span>${icon}</span><span>${esc(msg)}</span>`;
@@ -2943,7 +2942,7 @@ function connectSSE() {
       });
       const scope = d.project_name ? ` for ${d.project_name}` : '';
       const detail = parts.length ? `: ${parts.join(', ')}` : '';
-      toast(`Scan finished${scope} with ${fmt(delta)} alert${delta === 1 ? '' : 's'}${detail}`, 'warn');
+      toast(`Scan finished${scope} with ${fmt(delta)} alert${delta === 1 ? '' : 's'}${detail}`, 'err');
       if (!document.hidden) pollBadge();
     }
   });
@@ -3001,7 +3000,7 @@ function connectSSE() {
     updateQuickProgress(d);
     if (d.status === 'done') {
       document.getElementById('quick-scan-btn').disabled = false;
-      toast(d.alerts ? `Quick scan complete — ${fmt(d.alerts)} alert${d.alerts === 1 ? '' : 's'} created` : 'Quick scan complete', d.alerts ? 'warn' : 'ok');
+      toast(d.alerts ? `Quick scan complete — ${fmt(d.alerts)} alert${d.alerts === 1 ? '' : 's'} created` : 'Quick scan complete', d.alerts ? 'err' : 'ok');
     } else if (d.status === 'error') {
       document.getElementById('quick-scan-btn').disabled = false;
       toast(d.error || 'Quick scan failed', 'err');

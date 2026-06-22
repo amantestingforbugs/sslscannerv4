@@ -560,12 +560,6 @@ def test_quick_scan_sends_current_project_for_realtime_alerts():
     assert "Quick scan complete — ${fmt(d.alerts)} alert" in TEMPLATE
 
 
-def test_alert_notifications_are_warnings_not_errors():
-    assert "type==='warn'?'⚠️'" in TEMPLATE
-    assert "toast(`Scan finished${scope} with ${fmt(delta)} alert${delta === 1 ? '' : 's'}${detail}`, 'warn');" in TEMPLATE
-    assert "d.alerts ? 'warn' : 'ok'" in TEMPLATE
-
-
 def test_quick_scan_backend_creates_realtime_alert_events():
     routes_text = (ROOT / "api" / "routes.py").read_text()
     assert "def _quick_scan_alert_project_id()" in routes_text
