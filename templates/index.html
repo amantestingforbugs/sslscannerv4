@@ -1164,6 +1164,66 @@ body::before{content:'';position:fixed;inset:0;pointer-events:none;background:ra
 @media(max-width:900px){.simple-hero{align-items:flex-start;flex-direction:column}.simple-metrics,.simple-two-column{grid-template-columns:1fr 1fr}.simple-system-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.simple-system-grid div{border-bottom:1px solid var(--border)}}
 @media(max-width:620px){.simple-metrics,.simple-two-column{grid-template-columns:1fr}.simple-hero{padding:24px}.simple-actions{width:100%;justify-content:flex-start}.simple-actions .btn{flex:1;justify-content:center}.simple-metric strong{font-size:34px}}
 
+/* Fast UI mode: keep the interface responsive by avoiding expensive paints. */
+html[data-performance="fast"]{
+  --transition: .12s cubic-bezier(.2,0,0,1);
+  --transition-slow: .16s cubic-bezier(.2,0,0,1);
+  --shadow: 0 8px 24px rgba(2,6,23,.16);
+  --shadow-sm: 0 4px 12px rgba(2,6,23,.12);
+}
+html[data-performance="fast"] body::before,
+html[data-performance="fast"] .dash-hero-copy::before,
+html[data-performance="fast"] .dash-hero-copy::after,
+html[data-performance="fast"] .dash-kpi-card::after,
+html[data-performance="fast"] .bounty-hero::after{display:none!important}
+html[data-performance="fast"] .topbar,
+html[data-performance="fast"] .dash-trust-chip,
+html[data-performance="fast"] .command-palette,
+html[data-performance="fast"] .modal-overlay{backdrop-filter:none!important}
+html[data-performance="fast"] .main,
+html[data-performance="fast"] .content{background:var(--bg-base)!important}
+html[data-performance="fast"] .sidebar,
+html[data-performance="fast"] .dash-hero-copy,
+html[data-performance="fast"] .dash-risk-panel,
+html[data-performance="fast"] .dash-card,
+html[data-performance="fast"] .dash-system-strip,
+html[data-performance="fast"] .dash-kpi-card,
+html[data-performance="fast"] .card,
+html[data-performance="fast"] .panel-card,
+html[data-performance="fast"] .table-shell,
+html[data-performance="fast"] .stat-card,
+html[data-performance="fast"] .project-card,
+html[data-performance="fast"] .integration-card,
+html[data-performance="fast"] .xbow-panel,
+html[data-performance="fast"] .bounty-hero,
+html[data-performance="fast"] .bounty-focus-card,
+html[data-performance="fast"] .onboarding-card{box-shadow:none!important;background:var(--bg-surface)!important}
+html[data-performance="fast"] .card:hover,
+html[data-performance="fast"] .panel-card:hover,
+html[data-performance="fast"] .table-shell:hover,
+html[data-performance="fast"] .stat-card:hover,
+html[data-performance="fast"] .project-card:hover,
+html[data-performance="fast"] .dash-kpi-card:hover,
+html[data-performance="fast"] .dash-help-item:hover{transform:none!important;box-shadow:none!important}
+html[data-performance="fast"] .page.active,
+html[data-performance="fast"] .modal,
+html[data-performance="fast"] .toast,
+html[data-performance="fast"] .command-palette.open .command-shell{animation:none!important}
+html[data-performance="fast"] .pulse,
+html[data-performance="fast"] .topbar-health-dot,
+html[data-performance="fast"] .badge-running{animation:none!important}
+html[data-performance="fast"] .card,
+html[data-performance="fast"] .panel-card,
+html[data-performance="fast"] .table-shell,
+html[data-performance="fast"] .stat-card,
+html[data-performance="fast"] .project-card,
+html[data-performance="fast"] .integration-card,
+html[data-performance="fast"] .dash-card,
+html[data-performance="fast"] .dash-kpi-card,
+html[data-performance="fast"] .dash-risk-panel,
+html[data-performance="fast"] .dash-hero-copy{content-visibility:auto;contain:layout paint style;contain-intrinsic-size:220px}
+html[data-performance="fast"] tbody tr{transition:none!important}
+
 </style>
 </head>
 <body>
@@ -2387,6 +2447,11 @@ function debounce(fn, wait=250) {
   };
 }
 
+function scheduleIdleWork(fn, timeout = 250) {
+  if ('requestIdleCallback' in window) return requestIdleCallback(fn, { timeout });
+  return setTimeout(fn, 0);
+}
+
 function rafThrottle(fn) {
   let raf = null;
   let lastArgs = null;
@@ -2514,7 +2579,8 @@ function saveUiPrefs(next = {}) {
   applyUiPrefs(prefs);
 }
 function applyUiPrefs(prefs = getUiPrefs()) {
-  const normalized = { density: 'standard', accent: 'violet', motion: 'full', ...prefs };
+  const normalized = { density: 'standard', accent: 'violet', motion: 'calm', performance: 'fast', ...prefs };
+  document.documentElement.dataset.performance = normalized.performance === 'full' ? 'full' : 'fast';
   document.documentElement.dataset.density = normalized.density;
   document.documentElement.dataset.accent = normalized.accent;
   document.documentElement.dataset.motion = normalized.motion;
@@ -2667,9 +2733,9 @@ function nav(name, options = {}) {
   document.getElementById('mainContent')?.focus({ preventScroll: true });
   if (persist) persistRoute(name, detailId, replace);
   if (typeof config.onEnter === 'function') {
-    requestAnimationFrame(() => {
+    scheduleIdleWork(() => {
       if (document.getElementById('page-'+name)?.classList.contains('active')) config.onEnter();
-    });
+    }, 120);
   }
 }
 
@@ -2703,7 +2769,7 @@ function filterNavItems(term = '') {
     section.classList.toggle('is-hidden', !hasVisibleItem);
   });
 }
-navFilterInput?.addEventListener('input', (e) => filterNavItems(e.target.value));
+navFilterInput?.addEventListener('input', debounce((e) => filterNavItems(e.target.value), 80));
 
 const menuBtn = document.getElementById('mobileMenuBtn');
 const sidebarOverlay = document.getElementById('sidebarOverlay');
@@ -2756,7 +2822,7 @@ function runQuickAction(item) {
   closeCommandPalette();
 }
 document.getElementById('commandBtn')?.addEventListener('click', openCommandPalette);
-commandInput?.addEventListener('input', e => renderCommandList(e.target.value));
+commandInput?.addEventListener('input', rafThrottle(e => renderCommandList(e.target.value)));
 commandInput?.addEventListener('keydown', e => {
   if (e.key === 'ArrowDown') { e.preventDefault(); moveCommandSelection(1); }
   if (e.key === 'ArrowUp') { e.preventDefault(); moveCommandSelection(-1); }
@@ -3255,12 +3321,10 @@ async function loadDash() {
     if (projects.length) projectsCache = projects;
     applyStat(stats);
     updateMissionControl(stats, projects, riskIntel);
-    await Promise.allSettled([
-      refreshActiveScans(),
-      loadDashMismatches(projects),
-      loadLogs(),
-      loadSystemOverview(),
-    ]);
+    scheduleIdleWork(() => refreshActiveScans(), 300);
+    scheduleIdleWork(() => loadDashMismatches(projects), 500);
+    scheduleIdleWork(() => loadLogs(), 700);
+    scheduleIdleWork(() => loadSystemOverview(), 900);
   } finally {
     dashboardLoadInFlight = false;
   }
