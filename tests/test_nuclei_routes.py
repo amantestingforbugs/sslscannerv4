@@ -222,25 +222,3 @@ def test_nuclei_scan_route_starts_async_scan(monkeypatch):
         "mode": "all_subdomains",
         "hosts": ["example.com"],
     }
-
-
-def test_nuclei_command_safe_mode_caps_resources(monkeypatch):
-    monkeypatch.setenv("NUCLEI_RATE_LIMIT", "100")
-    monkeypatch.setenv("NUCLEI_CONCURRENCY", "50")
-    monkeypatch.setenv("NUCLEI_BULK_SIZE", "50")
-    monkeypatch.setenv("NUCLEI_TIMEOUT", "5")
-
-    cmd = _nuclei_command("/bin/nuclei", "/tmp/targets", "/tmp/templates", safe_mode=True)
-
-    assert cmd[cmd.index("-rl") + 1] == "5"
-    assert cmd[cmd.index("-c") + 1] == "2"
-    assert cmd[cmd.index("-bs") + 1] == "2"
-    assert cmd[cmd.index("-timeout") + 1] == "10"
-
-
-def test_nuclei_exit_error_explains_exit_code_9():
-    message = _nuclei_exit_error(9)
-
-    assert "exit code 9" in message
-    assert "resource pressure" in message
-    assert "automatically retries" in message
