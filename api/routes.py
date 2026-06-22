@@ -28,7 +28,6 @@ from urllib.parse import urlparse
 from flask import Blueprint, request, jsonify, Response, stream_with_context
 
 import db.database as db
-from core import jobs
 from core.ssl_checker import parse_hosts_file
 from core.target_policy import (
     allow_private_targets,
@@ -290,14 +289,7 @@ def _validate_webhook_url(raw: str) -> str:
 
 
 def broadcast(event: str, data: dict):
-    """Persist and push an event to all connected SSE clients."""
-    if isinstance(data, dict):
-        event_job_id = data.get("id") or data.get("scan_id") or data.get("job_id")
-        if event_job_id:
-            try:
-                jobs.append_event(str(event_job_id), event, data)
-            except Exception:
-                log.debug("Unable to persist SSE event %s for job %s", event, event_job_id, exc_info=True)
+    """Push an event to all connected SSE clients."""
     msg = f"event: {event}\ndata: {json.dumps(data)}\n\n"
     with _sse_lock:
         dead = []
@@ -1071,7 +1063,6 @@ def _start_quick_scan(hosts: list[str]) -> str:
             "started_at": db.now(),
             "finished_at": None,
         }
-    jobs.create_job("quick_scan", id=sid, status="running", total=len(hosts), source="manual", payload={"source": "quick_scan", "hosts": hosts})
     th = threading.Thread(target=_quick_scan_worker, args=(sid,), daemon=True, name=f"quick-scan-{sid[:8]}")
     with _quick_scan_lock:
         _quick_scan_threads[sid] = th
@@ -1125,7 +1116,6 @@ def _quick_scan_worker(sid: str):
                 "expiring": state["expiring"],
                 "errors": state["errors"],
             }
-        jobs.update_progress(sid, done=done, total=total, ok=payload["ok"], mismatches=payload["mismatches"], expired=payload["expired"], expiring=payload["expiring"], errors=payload["errors"])
         broadcast("quick_scan_row", {"scan_id": sid, "row": row})
         broadcast("quick_scan_update", payload)
 
@@ -1158,7 +1148,6 @@ def _quick_scan_worker(sid: str):
                     "errors": state["errors"],
                     "finished_at": state["finished_at"],
                 }
-        jobs.update_state(sid, status="done", done=payload.get("done", 0), progress=payload.get("done", 0), finished_at=payload.get("finished_at"))
         broadcast("quick_scan_update", payload)
     except Exception as e:
         with _quick_scan_lock:
@@ -1175,7 +1164,6 @@ def _quick_scan_worker(sid: str):
                     "total": state["total"],
                     "done": state["done"],
                 }
-        jobs.update_state(sid, status="error", finished_at=payload.get("finished_at") if 'payload' in locals() else db.now(), payload={"error": str(e)})
         broadcast("quick_scan_update", payload)
 
 
@@ -1184,7 +1172,6 @@ def _start_openssl_worker(pid: str, source: str = "manual") -> bool:
         existing = _openssl_threads.get(pid)
         if existing and existing.is_alive():
             return False
-        job = jobs.create_job("openssl_scan", id=f"openssl:{pid}", project_id=pid, status="running", source=source, payload={})
         _openssl_status[pid] = {
             "status": "running",
             "source": source,
@@ -1226,8 +1213,7 @@ def _openssl_worker_loop(pid: str, source: str):
                     if pid in _openssl_status:
                         _openssl_status[pid]["processed_total"] += 1
                         _openssl_status[pid]["new_hosts_scanned"] += 1
-                        jobs.update_progress(f"openssl:{pid}", done=_openssl_status[pid]["processed_total"], new_hosts_scanned=_openssl_status[pid]["new_hosts_scanned"])
-                broadcast("openssl_row", {"id": f"openssl:{pid}", "project_id": pid, "row": row})
+                broadcast("openssl_row", {"project_id": pid, "row": row})
 
             broadcast("openssl_status", {
                 "project_id": pid,
@@ -1259,11 +1245,9 @@ def sse_stream():
         _sse_clients.append(q)
 
     def generate():
-        last_event_id = _safe_int(request.headers.get("Last-Event-ID") or request.args.get("last_event_id"), 0, min_value=0)
-        yield f"event: connected\nid: {last_event_id}\ndata: {{}}\n\n"
+        # Send initial heartbeat
+        yield f"event: connected\ndata: {{}}\n\n"
         try:
-            for evt in jobs.events_since(last_event_id, limit=200):
-                yield f"event: {evt['event']}\nid: {evt['rowid']}\ndata: {json.dumps(evt.get('payload') or {})}\n\n"
             while True:
                 try:
                     msg = q.get(timeout=25)
@@ -1578,10 +1562,6 @@ def start_quick_scan():
 def quick_scan_status(sid):
     with _quick_scan_lock:
         state = dict(_quick_scan_state.get(sid) or {})
-    if not state:
-        job = jobs.get_job(sid)
-        if job:
-            state = jobs.public_state(job)
     if not state:
         return err("Quick scan not found", 404)
     # Keep status payload tiny so polling remains fast even for large scans.
@@ -2263,8 +2243,7 @@ def _nuclei_public_state(scan_id: str) -> dict:
     with _nuclei_lock:
         state = dict(_nuclei_state.get(scan_id) or {})
         if not state:
-            job = jobs.get_job(scan_id)
-            return jobs.public_state(job) if job else {}
+            return {}
         state.pop("process", None)
         state.pop("hosts", None)
         state["logs"] = list(state.get("logs") or [])
@@ -2291,7 +2270,6 @@ def _nuclei_append_log(scan_id: str, line: str, stream: str = "stdout"):
         if len(logs) > NUCLEI_LOG_BUFFER:
             del logs[:-NUCLEI_LOG_BUFFER]
         payload = _nuclei_public_state_locked(scan_id)
-    jobs.append_log(scan_id, text, stream=stream)
     broadcast("nuclei_log", {"id": scan_id, "entry": entry})
     broadcast("nuclei_update", payload)
 
@@ -2317,13 +2295,6 @@ def _nuclei_set_state(scan_id: str, **updates) -> dict:
             return {}
         state.update(updates)
         payload = _nuclei_public_state_locked(scan_id)
-    persisted_updates = dict(updates)
-    payload_copy = dict(payload)
-    payload_copy.pop("id", None)
-    payload_copy.pop("status", None)
-    payload_copy.pop("progress", None)
-    status = persisted_updates.pop("status", None)
-    jobs.update_state(scan_id, **({"status": status} if status else {}), payload=payload_copy)
     broadcast("nuclei_update", payload)
     return payload
 
@@ -2345,9 +2316,6 @@ def _nuclei_scan_sort_key(state: dict) -> str:
 def _nuclei_list_public(project_id: str | None = None, limit: int = 20, active_only: bool = False) -> list[dict]:
     with _nuclei_lock:
         states = list(_nuclei_state.values())
-        persisted = [jobs.public_state(j) for j in jobs.list_jobs(job_type="nuclei_scan", project_id=project_id, active=active_only if active_only else None, limit=limit)]
-        seen = {s.get("id") for s in states}
-        states.extend([j for j in persisted if j.get("id") not in seen])
         if project_id:
             states = [s for s in states if s.get("project_id") == project_id]
         if active_only:
@@ -2590,7 +2558,6 @@ def _start_nuclei_scan(pid: str, project_name: str, mode: str, hosts: list[str])
         for existing in _nuclei_state.values():
             if existing.get("project_id") == pid and existing.get("status") in _nuclei_active_statuses():
                 raise RuntimeError("A nuclei scan is already running for this project")
-        jobs.create_job("nuclei_scan", id=scan_id, project_id=pid, status="queued", total=total, source=mode, payload={"project_name": project_name, "scan_mode": mode, "hosts_scanned": total, "severities": ["medium", "high", "critical"], "estimated_seconds": estimate_seconds, "estimated_completion_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() + estimate_seconds)), "stats": {"hosts": total, "matched": 0, "errors": 0, "requests": 0}, "progress_percent": 0})
         _nuclei_state[scan_id] = {
             "id": scan_id,
             "project_id": pid,
@@ -2679,7 +2646,6 @@ def pause_nuclei_scan(scan_id):
         os.killpg(os.getpgid(process.pid), signal.SIGSTOP)
     except Exception:
         process.send_signal(signal.SIGSTOP)
-    jobs.request_pause(scan_id)
     return ok(_nuclei_set_state(scan_id, status="paused", message="Nuclei scan paused"))
 
 
@@ -2696,7 +2662,6 @@ def resume_nuclei_scan(scan_id):
         os.killpg(os.getpgid(process.pid), signal.SIGCONT)
     except Exception:
         process.send_signal(signal.SIGCONT)
-    jobs.request_resume(scan_id)
     return ok(_nuclei_set_state(scan_id, status="running", message="Nuclei scan resumed"))
 
 
@@ -2710,7 +2675,6 @@ def stop_nuclei_scan(scan_id):
         if state.get("status") not in {"queued", "preparing", "running", "paused"}:
             return err("Nuclei scan is not active", 409)
         state["stop_requested"] = True
-    jobs.request_cancel(scan_id)
     if process:
         try:
             os.killpg(os.getpgid(process.pid), signal.SIGTERM)
@@ -2758,9 +2722,7 @@ def openssl_subjects_list(pid):
     search = (request.args.get("search", "") or "").strip()
     rows = db.openssl_results_list(pid, search=search, limit=limit)
     with _openssl_lock:
-        status = dict(_openssl_status.get(pid) or {})
-    if not status:
-        status = jobs.public_state(jobs.get_job(f"openssl:{pid}")) or {"status": "idle"}
+        status = dict(_openssl_status.get(pid) or {"status": "idle"})
     return ok({
         "project_id": pid,
         "project_name": p["name"],
