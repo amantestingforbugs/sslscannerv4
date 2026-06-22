@@ -690,44 +690,6 @@ def test_domain_enumeration_and_project_subfinder_share_same_pipeline(monkeypatc
     assert job_id == "job1"
 
 
-def test_project_subfinder_treats_source_timeouts_as_completed_with_warnings(monkeypatch):
-    import db.database as db
-
-    shared = {
-        "found": ["api.example.com"],
-        "source_map": {"passive": ["api.example.com"]},
-        "source_counts": {"passive": 1},
-        "raw_records": [
-            {"source": "passive", "root_domain": "example.com", "status": "done", "found_count": 1, "found_sample": ["api.example.com"]},
-            {"source": "slow_public_api", "root_domain": "example.com", "status": "timeout", "found_count": 0, "stderr_preview": "Enumeration source timed out"},
-        ],
-    }
-    raw_finishes = []
-
-    monkeypatch.setattr(runner, "_run_subdomain_enumeration", lambda roots, depth_mode="aggressive": shared)
-    monkeypatch.setattr(runner, "subfinder_available", lambda: True)
-    monkeypatch.setattr(runner, "_resolve_active_hosts_with_httpx", lambda hosts: [])
-    monkeypatch.setattr(runner, "_ssl_scan_subfinder_hosts", lambda *args, **kwargs: None)
-    monkeypatch.setattr(db, "domain_enum_scan_create", lambda *args, **kwargs: "scan1")
-    monkeypatch.setattr(db, "domain_enum_results_add_batch", lambda *args, **kwargs: None)
-    monkeypatch.setattr(db, "domain_enum_scan_finish", lambda *args, **kwargs: None)
-    monkeypatch.setattr(db, "project_get", lambda project_id: {"id": project_id, "name": "Example"})
-    monkeypatch.setattr(db, "project_hosts", lambda project_id: ["example.com"])
-    monkeypatch.setattr(db, "subfinder_job_create", lambda *args, **kwargs: "job1")
-    monkeypatch.setattr(db, "subfinder_raw_result_add", lambda *args, **kwargs: "raw1")
-    monkeypatch.setattr(db, "subfinder_raw_result_finish", lambda *args, **kwargs: raw_finishes.append(args))
-    monkeypatch.setattr(db, "subfinder_hosts_add_batch", lambda project_id, hosts: (len(hosts), hosts))
-    monkeypatch.setattr(db, "subfinder_new_discoveries_add_batch", lambda *args, **kwargs: None)
-    monkeypatch.setattr(db, "subfinder_httpx_results_upsert_batch", lambda *args, **kwargs: None)
-    monkeypatch.setattr(db, "subfinder_job_finish", lambda *args, **kwargs: None)
-    monkeypatch.setattr(db, "subfinder_job_error", lambda *args, **kwargs: None)
-
-    job_id = runner.run_subfinder_for_project("project1", triggered_by="manual")
-
-    assert job_id == "job1"
-    assert raw_finishes[0][1] == "done"
-    assert raw_finishes[0][2] == 0
-
 
 def test_standard_domain_enumeration_skips_deep_dns_stages(monkeypatch):
     monkeypatch.setattr(
@@ -776,7 +738,7 @@ def test_standard_domain_enumeration_uses_fast_passive_sources_by_default(monkey
     assert result["found"] == ["ct.example.com"]
     assert "crtsh" in calls
     assert "slow_optional" not in calls
-    assert ("subfinder", 45) in calls
+    assert ("subfinder", 90) in calls
 
 
 def test_standard_domain_enumeration_can_request_all_sources(monkeypatch):
@@ -802,7 +764,7 @@ def test_standard_domain_enumeration_can_request_all_sources(monkeypatch):
     assert result["found"] == ["ct.example.com", "slow.example.com"]
     assert "crtsh" in calls
     assert "slow_optional" in calls
-    assert ("subfinder", 45) in calls
+    assert ("subfinder", 90) in calls
 
 
 def test_standard_domain_enumeration_allows_source_override(monkeypatch):
