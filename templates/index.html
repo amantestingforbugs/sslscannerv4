@@ -1926,14 +1926,21 @@ body::before{content:'';position:fixed;inset:0;pointer-events:none;background:ra
         <div class="table-toolbar" style="padding:0 14px 10px 14px">
           <div class="search-input" style="max-width:340px">
             <svg width="14" height="14" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
-            <input type="text" id="sf-enum-search" placeholder="Search hostnames..." oninput="renderEnumResults()">
+            <input type="text" id="sf-enum-search" placeholder="Search hostnames..." oninput="resetEnumPageAndRender()">
           </div>
-          <select class="form-input" id="sf-enum-source-filter" style="max-width:220px" onchange="renderEnumResults()">
+          <select class="form-input" id="sf-enum-source-filter" style="max-width:220px" onchange="resetEnumPageAndRender()">
             <option value="all">All sources</option>
           </select>
           <span id="sf-enum-results-count" style="font-size:12px;color:var(--text-muted)">0 rows</span>
         </div>
         <div class="table-wrap"><table><thead><tr><th>Hostname</th><th>Source</th><th>Discovered</th></tr></thead><tbody id="sf-enum-results-body"></tbody></table></div>
+        <div class="pagination" id="sf-enum-pagination" style="display:none">
+          <span id="sf-enum-pag-info"></span>
+          <div class="pagination-controls">
+            <button class="btn btn-sm" id="sf-enum-pag-prev" onclick="changeEnumPage(-1)">← Prev</button>
+            <button class="btn btn-sm" id="sf-enum-pag-next" onclick="changeEnumPage(1)">Next →</button>
+          </div>
+        </div>
       </div>
     </div>
 
@@ -2248,6 +2255,8 @@ let alertSettingsCache = null;
 let genericTableObserver = null;
 let pendingLogEntries = [];
 let logFlushTimer = null;
+let enumCurPage = 1, enumTotalPages = 1;
+const ENUM_RESULTS_PER_PAGE = 250;
 let opensslRenderTimer = null;
 let dashboardLoadInFlight = false;
 let sseConnection = null;
@@ -4421,9 +4430,48 @@ function renderEnumResults() {
     const source = (r.source || 'mixed');
     return (!q || host.includes(q)) && (src === 'all' || String(source).split(',').map(s => s.trim()).includes(src));
   });
+  enumTotalPages = Math.max(1, Math.ceil(rows.length / ENUM_RESULTS_PER_PAGE));
+  enumCurPage = Math.min(Math.max(1, enumCurPage), enumTotalPages);
+  const start = (enumCurPage - 1) * ENUM_RESULTS_PER_PAGE;
+  const pageRows = rows.slice(start, start + ENUM_RESULTS_PER_PAGE);
   document.getElementById('sf-enum-results-count').textContent = `${fmt(rows.length)} rows`;
-  body.innerHTML = rows.length ? rows.map(r => `<tr><td style="font-family:var(--mono)">${esc(r.hostname)}</td><td>${esc(r.source||'mixed')}</td><td style="font-size:12px;color:var(--text-secondary)">${new Date(r.discovered_at).toLocaleString()}</td></tr>`).join('')
+  body.innerHTML = pageRows.length ? pageRows.map(r => `<tr><td style="font-family:var(--mono)">${esc(r.hostname)}</td><td>${esc(r.source||'mixed')}</td><td style="font-size:12px;color:var(--text-secondary)">${new Date(r.discovered_at).toLocaleString()}</td></tr>`).join('')
     : '<tr><td colspan="3" style="text-align:center;padding:16px;color:var(--text-muted)">No results match the current filters.</td></tr>';
+  renderEnumPagination(rows.length, start, pageRows.length);
+}
+
+function renderEnumPagination(totalRows, start, visibleRows) {
+  const el = document.getElementById('sf-enum-pagination');
+  if (!el) return;
+  if ((enumTotalPages || 1) <= 1) {
+    el.style.display = 'none';
+    return;
+  }
+  el.style.display = 'flex';
+  const from = totalRows ? start + 1 : 0;
+  const to = start + visibleRows;
+  document.getElementById('sf-enum-pag-info').textContent = `Page ${enumCurPage} of ${enumTotalPages} · ${fmt(from)}–${fmt(to)} of ${fmt(totalRows)}`;
+  document.getElementById('sf-enum-pag-prev').disabled = enumCurPage <= 1;
+  document.getElementById('sf-enum-pag-next').disabled = enumCurPage >= enumTotalPages;
+}
+
+function changeEnumPage(dir) {
+  const nextPage = enumCurPage + dir;
+  if (nextPage < 1 || nextPage > enumTotalPages) return;
+  enumCurPage = nextPage;
+  renderEnumResults();
+}
+
+function resetEnumPageAndRender() {
+  enumCurPage = 1;
+  renderEnumResults();
+}
+
+function hideEnumPagination() {
+  enumCurPage = 1;
+  enumTotalPages = 1;
+  const el = document.getElementById('sf-enum-pagination');
+  if (el) el.style.display = 'none';
 }
 
 async function initSfRawPage() {
@@ -4464,6 +4512,7 @@ async function deleteEnumScan(scanId) {
   if (!ok) return toast(error || 'Delete failed', 'err');
   toast('Enumeration scan deleted', 'ok');
   document.getElementById('sf-enum-results-body').innerHTML = '<tr><td colspan="3" style="text-align:center;padding:16px;color:var(--text-muted)">Select a scan to view results.</td></tr>';
+  hideEnumPagination();
   await loadSfRawPage();
 }
 
@@ -4502,6 +4551,7 @@ async function runDomainEnumeration() {
   const count = document.getElementById('sf-enum-results-count');
   enumCurrentScan = { domain, status: 'running' };
   enumCurrentRows = [];
+  hideEnumPagination();
   updateEnumStats(enumCurrentRows, enumCurrentScan);
   document.getElementById('enum-stat-active').textContent = '…';
   if (count) count.textContent = 'Running…';
@@ -4564,6 +4614,7 @@ async function openEnumScan(scanId) {
   const { data } = await apiJSON(`/api/subfinder/enumeration/scans/${scanId}`);
   enumCurrentScan = data?.scan || null;
   enumCurrentRows = data?.results || [];
+  enumCurPage = 1;
   const sources = [...new Set(enumCurrentRows.flatMap(r => String(r.source || 'mixed').split(',').map(s => s.trim()).filter(Boolean)))].sort();
   const filter = document.getElementById('sf-enum-source-filter');
   filter.innerHTML = '<option value="all">All sources</option>' + sources.map(s => `<option value="${esc(s)}">${esc(s)}</option>`).join('');
