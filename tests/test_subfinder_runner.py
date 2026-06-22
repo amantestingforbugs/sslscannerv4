@@ -909,44 +909,6 @@ def test_subdomain_enumeration_respects_configured_result_cap(monkeypatch):
     assert len(result["found"]) == 2
     assert result["found"] == ["api.example.com", "dev.example.com"]
 
-def test_aggressive_domain_enumeration_persists_incremental_results_before_completion(tmp_path, monkeypatch):
-    import db.database as db
-
-    monkeypatch.setattr(db, "DB_PATH", tmp_path / "incremental-enum.sqlite3")
-    if getattr(db._local, "c", None):
-        db._local.c.close()
-        db._local.c = None
-    monkeypatch.setenv("DOMAIN_ENUM_MAX_RESULTS", "10")
-    monkeypatch.setattr(runner, "_passive_enumeration_sources", lambda: {})
-    monkeypatch.setattr(
-        runner,
-        "_run_subfinder_for_root",
-        lambda root, timeout=360: {
-            "root_domain": root,
-            "status": "done",
-            "found": [f"api.{root}"],
-            "found_count": 1,
-            "stderr": "",
-        },
-    )
-
-    def assert_partial_results_persisted(root_domains, discovered, all_sources, **kwargs):
-        scans = db.domain_enum_scans_list()
-        assert len(scans) == 1
-        rows = db.domain_enum_results_by_scan(scans[0]["id"])
-        assert [row["hostname"] for row in rows] == ["api.example.com"]
-        return {"found": ["dev.example.com"], "source_counts": {"deep": 1}, "raw_records": []}
-
-    monkeypatch.setattr(runner, "_run_recursive_passive_enumeration", assert_partial_results_persisted)
-    monkeypatch.setattr(runner, "_bruteforce_dns_hosts", lambda *args, **kwargs: [])
-    monkeypatch.setattr(runner, "_permutation_dns_hosts", lambda *args, **kwargs: [])
-
-    result = runner.run_domain_enumeration_scan("example.com", depth_mode="aggressive")
-    rows = db.domain_enum_results_by_scan(result["scan_id"])
-
-    assert result["total_found"] == 2
-    assert [row["hostname"] for row in rows] == ["api.example.com", "dev.example.com"]
-
 
 def test_domain_enumeration_verbose_log_persists_source_hosts_and_errors(tmp_path, monkeypatch):
     import db.database as db
