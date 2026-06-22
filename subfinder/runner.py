@@ -1849,7 +1849,6 @@ def _store_project_domain_enumeration_results(root_domains: List[str], enumerati
             root,
             triggered_by=triggered_by,
             tool_summary=_tool_summary(),
-            depth_mode="aggressive",
         )
         total_found = 0
         for src, hosts in source_map.items():
@@ -2171,7 +2170,6 @@ def run_domain_enumeration_scan(domain: str, triggered_by: str = "manual", depth
             root,
             triggered_by=triggered_by,
             tool_summary=_tool_summary(),
-            depth_mode=depth_mode,
         )
     try:
         enumeration = _run_subdomain_enumeration([root], depth_mode=depth_mode)

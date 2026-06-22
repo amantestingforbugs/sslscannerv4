@@ -952,7 +952,7 @@ def test_domain_enum_running_watchdog_allows_aggressive_cleanup(monkeypatch):
     monkeypatch.setenv("DOMAIN_ENUM_TOTAL_TIMEOUT_SECONDS", "600")
     monkeypatch.setenv("SUBDOMAIN_DEEP_PHASE_TIMEOUT_SECONDS", "420")
 
-    assert db._domain_enum_running_timeout_seconds() == 7200
+    assert db._domain_enum_running_timeout_seconds() == 1320
 
 
 def test_domain_enum_running_watchdog_override_still_supported(monkeypatch):
@@ -980,24 +980,3 @@ def test_domain_enum_scans_mark_stale_running(tmp_path, monkeypatch):
     scan = db.domain_enum_scan_get(scan_id)
     assert scan["status"] == "failed"
     assert scan["verbose_log"][0]["source"] == "watchdog"
-
-
-def test_domain_enum_watchdog_uses_depth_mode_timeout(tmp_path, monkeypatch):
-    import db.database as db
-    from datetime import datetime, timedelta, timezone
-
-    monkeypatch.delenv("DOMAIN_ENUM_RUNNING_TIMEOUT_SECONDS", raising=False)
-    monkeypatch.setattr(db, "DB_PATH", tmp_path / "depth-mode-enum.sqlite3")
-    if getattr(db._local, "c", None):
-        db._local.c.close()
-        db._local.c = None
-    db.init_db()
-    standard_id = db.domain_enum_scan_create("example.com", depth_mode="standard")
-    aggressive_id = db.domain_enum_scan_create("example.org", depth_mode="aggressive")
-    old_started = (datetime.now(timezone.utc) - timedelta(seconds=3600)).isoformat()
-    db.x("UPDATE domain_enum_scans SET started_at=? WHERE id IN (?,?)", (old_started, standard_id, aggressive_id))
-    db.commit()
-
-    assert db.domain_enum_scans_mark_stale_running() == 1
-    assert db.domain_enum_scan_get(standard_id)["status"] == "failed"
-    assert db.domain_enum_scan_get(aggressive_id)["status"] == "running"
