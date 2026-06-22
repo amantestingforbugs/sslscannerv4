@@ -69,10 +69,19 @@ def _cancel_pending_futures(futures: Iterable[object]) -> None:
 
 
 def _remaining_seconds(deadline: Optional[float], fallback: int, minimum: int = 1) -> int:
-    """Return seconds left before an absolute deadline, clamped for phase helpers."""
+    """Return seconds left before an absolute deadline.
+
+    Once the absolute deadline has passed, return ``0`` instead of clamping up
+    to ``minimum``.  The enumeration pipeline uses this helper between phases;
+    adding a synthetic extra second after expiry lets scans continue past their
+    configured total timeout, especially when several slow phases run in a row.
+    """
     if deadline is None:
         return max(minimum, int(fallback))
-    return max(minimum, min(int(fallback), int(deadline - time.monotonic())))
+    remaining = min(int(fallback), int(deadline - time.monotonic()))
+    if remaining <= 0:
+        return 0
+    return max(minimum, remaining)
 
 
 def _deadline_expired(deadline: Optional[float]) -> bool:
@@ -89,7 +98,19 @@ def _iter_completed_with_deadline(future_map: Dict[object, object], timeout: int
     forever.
     """
     pending = set(future_map)
-    deadline = time.monotonic() + max(1, timeout)
+    if timeout <= 0:
+        if pending:
+            log.warning(
+                "%s phase skipped because the scan deadline has already expired; cancelling %d pending task(s)",
+                phase_name,
+                len(pending),
+            )
+            _cancel_pending_futures(pending)
+            for future in pending:
+                yield future, future_map[future], True
+        return
+
+    deadline = time.monotonic() + timeout
     while pending:
         remaining = deadline - time.monotonic()
         if remaining <= 0:
