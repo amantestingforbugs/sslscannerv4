@@ -3839,7 +3839,8 @@ async function saveEdit() {
 // ════════════════════════════════════════════════════════════
 function updateProjectHostCount(count) {
   const formatted = fmt(count);
-  document.getElementById('host-count').textContent = formatted;
+  const countEl = document.getElementById('host-count');
+  if (countEl) countEl.textContent = formatted;
   const meta = document.getElementById('det-meta');
   if (meta) {
     meta.textContent = meta.textContent.replace(/^.*? hosts/, `${formatted} hosts`);
@@ -3890,13 +3891,15 @@ async function saveHosts() {
 }
 
 const dz = document.getElementById('dz');
-dz.addEventListener('dragover', e=>{e.preventDefault();dz.classList.add('over')});
-dz.addEventListener('dragleave',()=>dz.classList.remove('over'));
-dz.addEventListener('drop', e=>{
-  e.preventDefault();dz.classList.remove('over');
-  const f=e.dataTransfer.files[0];
-  if (f) uploadHostFile(f);
-});
+if (dz) {
+  dz.addEventListener('dragover', e=>{e.preventDefault();dz.classList.add('over')});
+  dz.addEventListener('dragleave',()=>dz.classList.remove('over'));
+  dz.addEventListener('drop', e=>{
+    e.preventDefault();dz.classList.remove('over');
+    const f=e.dataTransfer.files[0];
+    if (f) uploadHostFile(f);
+  });
+}
 
 // ════════════════════════════════════════════════════════════
 // SCAN
