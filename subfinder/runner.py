@@ -1389,6 +1389,26 @@ def _run_passive_source(source_name: str, source_fn: EnumerationSource, root_dom
         }
 
 
+def _raw_record_is_error(record: Dict[str, object]) -> bool:
+    """Return whether a source record should fail the overall persisted result.
+
+    Subdomain enumeration intentionally fans out across many best-effort public
+    OSINT sources. Timeouts, rate limits, and missing optional command-line
+    tools should be visible in verbose diagnostics, but they should not make an
+    otherwise completed enumeration look like an application error.
+    """
+    status = str(record.get("status") or "done").strip().lower()
+    if status in {"done", "ok", "timeout", "skipped", "warning"}:
+        return False
+
+    source = str(record.get("source") or "").strip().lower()
+    stderr = str(record.get("stderr_preview") or record.get("stderr") or record.get("error") or "").strip().lower()
+    if source in {"subfinder", "assetfinder", "amass", "findomain"} and "binary not found" in stderr:
+        return False
+
+    return True
+
+
 def _deep_scan_enabled() -> bool:
     return _env_bool("SUBDOMAIN_DEEP_SCAN_ENABLED", True)
 
@@ -1610,7 +1630,7 @@ def _run_subdomain_enumeration(
     passive_sources = _passive_enumeration_sources()
     total_timeout = _env_int(
         "DOMAIN_ENUM_TOTAL_TIMEOUT_SECONDS" if aggressive else "DOMAIN_ENUM_STANDARD_TOTAL_TIMEOUT_SECONDS",
-        600 if aggressive else 120,
+        600 if aggressive else 60,
         minimum=30,
         maximum=7200,
     )
@@ -1655,7 +1675,7 @@ def _run_subdomain_enumeration(
     try:
         future_map = {}
         for root_domain in root_domains:
-            future_map[enum_pool.submit(_run_subfinder_for_root, root_domain, 360 if aggressive else _env_int("DOMAIN_ENUM_STANDARD_SUBFINDER_TIMEOUT_SECONDS", 90, minimum=10, maximum=600))] = ("subfinder", root_domain)
+            future_map[enum_pool.submit(_run_subfinder_for_root, root_domain, 360 if aggressive else _env_int("DOMAIN_ENUM_STANDARD_SUBFINDER_TIMEOUT_SECONDS", 45, minimum=10, maximum=600))] = ("subfinder", root_domain)
             future_map.update(
                 {
                     enum_pool.submit(_run_passive_source, source_name, source_fn, root_domain): (source_name, root_domain)
@@ -1663,7 +1683,7 @@ def _run_subdomain_enumeration(
                 }
             )
 
-        phase_timeout = _env_int("DOMAIN_ENUM_PHASE_TIMEOUT_SECONDS" if aggressive else "DOMAIN_ENUM_STANDARD_PHASE_TIMEOUT_SECONDS", 360 if aggressive else 75, minimum=10, maximum=3600)
+        phase_timeout = _env_int("DOMAIN_ENUM_PHASE_TIMEOUT_SECONDS" if aggressive else "DOMAIN_ENUM_STANDARD_PHASE_TIMEOUT_SECONDS", 360 if aggressive else 45, minimum=10, maximum=3600)
         for fut, source_info, timed_out in _iter_completed_with_deadline(future_map, _remaining_seconds(deadline, phase_timeout, minimum=1), "subdomain enumeration"):
             source_name, root_domain = source_info
             if timed_out:
@@ -1724,7 +1744,7 @@ def _run_subdomain_enumeration(
             if dns_candidates > 0:
                 dns_timeout = _env_int(
                     "DOMAIN_ENUM_STANDARD_DNS_TIMEOUT_SECONDS",
-                    30,
+                    15,
                     minimum=1,
                     maximum=600,
                 )
@@ -1964,7 +1984,7 @@ def run_subfinder_for_project(project_id: str, triggered_by: str = "scheduler") 
         for root_domain in root_domains:
             root_records = records_by_root.get(root_domain) or []
             root_hosts = sorted({h for h in discovered if _is_host_within_root(h, root_domain)})
-            failed_records = [r for r in root_records if str(r.get("status") or "done") != "done"]
+            failed_records = [r for r in root_records if _raw_record_is_error(r)]
             command = f"enumeration:{root_domain}"
             if root_records:
                 command = ", ".join(
