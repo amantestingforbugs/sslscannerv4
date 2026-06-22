@@ -2666,8 +2666,13 @@ function nav(name, options = {}) {
   document.title = `${config.title || name} · SSL Sentinel`;
   document.getElementById('mainContent')?.focus({ preventScroll: true });
   if (persist) persistRoute(name, detailId, replace);
-  config.onEnter?.();
+  if (typeof config.onEnter === 'function') {
+    requestAnimationFrame(() => {
+      if (document.getElementById('page-'+name)?.classList.contains('active')) config.onEnter();
+    });
+  }
 }
+
 
 document.querySelectorAll('.nav-item[data-page]').forEach(el => {
   el.addEventListener('click', () => {
@@ -3233,25 +3238,28 @@ async function updateHunterDashboard(stats = {}, projects = [], context = {}, ri
 }
 
 async function loadDash() {
-  if (dashboardLoadInFlight) return;
+  if (dashboardLoadInFlight || document.hidden) return;
   dashboardLoadInFlight = true;
+  const loadToken = Symbol('dashboard-load');
+  loadDash.latestToken = loadToken;
   try {
     const [statsResp, projectsResp, riskResp] = await Promise.all([
       apiJSON('/api/stats'),
       projectsCache.length ? Promise.resolve({ data: projectsCache }) : apiJSON('/api/projects'),
       apiJSON('/api/attack-surface/risk'),
     ]);
+    if (loadDash.latestToken !== loadToken || !document.getElementById('page-dashboard')?.classList.contains('active')) return;
     const stats = statsResp.data || {};
     const projects = projectsResp.data || [];
     const riskIntel = riskResp.data || null;
     if (projects.length) projectsCache = projects;
     applyStat(stats);
+    updateMissionControl(stats, projects, riskIntel);
     await Promise.allSettled([
       refreshActiveScans(),
       loadDashMismatches(projects),
       loadLogs(),
       loadSystemOverview(),
-      Promise.resolve(updateMissionControl(stats, projects, riskIntel)),
     ]);
   } finally {
     dashboardLoadInFlight = false;
@@ -3265,24 +3273,30 @@ async function loadLogs() {
   } catch {}
 }
 
+function logRowsHTML(rows) {
+  return rows.slice(-50).reverse().map(r => `<div style="padding:4px 0;border-bottom:1px solid var(--border-subtle)">
+    <span style="color:var(--text-muted)">[${new Date(r.timestamp).toLocaleTimeString()}]</span>
+    <span style="color:${r.level==='ERROR'?'var(--red)':r.level==='WARNING'?'var(--amber)':'var(--text-secondary)'}">${esc(r.level)}</span>
+    <span style="color:var(--purple)">(${esc(r.component)})</span>
+    <span>${esc(r.message)}</span>
+  </div>`).join('');
+}
+
 function renderLogs(rows) {
   const el = document.getElementById('dash-logs');
   if (!rows.length) {
-    el.innerHTML = '<div class="empty"><div class="empty-icon">📜</div><div class="empty-title">Waiting for logs</div></div>';
-    document.getElementById('dash-log-status').textContent = 'Idle';
+    const empty = '<div class="empty"><div class="empty-icon">📜</div><div class="empty-title">Waiting for logs</div></div>';
+    if (el) el.innerHTML = empty;
+    setText('dash-log-status', 'Idle');
     return;
   }
   const active = [...rows].reverse().find(r => r.status === 'running');
   const failed = [...rows].reverse().find(r => r.status === 'failed');
-  document.getElementById('dash-log-status').textContent = active ? 'Running' : failed ? 'Failed' : 'Idle';
-  el.innerHTML = rows.slice(-80).reverse().map(r => `<div style="padding:4px 0;border-bottom:1px solid var(--border-subtle)">
-    <span style="color:var(--text-muted)">[${new Date(r.timestamp).toLocaleTimeString()}]</span>
-    <span style="color:${r.level==='ERROR'?'var(--red)':r.level==='WARNING'?'var(--amber)':'var(--text-secondary)'}">${r.level}</span>
-    <span style="color:var(--purple)">(${esc(r.component)})</span>
-    <span>${esc(r.message)}</span>
-  </div>`).join('');
+  setText('dash-log-status', active ? 'Running' : failed ? 'Failed' : 'Idle');
+  const html = logRowsHTML(rows);
+  if (el) el.innerHTML = html;
   const logsPage = document.getElementById('logs-page-body');
-  if (logsPage) logsPage.innerHTML = el.innerHTML;
+  if (logsPage && document.getElementById('page-logs')?.classList.contains('active')) logsPage.innerHTML = html;
 }
 
 async function loadLogsPage() {
