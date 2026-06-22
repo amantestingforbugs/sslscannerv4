@@ -2926,7 +2926,7 @@ function connectSSE() {
     updateQuickProgress(d);
     if (d.status === 'done') {
       document.getElementById('quick-scan-btn').disabled = false;
-      toast('Quick scan complete', 'ok');
+      toast(d.alerts ? `Quick scan complete — ${fmt(d.alerts)} alert${d.alerts === 1 ? '' : 's'} created` : 'Quick scan complete', d.alerts ? 'err' : 'ok');
     } else if (d.status === 'error') {
       document.getElementById('quick-scan-btn').disabled = false;
       toast(d.error || 'Quick scan failed', 'err');
@@ -3514,7 +3514,7 @@ async function startQuickScan() {
     const { ok, data, error } = await fetch('/api/quick-scan', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ hosts: dedupedHosts.join('\n') })
+      body: JSON.stringify({ hosts: dedupedHosts.join('\n'), project_id: curPid || '' })
     }).then(r => r.json());
     if (!ok) {
       btn.disabled = false;
