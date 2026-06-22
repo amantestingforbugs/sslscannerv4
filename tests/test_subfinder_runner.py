@@ -467,6 +467,44 @@ def test_query_github_code_for_root_requires_token_and_parses_text_matches(monke
     assert found == ["api.example.com", "portal.example.com"]
 
 
+def test_remaining_seconds_returns_zero_after_deadline():
+    deadline = runner.time.monotonic() - 1
+
+    assert runner._remaining_seconds(deadline, fallback=30, minimum=1) == 0
+
+
+def test_iter_completed_with_deadline_immediately_times_out_when_deadline_expired():
+    from concurrent.futures import Future
+
+    pending = Future()
+    results = list(runner._iter_completed_with_deadline({pending: "expired-source"}, 0, "expired phase"))
+
+    assert len(results) == 1
+    assert results[0][1] == "expired-source"
+    assert results[0][2] is True
+    assert pending.cancelled()
+
+
+def test_iter_completed_with_deadline_cancels_pending_after_idle_timeout():
+    from concurrent.futures import Future
+
+    done = Future()
+    done.set_result(["api.example.com"])
+    pending = Future()
+
+    results = list(
+        runner._iter_completed_with_deadline(
+            {done: "fast-source", pending: "stalled-source"},
+            30,
+            "idle phase",
+            idle_timeout=0,
+        )
+    )
+
+    by_source = {source: timed_out for _future, source, timed_out in results}
+    assert by_source == {"fast-source": False, "stalled-source": True}
+    assert pending.cancelled()
+
 def test_iter_completed_with_deadline_yields_timeout_for_pending_future():
     from concurrent.futures import Future
 

@@ -69,17 +69,31 @@ def _cancel_pending_futures(futures: Iterable[object]) -> None:
 
 
 def _remaining_seconds(deadline: Optional[float], fallback: int, minimum: int = 1) -> int:
-    """Return seconds left before an absolute deadline, clamped for phase helpers."""
+    """Return seconds left before an absolute deadline.
+
+    Once the absolute deadline has passed, return ``0`` instead of clamping up
+    to ``minimum``.  The enumeration pipeline uses this helper between phases;
+    adding a synthetic extra second after expiry lets scans continue past their
+    configured total timeout, especially when several slow phases run in a row.
+    """
     if deadline is None:
         return max(minimum, int(fallback))
-    return max(minimum, min(int(fallback), int(deadline - time.monotonic())))
+    remaining = min(int(fallback), int(deadline - time.monotonic()))
+    if remaining <= 0:
+        return 0
+    return max(minimum, remaining)
 
 
 def _deadline_expired(deadline: Optional[float]) -> bool:
     return deadline is not None and time.monotonic() >= deadline
 
 
-def _iter_completed_with_deadline(future_map: Dict[object, object], timeout: int, phase_name: str):
+def _iter_completed_with_deadline(
+    future_map: Dict[object, object],
+    timeout: int,
+    phase_name: str,
+    idle_timeout: Optional[int] = None,
+):
     """Yield completed futures until a phase deadline, then cancel pending work.
 
     This deliberately avoids ``as_completed(..., timeout=...)`` inside a
@@ -89,14 +103,51 @@ def _iter_completed_with_deadline(future_map: Dict[object, object], timeout: int
     forever.
     """
     pending = set(future_map)
-    deadline = time.monotonic() + max(1, timeout)
+    if timeout <= 0:
+        if pending:
+            log.warning(
+                "%s phase skipped because the scan deadline has already expired; cancelling %d pending task(s)",
+                phase_name,
+                len(pending),
+            )
+            _cancel_pending_futures(pending)
+            for future in pending:
+                yield future, future_map[future], True
+        return
+
+    deadline = time.monotonic() + timeout
+    idle_deadline = None
+    if idle_timeout is not None:
+        idle_deadline = time.monotonic() + max(0, idle_timeout)
+
+    ready, pending = wait(pending, timeout=0, return_when=FIRST_COMPLETED)
+    if ready:
+        if idle_deadline is not None:
+            idle_deadline = time.monotonic() + max(0, idle_timeout)
+        for future in ready:
+            yield future, future_map[future], False
+
     while pending:
-        remaining = deadline - time.monotonic()
+        now = time.monotonic()
+        remaining = deadline - now
         if remaining <= 0:
             break
+        if idle_deadline is not None:
+            idle_remaining = idle_deadline - now
+            if idle_remaining <= 0:
+                log.warning(
+                    "%s phase made no progress for %ss; cancelling %d pending task(s)",
+                    phase_name,
+                    idle_timeout,
+                    len(pending),
+                )
+                break
+            remaining = min(remaining, idle_remaining)
         done, pending = wait(pending, timeout=remaining, return_when=FIRST_COMPLETED)
         if not done:
             break
+        if idle_deadline is not None:
+            idle_deadline = time.monotonic() + max(0, idle_timeout)
         for future in done:
             yield future, future_map[future], False
     if pending:
@@ -1521,6 +1572,7 @@ def _run_recursive_passive_enumeration(
                 future_map,
                 _remaining_seconds(deadline, phase_timeout, minimum=1),
                 f"deep passive enumeration depth {depth}",
+                idle_timeout=_env_int("SUBDOMAIN_DEEP_IDLE_TIMEOUT_SECONDS", 45, minimum=5, maximum=3600),
             ):
                 source_name, target_zone = source_info
                 if timed_out:
@@ -1684,7 +1736,18 @@ def _run_subdomain_enumeration(
             )
 
         phase_timeout = _env_int("DOMAIN_ENUM_PHASE_TIMEOUT_SECONDS" if aggressive else "DOMAIN_ENUM_STANDARD_PHASE_TIMEOUT_SECONDS", 360 if aggressive else 45, minimum=10, maximum=3600)
-        for fut, source_info, timed_out in _iter_completed_with_deadline(future_map, _remaining_seconds(deadline, phase_timeout, minimum=1), "subdomain enumeration"):
+        initial_idle_timeout = _env_int(
+            "DOMAIN_ENUM_IDLE_TIMEOUT_SECONDS" if aggressive else "DOMAIN_ENUM_STANDARD_IDLE_TIMEOUT_SECONDS",
+            45 if aggressive else 20,
+            minimum=5,
+            maximum=3600,
+        )
+        for fut, source_info, timed_out in _iter_completed_with_deadline(
+            future_map,
+            _remaining_seconds(deadline, phase_timeout, minimum=1),
+            "subdomain enumeration",
+            idle_timeout=initial_idle_timeout,
+        ):
             source_name, root_domain = source_info
             if timed_out:
                 run = {
@@ -1831,7 +1894,13 @@ def _run_subdomain_enumeration(
             future_map[dns_pool.submit(_bruteforce_dns_hosts, root_domain, seed_hosts, 0)] = ("dns_bruteforce", root_domain)
             future_map[dns_pool.submit(_permutation_dns_hosts, root_domain, seed_hosts, 0)] = ("dns_permutation", root_domain)
         phase_timeout = _env_int("DOMAIN_DNS_ENUM_PHASE_TIMEOUT_SECONDS", 180, minimum=15, maximum=3600)
-        for fut, source_info, timed_out in _iter_completed_with_deadline(future_map, _remaining_seconds(deadline, phase_timeout, minimum=1), "subdomain DNS enumeration"):
+        dns_idle_timeout = _env_int("DOMAIN_DNS_ENUM_IDLE_TIMEOUT_SECONDS", 30, minimum=5, maximum=3600)
+        for fut, source_info, timed_out in _iter_completed_with_deadline(
+            future_map,
+            _remaining_seconds(deadline, phase_timeout, minimum=1),
+            "subdomain DNS enumeration",
+            idle_timeout=dns_idle_timeout,
+        ):
             source_name, root_domain = source_info
             if timed_out:
                 raw_records.append({"source": source_name, "root_domain": root_domain, "status": "timeout", "found_count": 0})
