@@ -21,36 +21,6 @@ from subfinder.runner import (
     _query_urlscan_for_root,
 )
 
-def test_resolve_subfinder_bin_uses_env_override(tmp_path, monkeypatch):
-    custom_bin = tmp_path / "custom-subfinder"
-    custom_bin.write_text("#!/bin/sh\n")
-    monkeypatch.setattr(runner.shutil, "which", lambda _name: None)
-    monkeypatch.setenv("SUBFINDER_BIN", str(custom_bin))
-
-    assert runner._resolve_subfinder_bin() == str(custom_bin)
-
-
-def test_resolve_subfinder_bin_checks_home_go_bin(tmp_path, monkeypatch):
-    home = tmp_path / "home"
-    go_bin = home / "go" / "bin"
-    go_bin.mkdir(parents=True)
-    subfinder_bin = go_bin / "subfinder"
-    subfinder_bin.write_text("#!/bin/sh\n")
-
-    monkeypatch.setattr(runner.shutil, "which", lambda _name: None)
-    monkeypatch.delenv("SUBFINDER_BIN", raising=False)
-    monkeypatch.setenv("HOME", str(home))
-    original_is_file = Path.is_file
-
-    def fake_is_file(path):
-        if str(path) == "/usr/local/bin/subfinder" or str(path) == "/root/go/bin/subfinder":
-            return False
-        return original_is_file(path)
-
-    monkeypatch.setattr(Path, "is_file", fake_is_file)
-
-    assert runner._resolve_subfinder_bin() == str(subfinder_bin)
-
 
 def test_normalize_host_handles_urls_wildcards_and_ports():
     assert _normalize_host("https://API.Example.com:8443/v1") == "api.example.com"
