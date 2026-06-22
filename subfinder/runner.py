@@ -234,6 +234,23 @@ def _build_subfinder_cmd(subfinder_bin: str, root_domain: str) -> List[str]:
     return cmd
 
 
+def _parse_subfinder_hosts(stdout: object, root_domain: str) -> List[str]:
+    """Parse normalized in-scope hosts from subfinder stdout bytes/text."""
+    if isinstance(stdout, bytes):
+        stdout = stdout.decode("utf-8", errors="replace")
+    raw_lines = [ln.strip().lower() for ln in str(stdout or "").splitlines() if ln.strip()]
+    return sorted(
+        {
+            candidate
+            for ln in raw_lines
+            for candidate in [_normalize_host(ln)]
+            if candidate
+            and _HOST_RE.match(candidate)
+            and _is_host_within_root(candidate, root_domain)
+        }
+    )
+
+
 def _run_subfinder_for_root(root_domain: str, timeout: int = 180) -> Dict[str, object]:
     subfinder_bin = _resolve_subfinder_bin()
     if not subfinder_bin:
@@ -252,18 +269,8 @@ def _run_subfinder_for_root(root_domain: str, timeout: int = 180) -> Dict[str, o
     log_event("subfinder", "info", "Subfinder command started", root_domain=root_domain, command=command_str, status="running")
     try:
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
-        raw_lines = [ln.strip().lower() for ln in result.stdout.splitlines() if ln.strip()]
-        found = sorted(
-            {
-                candidate
-                for ln in raw_lines
-                for candidate in [_normalize_host(ln)]
-                if candidate
-                and _HOST_RE.match(candidate)
-                and _is_host_within_root(candidate, root_domain)
-            }
-        )
-        status = "done" if result.returncode == 0 else "error"
+        found = _parse_subfinder_hosts(result.stdout, root_domain)
+        status = "done" if result.returncode == 0 else ("warning" if found else "error")
         log.info(
             "Subfinder finished root=%s exit_code=%s discovered=%d",
             root_domain,
@@ -279,17 +286,20 @@ def _run_subfinder_for_root(root_domain: str, timeout: int = 180) -> Dict[str, o
             "stderr": result.stderr or "",
             "found": found,
         }
-    except subprocess.TimeoutExpired:
+    except subprocess.TimeoutExpired as exc:
         msg = f"Subfinder timed out after {timeout}s for {root_domain}"
-        log.error(msg)
+        stdout = exc.stdout or ""
+        stderr = exc.stderr or ""
+        found = _parse_subfinder_hosts(stdout, root_domain)
+        log.error("%s; preserving %d partial result(s)", msg, len(found))
         return {
             "root_domain": root_domain,
             "command": command_str,
             "status": "timeout",
             "exit_code": None,
-            "stdout": "",
-            "stderr": msg,
-            "found": [],
+            "stdout": stdout.decode("utf-8", errors="replace") if isinstance(stdout, bytes) else str(stdout or ""),
+            "stderr": (stderr.decode("utf-8", errors="replace") if isinstance(stderr, bytes) else str(stderr or "")) or msg,
+            "found": found,
         }
     except Exception as e:
         log.exception("Subfinder execution error: %s", e)
