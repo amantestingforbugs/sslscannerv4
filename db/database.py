@@ -516,10 +516,43 @@ def project_update(pid, **kw):
     commit()
 
 def project_delete(pid):
-    for t in ("job_events","job_controls","jobs","asset_findings","asset_observations","asset_relationships","assets","results","alerts","scans","subfinder_jobs","subfinder_hosts","subfinder_new_discoveries","openssl_results"):
-        x(f"DELETE FROM {t} WHERE project_id=?", (pid,)) if t not in {"job_events", "job_controls"} else None
-    x("DELETE FROM projects WHERE id=?", (pid,))
+    """Delete a project and all project-scoped records.
+
+    Some tables intentionally do not declare a foreign key to projects, and a
+    few child tables (job_events/job_controls) are keyed through jobs rather
+    than project_id. Delete those dependents explicitly so project deletion is
+    reliable for databases created by older versions of the app too.
+    """
+    if not project_get(pid):
+        return False
+
+    project_job_ids = [r["id"] for r in x("SELECT id FROM jobs WHERE project_id=?", (pid,)).fetchall()]
+    if project_job_ids:
+        _delete_by_ids("job_events", "job_id", project_job_ids)
+        _delete_by_ids("job_controls", "job_id", project_job_ids)
+
+    # Delete child/high-volume rows before their project-scoped parents.
+    for table in (
+        "asset_findings",
+        "asset_observations",
+        "asset_relationships",
+        "assets",
+        "results",
+        "alerts",
+        "scans",
+        "subfinder_raw_results",
+        "subfinder_new_discoveries",
+        "subfinder_httpx_results",
+        "subfinder_hosts",
+        "subfinder_jobs",
+        "openssl_results",
+        "jobs",
+    ):
+        x(f"DELETE FROM {table} WHERE project_id=?", (pid,))
+
+    deleted = x("DELETE FROM projects WHERE id=?", (pid,)).rowcount or 0
     commit()
+    return deleted > 0
 
 def project_hosts(pid):
     r = x("SELECT hosts_file FROM projects WHERE id=?", (pid,)).fetchone()
