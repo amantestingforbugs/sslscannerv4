@@ -1594,11 +1594,7 @@ def _permutation_dns_hosts(root_domain: str, known_hosts: List[str], max_candida
 
 
 
-def _run_subdomain_enumeration(
-    root_domains: List[str],
-    depth_mode: str = "aggressive",
-    on_hosts: Optional[Callable[[str, str, List[str]], None]] = None,
-) -> Dict[str, object]:
+def _run_subdomain_enumeration(root_domains: List[str], depth_mode: str = "aggressive") -> Dict[str, object]:
     """Run the shared subdomain enumeration pipeline used by both UI flows.
 
     Keeping this logic in one place makes the continuous Subfinder integration
@@ -1643,11 +1639,6 @@ def _run_subdomain_enumeration(
         unique = sorted(set(accepted))
         if unique:
             source_counts[source] = source_counts.get(source, 0) + len(unique)
-            if on_hosts:
-                try:
-                    on_hosts(source, root_domain, unique)
-                except Exception as exc:
-                    log.warning("Unable to persist incremental domain enumeration results for %s/%s: %s", source, root_domain, exc)
         return unique
 
     max_workers = max(8, min(128, (len(passive_sources) + 1) * max(1, len(root_domains))))
@@ -2202,23 +2193,10 @@ def run_domain_enumeration_scan(domain: str, triggered_by: str = "manual", depth
             depth_mode=depth_mode,
         )
     try:
-        def persist_incremental_hosts(source: str, root_domain: str, hosts: List[str]) -> None:
-            if hosts:
-                db.domain_enum_results_add_batch(scan_id, root_domain, sorted(set(hosts)), source=source)
-
-        try:
-            enumeration = _run_subdomain_enumeration([root], depth_mode=depth_mode, on_hosts=persist_incremental_hosts)
-        except TypeError:
-            # Preserve compatibility with tests/extensions that monkeypatch the
-            # older two-argument pipeline helper signature.
-            enumeration = _run_subdomain_enumeration([root], depth_mode=depth_mode)
+        enumeration = _run_subdomain_enumeration([root], depth_mode=depth_mode)
         all_found = set(enumeration["found"])
         source_map = {source: set(hosts) for source, hosts in enumeration["source_map"].items()}
 
-        # The on_hosts callback writes discoveries as each aggressive phase
-        # finishes so the UI can show partial results during long scans. Keep
-        # this final pass as a safety net for older monkeypatches/tests and any
-        # callback write that failed transiently.
         for src, hosts in source_map.items():
             if hosts:
                 db.domain_enum_results_add_batch(scan_id, root, sorted(hosts), source=src)
