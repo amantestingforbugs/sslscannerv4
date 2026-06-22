@@ -2072,12 +2072,10 @@ html[data-performance="fast"] tbody tr{transition:none!important}
       <div id="sf-binary-warn" style="display:none" class="card">
         <div class="card-body">
           <p style="color:var(--amber);font-weight:600;margin-bottom:8px">⚠ Subfinder binary not found</p>
-          <p style="font-size:12.5px;color:var(--text-secondary);margin-bottom:10px">Install subfinder on your server for full functionality. The app now checks PATH, SUBFINDER_BIN, /usr/local/bin/subfinder, /root/go/bin/subfinder, and ~/go/bin/subfinder.</p>
+          <p style="font-size:12.5px;color:var(--text-secondary);margin-bottom:10px">Install subfinder on your server for full functionality. Without it, the integration will log warnings but won't crash.</p>
           <div class="sf-install-box">
             # Install subfinder (Linux/ARM)<br>
-            go install -v github.com/projectdiscovery/subfinder/v2/cmd/subfinder@latest<br>
-            export PATH="$HOME/go/bin:$PATH"<br>
-            # Or set SUBFINDER_BIN=/full/path/to/subfinder and restart the app<br><br>
+            go install -v github.com/projectdiscovery/subfinder/v2/cmd/subfinder@latest<br><br>
             # Or download binary from:<br>
             # https://github.com/projectdiscovery/subfinder/releases
           </div>
