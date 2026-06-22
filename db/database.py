@@ -707,7 +707,7 @@ def scans_prune_older_than(days: int = 7) -> dict:
 
 # ── Results (batch) ───────────────────────────────────────────────────────────
 
-def results_batch_save(sid, pid, batch, *, backfill_assets=True):
+def results_batch_save(sid, pid, batch):
     n = now()
     rows = [(uid(), sid, pid,
              r.get("hostname",""), r.get("cn",""), json.dumps(r.get("sans",[])),
@@ -725,8 +725,7 @@ def results_batch_save(sid, pid, batch, *, backfill_assets=True):
        "signature_algorithm,key_algorithm,key_bits,san_count,match_found,same_base,"
        "is_mismatch,is_expired,is_expiring,is_ok,error,checked_at)"
        " VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", rows)
-    if backfill_assets:
-        asset_backfill_project(pid)
+    asset_backfill_project(pid)
     commit()
 
 def results_get(sid, flt="all", page=1, per_page=500):

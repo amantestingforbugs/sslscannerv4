@@ -286,12 +286,7 @@ def run_checker(
     except (TypeError, ValueError):
         logger.warning("Invalid SSL_MAX_WORKERS value; falling back to %s", max_workers or 50)
         env_workers = max_workers or 50
-    try:
-        worker_cap = int(os.getenv("SSL_MAX_WORKER_CAP", "64") or "64")
-    except (TypeError, ValueError):
-        logger.warning("Invalid SSL_MAX_WORKER_CAP value; falling back to 64")
-        worker_cap = 64
-    workers = max(1, min(env_workers, max(1, worker_cap)))
+    workers = max(1, min(env_workers, 256))
     total = len(hostnames)
     results = [] if collect_results else None
 
