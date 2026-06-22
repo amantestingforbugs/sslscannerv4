@@ -18,7 +18,6 @@ PROGRESS_UPDATE_EVERY = 500
 MAX_WORKERS = int(os.getenv("SSL_MAX_WORKERS", "50"))
 SCAN_STATE_TTL_SECONDS = int(os.getenv("SCAN_STATE_TTL_SECONDS", "3600"))
 SCAN_STATE_MAX_COMPLETED = int(os.getenv("SCAN_STATE_MAX_COMPLETED", "100"))
-MAX_CONCURRENT_PROJECT_SCANS = max(1, int(os.getenv("MAX_CONCURRENT_PROJECT_SCANS", "1") or "1"))
 
 # ── In-memory scan state (shared with subfinder via import) ───────────────────
 _scan_state: Dict[str, Dict] = {}
@@ -69,11 +68,6 @@ def get_scan_state(sid: str) -> Optional[Dict]:
 
 def list_active_scans() -> list:
     return [jobs.public_state(j) for j in jobs.list_jobs(job_type="ssl_scan", active=True, limit=200)]
-
-
-def active_ssl_scan_count() -> int:
-    """Return the number of active project SSL scans across all projects."""
-    return len(jobs.list_jobs(job_type="ssl_scan", active=True, limit=1000))
 
 
 def prune_finished_scan_state(now_ts: Optional[float] = None) -> int:
@@ -283,32 +277,14 @@ class ContinuousScheduler:
             if deleted:
                 log.info("Storage retention cleanup complete: %s", stats)
 
-        available_slots = max(0, MAX_CONCURRENT_PROJECT_SCANS - active_ssl_scan_count())
-        if available_slots <= 0:
-            return
-
-        due_projects = []
         for p in project_list():
             if not p.get("enabled"):
                 continue
             pid = p["id"]
             interval_s = p.get("scan_interval_minutes", 60) * 60
             if now_ts - self._last_run.get(pid, 0) >= interval_s:
-                due_projects.append(p)
-
-        # Large automatic scans can consume many sockets, worker threads, and
-        # SQLite write bursts.  Start only a bounded number per scheduler tick
-        # instead of launching every due project at once after boot or a long
-        # sleep, which can exhaust small containers and crash the app.
-        due_projects.sort(key=lambda p: self._last_run.get(p["id"], 0))
-        for p in due_projects[:available_slots]:
-            pid = p["id"]
-            self._last_run[pid] = now_ts
-            if not run_project_scan_async(pid, triggered_by="scheduler"):
-                # If another worker won the race, let a future tick retry after
-                # active capacity frees up instead of suppressing this project
-                # for a full scan interval.
-                self._last_run.pop(pid, None)
+                self._last_run[pid] = now_ts
+                run_project_scan_async(pid, triggered_by="scheduler")
 
 
 _scheduler = ContinuousScheduler()
