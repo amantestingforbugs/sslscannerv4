@@ -2174,6 +2174,7 @@ def _ssl_scan_subfinder_hosts(project_id: str, hostnames: List[str], job_id: str
     done_count = [0]
     lock = threading.Lock()
     scanned_hosts = []
+    alert_settings = alert_settings_get()
     alert_events_count = [0]
     alert_issue_counts = {"SSL Mismatch": 0, "Expired": 0, "Expiring Soon": 0}
 
@@ -2181,18 +2182,18 @@ def _ssl_scan_subfinder_hosts(project_id: str, hostnames: List[str], job_id: str
         hostname = r.get("hostname", "")
         scanned_hosts.append(hostname)
 
-        if r.get("is_mismatch") and not r.get("error"):
+        if int(alert_settings.get("rule_mismatch", 1)) and r.get("is_mismatch") and not r.get("error"):
             mismatch_scope = "same_domain" if r.get("same_base") else "different_domain"
             alert_add(project_id, hostname, "SSL Mismatch",
                       f"[Subfinder] CN '{r.get('cn','?')}' ≠ hostname", scan_id, mismatch_scope=mismatch_scope)
             alert_events_count[0] += 1
             alert_issue_counts["SSL Mismatch"] += 1
-        elif r.get("is_expired") and not r.get("error"):
+        elif int(alert_settings.get("rule_expired", 1)) and r.get("is_expired") and not r.get("error"):
             alert_add(project_id, hostname, "Expired",
                       f"[Subfinder] Expired {r.get('expiry','?')}", scan_id)
             alert_events_count[0] += 1
             alert_issue_counts["Expired"] += 1
-        elif r.get("is_expiring_soon") and not r.get("error"):
+        elif int(alert_settings.get("rule_expiring", 1)) and r.get("is_expiring_soon") and not r.get("error"):
             alert_add(project_id, hostname, "Expiring Soon",
                       f"[Subfinder] Expires {r.get('expiry','?')} ({r.get('days_left')}d)", scan_id)
             alert_events_count[0] += 1
