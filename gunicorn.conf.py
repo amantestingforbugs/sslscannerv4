@@ -10,8 +10,11 @@ accesslog = "-"
 errorlog = "-"
 loglevel = "info"
 
-# Runtime initialization is performed from app.bootstrap_runtime() when the
-# Flask application is imported by the worker process.  Do not start database
-# setup or background scheduler threads in Gunicorn's master process: master
-# hooks can leave deployment platforms waiting on orphaned non-worker runtime
-# work during shutdown/restart, which presents as a sudden post-deploy crash.
+def on_starting(server):
+    import sys; sys.path.insert(0, os.path.dirname(__file__))
+    from db.database import init_db
+    from scheduler.runner import start_scheduler
+    from subfinder.runner import start_subfinder_scheduler
+    init_db()
+    start_scheduler()
+    start_subfinder_scheduler()
