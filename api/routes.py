@@ -47,7 +47,6 @@ from scheduler.runner import (
     resume_scan,
     stop_scan,
 )
-from alerts.notifiers import WebhookNotifier, TelegramNotifier
 
 log = logging.getLogger(__name__)
 api = Blueprint("api", __name__, url_prefix="/api")
@@ -1560,42 +1559,13 @@ def update_alert_settings():
         "minimum_days_left": _safe_int(d.get("minimum_days_left", 30), 30, min_value=1, max_value=365),
     }
     out = db.alert_settings_update(**cleaned)
-
-    # Immediately smoke-test enabled channels so broken settings are visible at save-time.
-    channel_checks = {}
-    sample_alert = [{
-        "hostname": "example.com",
-        "issue_type": "SSL Mismatch",
-        "details": "CN 'wrong.example.com' ≠ hostname",
-    }]
-    if bool(out.get("slack_enabled")) and (out.get("slack_webhook_url") or "").strip():
-        channel_checks["slack"] = bool(
-            WebhookNotifier("slack", True, out.get("slack_webhook_url", "")).send_mismatch_digest(
-                "Settings Test",
-                sample_alert,
-            )
-        )
-    if bool(out.get("discord_enabled")) and (out.get("discord_webhook_url") or "").strip():
-        channel_checks["discord"] = bool(
-            WebhookNotifier("discord", True, out.get("discord_webhook_url", "")).send_mismatch_digest(
-                "Settings Test",
-                sample_alert,
-            )
-        )
-    if bool(out.get("telegram_enabled")) and (out.get("telegram_bot_token") or "").strip() and (out.get("telegram_chat_id") or "").strip():
-        channel_checks["telegram"] = bool(TelegramNotifier(out).send_mismatch_digest("Settings Test", sample_alert))
-
-    failed_channels = [name for name, passed in channel_checks.items() if not passed]
-    if failed_channels:
-        return err(f"Saved, but webhook test failed for: {', '.join(failed_channels)}", 400)
-
     discord_turned_on = bool(out.get("discord_enabled")) and not bool(previous.get("discord_enabled"))
     discord_webhook_changed = (out.get("discord_webhook_url") or "") != (previous.get("discord_webhook_url") or "")
     if bool(out.get("discord_enabled")) and (discord_turned_on or discord_webhook_changed):
         # Re-queue existing unresolved alerts so a newly enabled/updated Discord webhook
         # can receive them on the next scan dispatch.
         db.alerts_mark_all_unsent()
-    return ok(out, channel_checks=channel_checks)
+    return ok(out)
 
 
 # ── Stats ─────────────────────────────────────────────────────────────────────
