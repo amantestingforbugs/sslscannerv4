@@ -1540,7 +1540,7 @@ def _run_recursive_passive_enumeration(
                 if found:
                     depth_found.update(found)
                     source_counts[source_name] = source_counts.get(source_name, 0) + len(found)
-                raw_records.append(_compact_raw_record(run, sample_size=_env_int("SUBFINDER_RAW_SAMPLE_SIZE", 10000, minimum=0, maximum=1_000_000)))
+                raw_records.append(_compact_raw_record(run, sample_size=_env_int("SUBFINDER_RAW_SAMPLE_SIZE", 50, minimum=0)))
                 if max_results and len(known) + len(depth_found) >= max_results:
                     _cancel_pending_futures(set(future_map) - {future})
                     break
@@ -1720,7 +1720,7 @@ def _run_subdomain_enumeration(
             run.setdefault("root_domain", root_domain)
             run["found"] = found
             run["found_count"] = len(found)
-            raw_records.append(_compact_raw_record(run, sample_size=_env_int("SUBFINDER_RAW_SAMPLE_SIZE", 10000, minimum=0, maximum=1_000_000)))
+            raw_records.append(_compact_raw_record(run, sample_size=_env_int("SUBFINDER_RAW_SAMPLE_SIZE", 50, minimum=0)))
             # Keep collecting source status even after the host cap is reached.
             # Aggressive scans are expected to report every configured source as
             # done/error/timeout; stopping here made later sources look like they
@@ -1766,7 +1766,7 @@ def _run_subdomain_enumeration(
                             "status": "done",
                             "found_count": len(found),
                             "elapsed_ms": int((time.time() - started) * 1000),
-                            "found_sample": found[:_env_int("SUBFINDER_RAW_SAMPLE_SIZE", 10000, minimum=0, maximum=1_000_000)],
+                            "found_sample": found[:_env_int("SUBFINDER_RAW_SAMPLE_SIZE", 50, minimum=0)],
                         })
                     except Exception as exc:
                         raw_records.append({
@@ -1817,17 +1817,6 @@ def _run_subdomain_enumeration(
     # not only apex-level names.
     seed_hosts = sorted(all_found) or root_domains
     if _deadline_expired(deadline) or (max_results and len(all_found) >= max_results):
-        raw_records.append({
-            "source": "pipeline",
-            "root_domain": ",".join(root_domains),
-            "status": "stopped",
-            "found_count": len(all_found),
-            "stderr_preview": (
-                "Enumeration stopped because the total deadline expired"
-                if _deadline_expired(deadline)
-                else f"Enumeration stopped because the result limit ({max_results}) was reached"
-            ),
-        })
         return {
             "found": sorted(all_found),
             "source_map": {source: sorted(hosts) for source, hosts in source_map.items()},
@@ -1853,16 +1842,9 @@ def _run_subdomain_enumeration(
                 raw_records.append({"source": source_name, "root_domain": root_domain, "status": "error", "found_count": 0, "stderr_preview": str(exc)[:1000]})
                 continue
             found = add_hosts(source_name, root_domain, hosts)
-            raw_records.append({"source": source_name, "root_domain": root_domain, "status": "done", "found_count": len(found), "found_sample": found[:_env_int("SUBFINDER_RAW_SAMPLE_SIZE", 10000, minimum=0, maximum=1_000_000)]})
+            raw_records.append({"source": source_name, "root_domain": root_domain, "status": "done", "found_count": len(found), "found_sample": found[:_env_int("SUBFINDER_RAW_SAMPLE_SIZE", 50, minimum=0)]})
             if max_results and len(all_found) >= max_results:
                 _cancel_pending_futures(set(future_map) - {fut})
-                raw_records.append({
-                    "source": "pipeline",
-                    "root_domain": ",".join(root_domains),
-                    "status": "stopped",
-                    "found_count": len(all_found),
-                    "stderr_preview": f"Enumeration stopped because the result limit ({max_results}) was reached",
-                })
                 break
     finally:
         dns_pool.shutdown(wait=False, cancel_futures=True)
@@ -1881,9 +1863,7 @@ def _domain_enum_verbose_log(enumeration: Dict[str, object]) -> List[Dict[str, o
     records: List[Dict[str, object]] = []
     for record in enumeration.get("raw_records") or []:
         source = str(record.get("source") or "unknown")
-        sample_hosts = list(record.get("found_sample") or [])
-        hosts = sorted(set(sample_hosts) or source_map.get(source, []))
-        raw_error = record.get("stderr_preview") or record.get("stderr") or record.get("error") or ""
+        hosts = sorted(source_map.get(source, []))
         records.append({
             "source": source,
             "root_domain": record.get("root_domain") or "",
@@ -1892,8 +1872,7 @@ def _domain_enum_verbose_log(enumeration: Dict[str, object]) -> List[Dict[str, o
             "command": record.get("command") or "",
             "found_count": len(hosts) if hosts else int(record.get("found_count") or 0),
             "hosts": hosts or list(record.get("found_sample") or []),
-            "error": raw_error,
-            "stop_reason": raw_error if str(record.get("status") or "").lower() in {"error", "failed", "timeout", "stopped"} else "",
+            "error": record.get("stderr_preview") or record.get("stderr") or "",
         })
     recorded_sources = {str(r.get("source") or "unknown") for r in records}
     for source, hosts in sorted(source_map.items()):
@@ -2266,11 +2245,7 @@ def run_domain_enumeration_scan(domain: str, triggered_by: str = "manual", depth
         for src, hosts in source_map.items():
             if hosts:
                 db.domain_enum_results_add_batch(scan_id, root, sorted(hosts), source=src)
-        # Always persist the terminal-style source transcript so users can see
-        # every fetched asset, source error, timeout, and stop reason after a
-        # scan. The ``verbose`` flag only controls clients that choose to hide
-        # or show the panel by default; the evidence is kept with the scan.
-        verbose_log = _domain_enum_verbose_log(enumeration)
+        verbose_log = _domain_enum_verbose_log(enumeration) if verbose else []
         db.domain_enum_scan_finish(scan_id, "done", total_found=len(all_found), verbose_log=verbose_log)
         return {"scan_id": scan_id, "domain": root, "total_found": len(all_found), "verbose_log": verbose_log}
     except Exception as exc:
@@ -2281,8 +2256,7 @@ def run_domain_enumeration_scan(domain: str, triggered_by: str = "manual", depth
             "found_count": 0,
             "hosts": [],
             "error": str(exc),
-            "stop_reason": str(exc),
-        }])
+        }] if verbose else None)
         raise
 
 
