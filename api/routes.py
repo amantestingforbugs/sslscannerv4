@@ -203,42 +203,21 @@ def _nuclei_supports_flag(nuclei_bin: str, flag: str) -> bool:
     flags = _nuclei_supported_flags(nuclei_bin)
     return not flags or flag in flags
 
-def _nuclei_resource_settings(safe_mode: bool = False) -> dict:
-    """Return resource limits for nuclei.
-
-    The default profile is intentionally conservative for small containers.  If
-    nuclei still exits with code 9/-9, the retry path uses an even smaller
-    profile so users get a smooth scan instead of a hard failure. Explicit env
-    values are still respected, then capped down for safe-mode retries.
-    """
-    settings = {
+def _nuclei_resource_settings() -> dict:
+    return {
         "rate_limit": _safe_int(os.environ.get("NUCLEI_RATE_LIMIT"), 25, min_value=1, max_value=500),
         "concurrency": _safe_int(os.environ.get("NUCLEI_CONCURRENCY"), 10, min_value=1, max_value=100),
         "bulk_size": _safe_int(os.environ.get("NUCLEI_BULK_SIZE"), 10, min_value=1, max_value=100),
         "timeout": _safe_int(os.environ.get("NUCLEI_TIMEOUT"), 5, min_value=1, max_value=60),
     }
-    if safe_mode:
-        settings.update({
-            "rate_limit": min(settings["rate_limit"], 5),
-            "concurrency": min(settings["concurrency"], 2),
-            "bulk_size": min(settings["bulk_size"], 2),
-            "timeout": max(settings["timeout"], 10),
-        })
-    return settings
-
-
-def _nuclei_retryable_exit_code(exit_code: int) -> bool:
-    return exit_code in {-9, 9}
 
 
 def _nuclei_exit_error(exit_code: int, stderr_tail: str = "", stdout_tail: str = "") -> str:
     detail = (stderr_tail or stdout_tail or "").strip()
-    if exit_code in {-9, 9}:
-        signal_text = "SIGKILL (exit code -9)" if exit_code == -9 else "exit code 9"
+    if exit_code == -9:
         hint = (
-            f"nuclei stopped with {signal_text}, commonly caused by out of memory or other resource pressure in the container. "
-            "The scanner automatically retries once in safe mode; lower NUCLEI_RATE_LIMIT, "
-            "NUCLEI_CONCURRENCY, or NUCLEI_BULK_SIZE further if this continues."
+            "nuclei was killed by SIGKILL (exit code -9), usually because the container ran out of memory. "
+            "The scan now uses conservative defaults; lower NUCLEI_RATE_LIMIT, NUCLEI_CONCURRENCY, or NUCLEI_BULK_SIZE further if this continues."
         )
         return f"{hint} Last output: {detail}" if detail else hint
     return detail or f"nuclei exited with code {exit_code}"
@@ -2135,8 +2114,8 @@ def _resolve_nuclei_hosts(pid: str, mode: str) -> list[str]:
     })
 
 
-def _nuclei_command(nuclei_bin: str, targets_file: str, templates_dir: str, safe_mode: bool = False) -> list[str]:
-    resources = _nuclei_resource_settings(safe_mode=safe_mode)
+def _nuclei_command(nuclei_bin: str, targets_file: str, templates_dir: str) -> list[str]:
+    resources = _nuclei_resource_settings()
     cmd = [
         nuclei_bin,
         "-l", targets_file,
@@ -2394,17 +2373,8 @@ def _run_nuclei_sync(pid: str, project_name: str, mode: str, hosts: list[str]) -
             return None, templates_msg, 400
 
         templates_dir = _nuclei_templates_dir()
-        run = None
-        cmd = []
-        for attempt, safe_mode in enumerate((False, True), start=1):
-            cmd = _nuclei_command(nuclei_bin, targets_file, templates_dir, safe_mode=safe_mode)
-            run = subprocess.run(cmd, text=True, capture_output=True, timeout=900)
-            if run.returncode == 0 or not _nuclei_retryable_exit_code(run.returncode):
-                break
-            if safe_mode:
-                break
-            log.warning("nuclei exited with retryable code %s on attempt %s; retrying with safe resource limits", run.returncode, attempt)
-        assert run is not None
+        cmd = _nuclei_command(nuclei_bin, targets_file, templates_dir)
+        run = subprocess.run(cmd, text=True, capture_output=True, timeout=900)
 
         findings = []
         stats = {}
@@ -2589,91 +2559,12 @@ def _nuclei_worker(scan_id: str):
                 db.asset_record_nuclei_findings(pid, findings, scan_id=scan_id)
             except Exception as exc:
                 log.warning("Unable to persist nuclei findings to asset inventory: %s", exc)
-        if (not stopped) and exit_code != 0 and not findings and _nuclei_retryable_exit_code(exit_code):
-            safe_resources = _nuclei_resource_settings(safe_mode=True)
-            safe_cmd = _nuclei_command(nuclei_bin, targets_file, templates_dir, safe_mode=True)
-            _nuclei_log_status(
-                scan_id,
-                f"Nuclei exited with code {exit_code}; retrying automatically in safe mode "
-                f"(rate={safe_resources['rate_limit']}/s concurrency={safe_resources['concurrency']} bulk={safe_resources['bulk_size']})",
-                status="running",
-                message="Retrying nuclei scan in safe mode",
-                resource_settings=safe_resources,
-                command=" ".join(safe_cmd),
-            )
-            process = subprocess.Popen(
-                safe_cmd,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-                text=True,
-                bufsize=1,
-                preexec_fn=os.setsid if hasattr(os, "setsid") else None,
-            )
-            _nuclei_set_state(scan_id, process=process, process_id=process.pid, message=f"Safe-mode nuclei process started (PID {process.pid})")
-            assert process.stdout is not None
-            for raw in process.stdout:
-                line = raw.strip()
-                if not line:
-                    continue
-                parsed_finding = None
-                stats_update = _parse_nuclei_stats_line(line)
-                if stats_update:
-                    with _nuclei_lock:
-                        state = _nuclei_state.get(scan_id)
-                        if state:
-                            findings_count = len(state.get("findings") or [])
-                            state["stats"] = _merge_nuclei_stats(state.get("stats"), stats_update, findings_count)
-                            state["last_stats_at"] = db.now()
-                            state["message"] = "Nuclei safe-mode stats updated"
-                            progress = _nuclei_progress_from_stats(state)
-                            if progress is not None:
-                                state["progress_percent"] = progress
-                            payload = _nuclei_public_state_locked(scan_id)
-                        else:
-                            payload = {}
-                    if payload:
-                        broadcast("nuclei_stats", {"id": scan_id, "stats": payload.get("stats") or {}, "progress_percent": payload.get("progress_percent")})
-                        broadcast("nuclei_update", payload)
-                elif line.startswith("{"):
-                    try:
-                        row = json.loads(line)
-                        if _looks_like_nuclei_finding(row):
-                            parsed_finding = _normalize_nuclei_finding(row)
-                    except Exception:
-                        parse_errors += 1
-                if parsed_finding:
-                    with _nuclei_lock:
-                        state = _nuclei_state.get(scan_id)
-                        if state:
-                            state.setdefault("findings", []).append(parsed_finding)
-                            state["stats"] = _merge_nuclei_stats(state.get("stats"), None, len(state.get("findings") or []))
-                            state["parse_errors"] = parse_errors
-                            state["last_finding_at"] = db.now()
-                            payload = _nuclei_public_state_locked(scan_id)
-                        else:
-                            payload = {}
-                    broadcast("nuclei_finding", {"id": scan_id, "finding": parsed_finding})
-                    if payload:
-                        broadcast("nuclei_update", payload)
-                _nuclei_append_log(scan_id, line, stream="stats" if stats_update else "stdout")
-            exit_code = process.wait(timeout=10)
-            elapsed = max(0, int(time.time() - started))
-            with _nuclei_lock:
-                state = _nuclei_state.get(scan_id) or {}
-                stopped = bool(state.get("stop_requested"))
-                findings = list(state.get("findings") or [])
-
         if stopped:
             _nuclei_log_status(scan_id, "Nuclei scan stopped", status="stopped", exit_code=exit_code, finished_at=db.now(), elapsed_seconds=elapsed, progress_percent=100)
         elif exit_code != 0 and not findings:
             error_detail = _nuclei_exit_error(exit_code)
             _nuclei_log_status(scan_id, f"Nuclei exited with code {exit_code} and no findings. {error_detail}", status="error", exit_code=exit_code, finished_at=db.now(), elapsed_seconds=elapsed, error=error_detail, progress_percent=100)
         else:
-            if pid:
-                try:
-                    db.asset_record_nuclei_findings(pid, findings, scan_id=scan_id)
-                except Exception as exc:
-                    log.warning("Unable to persist nuclei findings to asset inventory after safe-mode retry: %s", exc)
             _nuclei_log_status(scan_id, f"Nuclei scan complete: {len(findings)} finding(s), exit code {exit_code}", status="done", exit_code=exit_code, finished_at=db.now(), elapsed_seconds=elapsed, progress_percent=100)
     except Exception as e:
         _nuclei_log_status(scan_id, f"Nuclei scan failed: {e}", status="error", error=f"Nuclei scan failed: {e}", finished_at=db.now())
